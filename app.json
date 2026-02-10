@@ -25,6 +25,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-web-browser",
+      "expo-location",
+      "expo-secure-store"
+    ],
+    "scheme": "routecopilot"
   }
 }
