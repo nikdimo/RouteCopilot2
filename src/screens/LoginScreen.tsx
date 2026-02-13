@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import {
   useAuthRequest,
@@ -18,7 +18,10 @@ export default function LoginScreen() {
     'https://login.microsoftonline.com/common/v2.0'
   );
 
-  const redirectUri = makeRedirectUri({ preferLocalhost: true });
+  const baseRedirect = makeRedirectUri({ preferLocalhost: true });
+  const redirectUri = Platform.OS === 'web' && baseRedirect && !baseRedirect.includes('/app')
+    ? baseRedirect.replace(/(\/)?$/, '/app$1')
+    : baseRedirect;
 
   const [request, response, promptAsync] = useAuthRequest(
     {

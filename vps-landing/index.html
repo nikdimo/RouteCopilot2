@@ -31,5 +31,11 @@
     <span class="label" style="margin-top:1rem;display:block">Android</span>
     <a id="android-link" href="#" class="btn btn-android">Google Play – Internal Test</a>
   </div>
+  <script>
+    // If Microsoft redirected here with OAuth code, send user to /app/ so the app can complete login
+    if (window.location.search && window.location.search.includes('code=')) {
+      window.location.replace('/app/' + window.location.search);
+    }
+  </script>
 </body>
 </html>
