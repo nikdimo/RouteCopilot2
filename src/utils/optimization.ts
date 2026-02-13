@@ -34,6 +34,16 @@ function haversineKm(
 export type StartLocation = { latitude: number; longitude: number };
 
 /**
+ * Sort/optimize route by start time with optional distance tie-breaker.
+ */
+export function optimizeRoute(
+  startLocation: StartLocation,
+  appointments: CalendarEvent[]
+): CalendarEvent[] {
+  return sortAppointmentsByTime(appointments, startLocation);
+}
+
+/**
  * Sort appointments by start time (earlier first).
  * Tie-breaker: if startLocation is provided and times are equal, use distance (nearest first); otherwise keep order.
  */

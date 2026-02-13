@@ -15,10 +15,11 @@ import type { ScheduleStackParamList } from '../navigation/ScheduleStack';
 import { Plus } from 'lucide-react-native';
 import { startOfDay, endOfDay, isSameDay, format } from 'date-fns';
 import DaySlider from '../components/DaySlider';
-import MeetingCard from '../components/MeetingCard';
+import SwipeableMeetingRow from '../components/SwipeableMeetingRow';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
-import { getCalendarEvents, type CalendarEvent } from '../services/graph';
+import { openNativeDirections } from '../utils/maps';
+import { getCalendarEvents, GraphUnauthorizedError, type CalendarEvent } from '../services/graph';
 import { sortAppointmentsByTime } from '../utils/optimization';
 
 const GREEN = '#107C10';
@@ -29,6 +30,7 @@ export type MeetingItem = {
   client: string;
   address: string;
   statusColor: string;
+  status: 'pending' | 'completed' | 'skipped';
 };
 
 function eventToMeetingItem(ev: CalendarEvent): MeetingItem {
@@ -38,6 +40,7 @@ function eventToMeetingItem(ev: CalendarEvent): MeetingItem {
     client: ev.title,
     address: ev.location,
     statusColor: GREEN,
+    status: ev.status ?? 'pending',
   };
 }
 
@@ -55,8 +58,14 @@ type ScheduleNav = NativeStackNavigationProp<ScheduleStackParamList, 'ScheduleHo
 
 export default function ScheduleScreen() {
   const navigation = useNavigation<ScheduleNav>();
-  const { userToken } = useAuth();
-  const { appointments, setAppointments } = useRoute();
+  const { userToken, signOut, getValidToken } = useAuth();
+  const {
+    appointments,
+    setAppointments,
+    markEventAsDone,
+    unmarkEventAsDone,
+    removeAppointment,
+  } = useRoute();
   const [selectedDate, setSelectedDate] = useState<Date>(TODAY);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -64,8 +73,9 @@ export default function ScheduleScreen() {
 
   const meetings = (appointments ?? []).map(eventToMeetingItem);
 
-  const fetchData = useCallback(() => {
-    if (!userToken) {
+  const fetchData = useCallback(async () => {
+    const token = userToken ?? (getValidToken ? await getValidToken() : null);
+    if (!token) {
       setAppointments([]);
       return;
     }
@@ -73,20 +83,24 @@ export default function ScheduleScreen() {
     const end = endOfDay(selectedDate);
     setLoading(true);
     setError(null);
-    getCalendarEvents(userToken, start, end)
+    getCalendarEvents(token, start, end)
       .then((events) => {
         const sorted = sortAppointmentsByTime(events);
         setAppointments(sorted);
       })
       .catch((e) => {
         setAppointments([]);
+        if (e instanceof GraphUnauthorizedError) {
+          signOut();
+          return;
+        }
         setError(e instanceof Error ? e.message : 'Failed to load events');
       })
       .finally(() => {
         setLoading(false);
         setRefreshing(false);
       });
-  }, [userToken, selectedDate, setAppointments]);
+  }, [userToken, getValidToken, selectedDate, setAppointments, signOut]);
 
   useFocusEffect(
     useCallback(() => {
@@ -107,15 +121,34 @@ export default function ScheduleScreen() {
     navigation.setOptions({ headerTitle });
   }, [navigation, headerTitle]);
 
-  const renderItem: ListRenderItem<MeetingItem> = ({ item }) => (
-    <MeetingCard
-      timeRange={item.timeRange}
-      client={item.client}
-      address={item.address}
-      statusColor={item.statusColor}
-      onNavigate={() => {}}
-    />
-  );
+  const renderItem: ListRenderItem<MeetingItem> = ({ item }) => {
+    const event = appointments?.find((e) => e.id === item.id);
+    const hasCoords = event?.coordinates != null;
+    return (
+      <SwipeableMeetingRow
+        timeRange={item.timeRange}
+        client={item.client}
+        address={item.address}
+        statusColor={item.statusColor}
+        isCompleted={item.status === 'completed'}
+        onToggleDone={() =>
+          item.status === 'completed' ? unmarkEventAsDone(item.id) : markEventAsDone(item.id)
+        }
+        onNavigate={
+          hasCoords
+            ? () =>
+                openNativeDirections(
+                  event!.coordinates!.latitude,
+                  event!.coordinates!.longitude,
+                  item.client
+                )
+            : undefined
+        }
+        onPress={() => navigation.navigate('MeetingDetails', { eventId: item.id })}
+        onDelete={() => removeAppointment(item.id)}
+      />
+    );
+  };
 
   return (
     <View style={styles.container}>

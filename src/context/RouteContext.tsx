@@ -1,23 +1,89 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { CalendarEvent } from '../services/graph';
 import { optimizeRoute } from '../utils/optimization';
 
 export type UserLocation = { latitude: number; longitude: number };
 
+const COMPLETED_IDS_KEY = 'routeCopilot_completedEventIds';
+
 type RouteContextValue = {
   appointments: CalendarEvent[];
   setAppointments: (events: CalendarEvent[]) => void;
+  addAppointment: (event: CalendarEvent) => void;
+  updateAppointment: (eventId: string, patch: Partial<CalendarEvent>) => void;
+  removeAppointment: (eventId: string) => void;
   optimize: (userLocation: UserLocation) => void;
+  markEventAsDone: (eventId: string) => void;
+  unmarkEventAsDone: (eventId: string) => void;
 };
 
 const RouteContext = createContext<RouteContextValue | null>(null);
 
 export function RouteProvider({ children }: { children: React.ReactNode }) {
   const [appointments, setAppointmentsState] = useState<CalendarEvent[]>([]);
+  const [completedEventIds, setCompletedEventIds] = useState<string[]>([]);
+  const completedIdsRef = useRef<string[]>([]);
+  completedIdsRef.current = completedEventIds;
+
+  useEffect(() => {
+    AsyncStorage.getItem(COMPLETED_IDS_KEY)
+      .then((raw) => {
+        if (raw) {
+          try {
+            const arr = JSON.parse(raw) as string[];
+            if (Array.isArray(arr)) setCompletedEventIds(arr);
+          } catch {
+            // ignore invalid JSON
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const setAppointments = useCallback((events: CalendarEvent[]) => {
-    setAppointmentsState(events);
+    const completedSet = new Set(completedIdsRef.current);
+    const merged = events.map((ev) => ({
+      ...ev,
+      status: completedSet.has(ev.id) ? ('completed' as const) : (ev.status ?? ('pending' as const)),
+    }));
+    setAppointmentsState(merged);
   }, []);
+
+  const addAppointment = useCallback((event: CalendarEvent) => {
+    setAppointmentsState((prev) => [...prev, { ...event, status: 'pending' as const }]);
+  }, []);
+
+  const updateAppointment = useCallback((eventId: string, patch: Partial<CalendarEvent>) => {
+    setAppointmentsState((prev) =>
+      prev.map((ev) => (ev.id === eventId ? { ...ev, ...patch } : ev))
+    );
+  }, []);
+
+  const removeAppointment = useCallback((eventId: string) => {
+    setCompletedEventIds((prev) => {
+      const next = prev.filter((id) => id !== eventId);
+      AsyncStorage.setItem(COMPLETED_IDS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    setAppointmentsState((prev) => prev.filter((ev) => ev.id !== eventId));
+  }, []);
+
+  useEffect(() => {
+    if (completedEventIds.length === 0) return;
+    setAppointmentsState((current) => {
+      const completedSet = new Set(completedEventIds);
+      let changed = false;
+      const next = current.map((ev) => {
+        if (completedSet.has(ev.id) && ev.status !== 'completed') {
+          changed = true;
+          return { ...ev, status: 'completed' as const };
+        }
+        return ev;
+      });
+      return changed ? next : current;
+    });
+  }, [completedEventIds]);
 
   const optimize = useCallback((userLocation: UserLocation) => {
     setAppointmentsState((current) => {
@@ -28,10 +94,43 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const markEventAsDone = useCallback((eventId: string) => {
+    setCompletedEventIds((prev) => {
+      if (prev.includes(eventId)) return prev;
+      const next = [...prev, eventId];
+      AsyncStorage.setItem(COMPLETED_IDS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    setAppointmentsState((current) =>
+      current.map((ev) =>
+        ev.id === eventId ? { ...ev, status: 'completed' as const } : ev
+      )
+    );
+  }, []);
+
+  const unmarkEventAsDone = useCallback((eventId: string) => {
+    setCompletedEventIds((prev) => {
+      if (!prev.includes(eventId)) return prev;
+      const next = prev.filter((id) => id !== eventId);
+      AsyncStorage.setItem(COMPLETED_IDS_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    setAppointmentsState((current) =>
+      current.map((ev) =>
+        ev.id === eventId ? { ...ev, status: 'pending' as const } : ev
+      )
+    );
+  }, []);
+
   const value: RouteContextValue = {
     appointments,
     setAppointments,
+    addAppointment,
+    updateAppointment,
+    removeAppointment,
     optimize,
+    markEventAsDone,
+    unmarkEventAsDone,
   };
 
   return (

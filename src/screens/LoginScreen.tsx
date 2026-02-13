@@ -13,7 +13,7 @@ import { useAuth } from '../context/AuthContext';
 WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
-  const { signIn } = useAuth();
+  const { signIn, signOut, getValidToken } = useAuth();
   const discovery = useAutoDiscovery(
     'https://login.microsoftonline.com/common/v2.0'
   );
@@ -34,8 +34,10 @@ export default function LoginScreen() {
 
     const getToken = async () => {
       let token: string | null = null;
+      let refreshToken: string | undefined;
       if (response.authentication?.accessToken) {
         token = response.authentication.accessToken;
+        refreshToken = (response.authentication as { refreshToken?: string }).refreshToken;
       } else if (response.params?.code && request?.codeVerifier) {
         try {
           const tokenResponse = await exchangeCodeAsync(
@@ -48,14 +50,14 @@ export default function LoginScreen() {
             discovery
           );
           token = tokenResponse.accessToken;
+          refreshToken = (tokenResponse as { refreshToken?: string }).refreshToken;
         } catch (e) {
           console.warn('Code exchange failed:', e);
           return;
         }
       }
       if (token) {
-        console.log('Login Successful!');
-        await signIn(token);
+        await signIn(token, refreshToken);
       }
     };
 
@@ -74,6 +76,25 @@ export default function LoginScreen() {
       >
         <Text style={styles.buttonText}>Sign in with Microsoft</Text>
       </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.resetButton}
+        onPress={() => signOut()}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.resetButtonText}>Clear cache / Reset</Text>
+      </TouchableOpacity>
+      {__DEV__ && (
+        <TouchableOpacity
+          style={[styles.resetButton, styles.devButton]}
+          onPress={async () => {
+            const token = getValidToken ? await getValidToken() : null;
+            if (token) await signIn(token);
+          }}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.devButtonText}>Dev: Restore session</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -117,5 +138,23 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '600',
     color: '#fff',
+  },
+  resetButton: {
+    marginTop: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+  },
+  resetButtonText: {
+    fontSize: 14,
+    color: '#605E5C',
+  },
+  devButton: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#94a3b8',
+  },
+  devButtonText: {
+    fontSize: 13,
+    color: '#64748b',
   },
 });
