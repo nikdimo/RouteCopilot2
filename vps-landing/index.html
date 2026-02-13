@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WisePlan – Beta Testing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg:#0f172a; --surface:#1e293b; --accent:#3b82f6; --text:#f1f5f9; --text-muted:#94a3b8; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}
+    .card{background:var(--surface);border-radius:16px;padding:2.5rem;max-width:420px;width:100%}
+    h1{font-size:1.75rem;margin-bottom:0.5rem}
+    .subtitle{color:var(--text-muted);margin-bottom:2rem}
+    .btn{display:block;width:100%;padding:1rem;margin-bottom:0.75rem;border:none;border-radius:12px;font-size:1rem;font-weight:600;cursor:pointer;text-decoration:none;text-align:center}
+    .btn-ios{background:var(--accent);color:white}
+    .btn-android{background:#22c55e;color:white}
+    .label{font-size:0.75rem;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.25rem}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>WisePlan</h1>
+    <p class="subtitle">Smart route planning for field reps</p>
+    <span class="label">Use in browser</span>
+    <a href="/app/" class="btn btn-ios">Open web app</a>
+    <span class="label" style="margin-top:1rem;display:block">iOS (iPhone)</span>
+    <a id="ios-link" href="#" class="btn btn-ios">TestFlight – Install on iPhone</a>
+    <span class="label" style="margin-top:1rem;display:block">Android</span>
+    <a id="android-link" href="#" class="btn btn-android">Google Play – Internal Test</a>
+  </div>
+</body>
+</html>
