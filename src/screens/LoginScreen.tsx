@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import {
@@ -10,7 +10,13 @@ import {
 import { MS_CLIENT_ID, MS_SCOPES } from '../config/auth';
 import { useAuth } from '../context/AuthContext';
 
-WebBrowser.maybeCompleteAuthSession();
+// Complete OAuth popup flow. When we land with ?code= we're the callback; use skipRedirectCheck
+// to avoid failures from trailing-slash or URL normalization mismatches (common with Azure + Cloudflare).
+if (typeof window !== 'undefined' && window.location.search.includes('code=')) {
+  WebBrowser.maybeCompleteAuthSession({ skipRedirectCheck: true });
+} else {
+  WebBrowser.maybeCompleteAuthSession();
+}
 
 export default function LoginScreen() {
   const { signIn, signOut, getValidToken } = useAuth();
@@ -23,6 +29,7 @@ export default function LoginScreen() {
     ? baseRedirect.replace(/(\/)?$/, '/app$1')
     : baseRedirect;
 
+  const [exchangeError, setExchangeError] = useState<string | null>(null);
   const [request, response, promptAsync] = useAuthRequest(
     {
       clientId: MS_CLIENT_ID,
@@ -33,6 +40,7 @@ export default function LoginScreen() {
   );
 
   useEffect(() => {
+    setExchangeError(null);
     if (response?.type !== 'success' || !discovery?.tokenEndpoint) return;
 
     const getToken = async () => {
@@ -56,8 +64,13 @@ export default function LoginScreen() {
           refreshToken = (tokenResponse as { refreshToken?: string }).refreshToken;
         } catch (e) {
           console.warn('Code exchange failed:', e);
+          setExchangeError(
+            e instanceof Error ? e.message : 'Login failed. Try "Clear cache / Reset" then sign in again.'
+          );
           return;
         }
+      } else if (response.params?.code && !request?.codeVerifier) {
+        setExchangeError('Session expired. Click "Clear cache / Reset" then sign in again.');
       }
       if (token) {
         await signIn(token, refreshToken);
@@ -79,9 +92,18 @@ export default function LoginScreen() {
       >
         <Text style={styles.buttonText}>Sign in with Microsoft</Text>
       </TouchableOpacity>
+      {exchangeError ? (
+        <Text style={styles.errorText}>{exchangeError}</Text>
+      ) : null}
       <TouchableOpacity
         style={styles.resetButton}
-        onPress={() => signOut()}
+        onPress={() => {
+          setExchangeError(null);
+          signOut();
+          if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.search) {
+            window.history.replaceState({}, '', window.location.pathname);
+          }
+        }}
         activeOpacity={0.7}
       >
         <Text style={styles.resetButtonText}>Clear cache / Reset</Text>
@@ -141,6 +163,13 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '600',
     color: '#fff',
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#c53030',
+    textAlign: 'center',
+    marginTop: 16,
+    paddingHorizontal: 24,
   },
   resetButton: {
     marginTop: 24,
