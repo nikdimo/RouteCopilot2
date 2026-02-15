@@ -3,7 +3,7 @@
   "build": {
     "development": { "developmentClient": true, "distribution": "internal" },
     "preview": { "distribution": "internal", "ios": { "simulator": false }, "android": { "buildType": "apk" } },
-    "production": { "ios": {}, "android": {} }
+    "production": { "env": { "EAS_BUILD_NO_EXPO_GO_WARNING": "true" }, "ios": {}, "android": {} }
   },
   "submit": {
     "production": {

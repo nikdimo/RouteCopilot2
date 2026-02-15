@@ -24,7 +24,10 @@ export default function LoginScreen() {
     'https://login.microsoftonline.com/common/v2.0'
   );
 
-  const baseRedirect = makeRedirectUri({ preferLocalhost: true });
+  const baseRedirect = makeRedirectUri({
+    preferLocalhost: true,
+    path: Platform.OS === 'web' ? undefined : 'auth',
+  });
   const redirectUri = Platform.OS === 'web' && baseRedirect && !baseRedirect.includes('/app')
     ? baseRedirect.replace(/(\/)?$/, '/app$1')
     : baseRedirect;
