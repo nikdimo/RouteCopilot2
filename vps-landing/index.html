@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WisePlan – Your AI Logistics Assistant</title>
     <meta name="description" content="See your Outlook calendar on a map. Find best meeting times. Built for field reps.">
-    
+    <meta property="og:title" content="WisePlan – Your AI Logistics Assistant">
+    <meta property="og:description" content="See your Outlook calendar on a map. Find best meeting times.">
+    <meta property="og:url" content="https://wiseplan.dk/">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="/app/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -281,8 +285,10 @@
             </h1>
             <p>See your Outlook calendar on a map. Find the best times for new visits. Mark them done.</p>
             
-            <div style="display:flex; gap:16px; justify-content:center; margin-bottom:40px;">
-                <a href="/app/" class="btn-primary">Open in Browser</a>
+            <div style="display:flex; gap:16px; justify-content:center; margin-bottom:40px; flex-wrap:wrap;">
+                <a href="https://wiseplan.dk/app/" class="btn-primary">Open in Browser</a>
+                <a href="#" class="store-badge" id="ios-link">App Store</a>
+                <a href="#" class="store-badge" id="android-link">Google Play</a>
             </div>
 
             <div class="phone-mockup-container">
@@ -405,24 +411,29 @@
 
         <footer class="final-cta">
             <h2 style="font-size: 2rem; margin-bottom: 24px;">Ready for your routes?</h2>
-            <div style="display:flex; gap:16px; justify-content:center;">
+            <div style="display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
+                <a href="https://wiseplan.dk/app/" class="btn-primary">Try in Browser</a>
                 <a href="#" class="store-badge" id="ios-link-2">App Store</a>
                 <a href="#" class="store-badge" id="android-link-2">Google Play</a>
             </div>
-            <p style="margin-top:40px; color:var(--text-secondary); font-size:0.9rem;">&copy; 2026 WisePlan</p>
+            <p style="margin-top:40px; color:var(--text-secondary); font-size:0.9rem;">
+                &copy; 2026 WisePlan &middot;
+                <a href="/privacy.html" style="color:var(--text-secondary);">Privacy Policy</a> &middot;
+                <a href="/terms.html" style="color:var(--text-secondary);">Terms of Use</a> &middot;
+                <a href="mailto:support@wiseplan.dk" style="color:var(--text-secondary);">Contact</a>
+            </p>
         </footer>
 
     </div>
 
     <script>
-        var STORE = { ios: '#', android: '#' };
-        function setLinks(idIos, idAndroid) {
-            var i = document.getElementById(idIos);
-            var a = document.getElementById(idAndroid);
-            if(i) i.href = STORE.ios;
-            if(a) a.href = STORE.android;
-        }
-        setLinks('ios-link-2', 'android-link-2');
+        // Replace with your actual links from App Store Connect & Google Play Console
+        var STORE = {
+            ios: 'https://testflight.apple.com/join/RQGCGUq3',
+            android: '#'   // Add Play Store link when available
+        };
+        document.querySelectorAll('[id^="ios-link"]').forEach(function(el){ el.href = STORE.ios; });
+        document.querySelectorAll('[id^="android-link"]').forEach(function(el){ el.href = STORE.android; });
 
         if (window.location.search && window.location.search.includes('code=')) {
             window.location.replace('/app/' + window.location.search);

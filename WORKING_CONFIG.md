@@ -130,13 +130,13 @@ sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/
 rm -r ~/app-deploy
 ```
 
-**Landing page (index.html):** Deploy separately if you change `vps-landing/index.html`:
+**Landing page + legal docs (index.html, privacy.html, terms.html):** Deploy separately if changed:
 ```powershell
-scp vps-landing\index.html nikola@207.180.222.248:~/
+scp vps-landing\index.html vps-landing\privacy.html vps-landing\terms.html nikola@207.180.222.248:~/
 ```
 ```bash
 # On VPS
-sudo cp ~/index.html /var/www/wiseplan-test/
+sudo cp ~/index.html ~/privacy.html ~/terms.html /var/www/wiseplan-test/
 ```
 
 ### Pull source on VPS (updates repo only, not deployed files)
