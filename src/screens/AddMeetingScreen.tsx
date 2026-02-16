@@ -31,7 +31,10 @@ import TimeframeSelector, {
 import DayTimeline, { buildTimelineEntries } from '../components/DayTimeline';
 import GhostSlotCard from '../components/GhostSlotCard';
 import MapPreviewModal from '../components/MapPreviewModal';
+import PlanVisitMapPanel from '../components/PlanVisitMapPanel';
 import ConfirmBookingSheet, { type ContactInput } from '../components/ConfirmBookingSheet';
+import { useIsWideScreen } from '../hooks/useIsWideScreen';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LocationSearch, {
   type LocationSelection,
 } from '../components/LocationSearch';
@@ -475,9 +478,21 @@ export default function AddMeetingScreen() {
   };
 
   const token = userToken ?? null;
+  const isWide = useIsWideScreen();
+  const insets = useSafeAreaInsets();
+
+  /** Slot to display on map: selected for booking, or tapped for map, or Best Match. */
+  const displayedMapSlot = confirmSlot ?? mapSlot ?? (bestOptions[0] ?? null);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isWide && styles.splitContainer]}>
+      <View style={[styles.formPane, isWide && styles.formPaneWide, isWide && { paddingLeft: insets.left }]}>
+      <ScrollView
+        style={styles.formScroll}
+        contentContainerStyle={styles.formScrollContent}
+        showsVerticalScrollIndicator={true}
+        keyboardShouldPersistTaps="handled"
+      >
       <LocationSearch
         token={token}
         searchContacts={async (t, q) => {
@@ -625,12 +640,6 @@ export default function AddMeetingScreen() {
         </TouchableOpacity>
       )}
 
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={true}
-        keyboardShouldPersistTaps="handled"
-      >
         {!hasSearched ? (
           <View style={styles.setupState}>
             <Text style={styles.setupHint}>
@@ -703,7 +712,7 @@ export default function AddMeetingScreen() {
         )}
       </ScrollView>
 
-      {mapSlot && newLocation && (
+      {!isWide && mapSlot && newLocation && (
         <MapPreviewModal
           visible={!!mapSlot}
           onClose={() => setMapSlot(null)}
@@ -712,6 +721,22 @@ export default function AddMeetingScreen() {
           slot={mapSlot}
           homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
         />
+      )}
+      </View>
+
+      {isWide && hasValidLocation && (
+        <View style={styles.mapPane}>
+          <PlanVisitMapPanel
+            newLocation={newLocation}
+            slot={displayedMapSlot ?? undefined}
+            dayEvents={
+              displayedMapSlot
+                ? eventsForDay(filteredAppointments, displayedMapSlot.dayIso)
+                : []
+            }
+            homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
+          />
+        </View>
       )}
 
       <ConfirmBookingSheet
@@ -733,6 +758,21 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F3F2F1',
+  },
+  splitContainer: {
+    flexDirection: 'row',
+  },
+  formPane: {
+    flex: 1,
+    minWidth: 0,
+  },
+  formPaneWide: {
+    maxWidth: 420,
+  },
+  mapPane: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 300,
   },
   durationRow: {
     paddingHorizontal: 16,
@@ -810,6 +850,13 @@ const styles = StyleSheet.create({
   },
   devPanelError: {
     color: '#f87171',
+  },
+  formScroll: {
+    flex: 1,
+  },
+  formScrollContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 32,
   },
   scroll: {
     flex: 1,

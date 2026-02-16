@@ -131,7 +131,9 @@ async function mapEventAsync(ev: GraphEvent): Promise<CalendarEvent> {
             };
           }
         } catch {
-          // fallback to Nominatim for reliability
+          /* native failed */
+        }
+        if (!coordinates) {
           const fallback = await geocodeAddress(addressString);
           if (fallback.success) {
             coordinates = { latitude: fallback.lat, longitude: fallback.lon };
@@ -171,24 +173,33 @@ export async function getCalendarEvents(
     startDateTime: start,
     endDateTime: end,
     $select: 'subject,start,end,location,organizer',
+    $top: '999',
   });
-  const url = `https://graph.microsoft.com/v1.0/me/calendarview?${params.toString()}`;
+  const baseUrl = `https://graph.microsoft.com/v1.0/me/calendarview?${params.toString()}`;
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Prefer: `outlook.timezone="${tz}"`,
-    },
-  });
-  if (res.status === 401) {
-    throw new GraphUnauthorizedError();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Prefer: `outlook.timezone="${tz}"`,
+  };
+
+  const allGraphEvents: GraphEvent[] = [];
+  let nextLink: string | null = baseUrl;
+
+  while (nextLink) {
+    const res = await fetch(nextLink, { headers });
+    if (res.status === 401) {
+      throw new GraphUnauthorizedError();
+    }
+    if (!res.ok) {
+      throw new Error(`Calendar request failed: ${res.status}`);
+    }
+    const data = await res.json();
+    const page: GraphEvent[] = data.value ?? [];
+    allGraphEvents.push(...page);
+    nextLink = data['@odata.nextLink'] ?? null;
   }
-  if (!res.ok) {
-    throw new Error(`Calendar request failed: ${res.status}`);
-  }
-  const data = await res.json();
-  const events: GraphEvent[] = data.value ?? [];
-  const mapped = await Promise.all(events.map(mapEventAsync));
+
+  const mapped = await Promise.all(allGraphEvents.map(mapEventAsync));
   try {
     return await enrichCalendarEventsWithContactAddresses(token, mapped);
   } catch {

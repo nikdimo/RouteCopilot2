@@ -113,6 +113,7 @@ export default function DayTimeline({
               client={entry.event.title ?? '(No title)'}
               address={entry.event.location ?? ''}
               statusColor="#107C10"
+              variantBooked
             />
           );
         }

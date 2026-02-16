@@ -216,7 +216,7 @@ export default function GhostSlotCard({
 const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.7)',
+    backgroundColor: '#fff',
     borderRadius: 8,
     marginBottom: 10,
     minHeight: 72,

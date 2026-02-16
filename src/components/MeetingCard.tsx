@@ -9,6 +9,8 @@ export type MeetingCardProps = {
   client: string;
   address: string;
   statusColor?: string;
+  /** When true, uses light blue background (booked meetings in Plan Visit view) */
+  variantBooked?: boolean;
   /** Opens native directions (Apple/Google Maps) to this meeting */
   onNavigate?: () => void;
   isCompleted?: boolean;
@@ -22,13 +24,14 @@ export default function MeetingCard({
   client,
   address,
   statusColor = DEFAULT_STATUS_COLOR,
+  variantBooked,
   onNavigate,
   isCompleted = false,
   onToggleDone,
   onPress,
 }: MeetingCardProps) {
   const content = (
-    <View style={[styles.card, isCompleted && styles.cardCompleted]}>
+    <View style={[styles.card, variantBooked && styles.cardBooked, isCompleted && styles.cardCompleted]}>
       <View style={[styles.pastelLine, { backgroundColor: statusColor }]} />
       <View style={styles.content}>
         <View style={styles.main}>
@@ -90,6 +93,9 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
     overflow: 'hidden',
+  },
+  cardBooked: {
+    backgroundColor: '#E8F4FC',
   },
   cardCompleted: {
     opacity: 0.5,

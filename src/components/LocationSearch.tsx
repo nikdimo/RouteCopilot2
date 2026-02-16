@@ -326,7 +326,7 @@ export default function LocationSearch({
             <Pressable
               key={c.id}
               style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-              onPressIn={() => c.hasAddress && handleSelectContact(c)}
+              onPress={() => c.hasAddress && handleSelectContact(c)}
               disabled={!c.hasAddress}
             >
               <Text style={styles.rowTitle} numberOfLines={1}>
@@ -351,7 +351,7 @@ export default function LocationSearch({
             <Pressable
               key={`addr-${i}`}
               style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-              onPressIn={() => handleSelectAddress(a)}
+              onPress={() => handleSelectAddress(a)}
             >
               <Text style={styles.rowSubtitle} numberOfLines={2}>
                 {a.displayName}

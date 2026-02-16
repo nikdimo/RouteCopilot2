@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420" role="img" aria-label="Microsoft sign-in connects your Outlook calendar">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5B8CFF"/>
+      <stop offset="1" stop-color="#7C5CFF"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="rgba(255,255,255,0.14)"/>
+      <stop offset="1" stop-color="rgba(255,255,255,0.04)"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="18" y="18" width="604" height="384" rx="34" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
+  <circle cx="140" cy="90" r="70" fill="rgba(91,140,255,0.18)" filter="url(#soft)"/>
+  <circle cx="520" cy="320" r="90" fill="rgba(124,92,255,0.16)" filter="url(#soft)"/>
+
+  <g transform="translate(78 86)">
+    <rect x="0" y="0" width="270" height="250" rx="26" fill="url(#glass)" stroke="rgba(255,255,255,0.16)"/>
+    <rect x="0" y="0" width="270" height="58" rx="26" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.10)"/>
+    <circle cx="42" cy="30" r="10" fill="url(#g)"/>
+    <rect x="68" y="22" width="110" height="16" rx="8" fill="rgba(255,255,255,0.22)"/>
+    <rect x="22" y="88" width="226" height="46" rx="16" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.14)"/>
+    <rect x="22" y="146" width="226" height="46" rx="16" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.12)"/>
+    <rect x="22" y="204" width="226" height="28" rx="14" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.10)"/>
+    <rect x="40" y="102" width="62" height="12" rx="6" fill="rgba(255,255,255,0.65)"/>
+    <rect x="112" y="102" width="106" height="12" rx="6" fill="rgba(255,255,255,0.26)"/>
+    <rect x="40" y="160" width="62" height="12" rx="6" fill="rgba(255,255,255,0.55)"/>
+    <rect x="112" y="160" width="126" height="12" rx="6" fill="rgba(255,255,255,0.22)"/>
+    <rect x="40" y="212" width="160" height="10" rx="5" fill="rgba(255,255,255,0.18)"/>
+  </g>
+
+  <g transform="translate(380 118)">
+    <rect x="0" y="0" width="182" height="182" rx="30" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.18)"/>
+    <rect x="36" y="40" width="48" height="48" rx="10" fill="rgba(255,255,255,0.16)"/>
+    <rect x="98" y="40" width="48" height="48" rx="10" fill="rgba(255,255,255,0.10)"/>
+    <rect x="36" y="102" width="48" height="48" rx="10" fill="rgba(255,255,255,0.10)"/>
+    <rect x="98" y="102" width="48" height="48" rx="10" fill="rgba(255,255,255,0.16)"/>
+    <rect x="52" y="56" width="16" height="16" rx="4" fill="url(#g)"/>
+    <rect x="114" y="56" width="16" height="16" rx="4" fill="url(#g)"/>
+    <rect x="52" y="118" width="16" height="16" rx="4" fill="url(#g)"/>
+    <rect x="114" y="118" width="16" height="16" rx="4" fill="url(#g)"/>
+    <text x="91" y="168" text-anchor="middle" fill="rgba(255,255,255,0.70)" font-size="12" font-family="system-ui, -apple-system, Segoe UI" font-weight="700">Sign in</text>
+  </g>
+
+  <g>
+    <path d="M344 206 C376 206 376 206 394 206" fill="none" stroke="url(#g)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M388 194 L408 206 L388 218" fill="none" stroke="url(#g)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="320" y="360" text-anchor="middle" fill="rgba(255,255,255,0.78)" font-size="14" font-family="system-ui, -apple-system, Segoe UI" font-weight="700">
+    Microsoft sign‑in → Outlook calendar connected
+  </text>
+</svg>
