@@ -33,9 +33,19 @@ yarn-error.*
 # local env files
 .env*.local
 
+# VPS connection (contains host/key path)
+connect-vps.bat
+
 # typescript
 *.tsbuildinfo
 
 # generated native folders
 /ios
 /android
+
+# Env files (secrets)
+.env
+.env.*
+
+# Google Play service account key
+google-service-account.json

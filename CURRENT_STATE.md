@@ -1,5 +1,24 @@
-# Route Copilot - Project Status
-**Date:** 2026-02-11
+# WisePlan (Route Copilot) - Project Status
+**Date:** 2026-02-13
+**Current Phase:** Phase 7 – Smart Scheduling + Deployment
+
+---
+
+## 🚀 Deployment Status
+
+See **ROADMAP.md** for full deployment status and **DOMAIN_AND_AZURE_SETUP.md** for domain setup.
+
+| Item | Status |
+|------|--------|
+| VPS (207.180.222.248) | ✅ Nginx, landing + web app |
+| Domain (wiseplan.dk) | 🔄 DNS + SSL pending |
+| Azure redirect URIs | ✅ Cloudflare URLs; adding wiseplan.dk |
+| Local login | ❌ redirect_uri errors |
+| EAS / TestFlight / Play | ⏳ Not started |
+
+---
+
+## App Status (unchanged)
 **Current Phase:** Phase 7 – Smart Scheduling (Foundation)
 
 ## ✅ What Works

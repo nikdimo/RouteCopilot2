@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import {
@@ -10,12 +10,21 @@ import {
 import { MS_CLIENT_ID, MS_SCOPES } from '../config/auth';
 import { useAuth } from '../context/AuthContext';
 
-// Complete OAuth popup flow. When we land with ?code= we're the callback; use skipRedirectCheck
-// to avoid failures from trailing-slash or URL normalization mismatches (common with Azure + Cloudflare).
-if (typeof window !== 'undefined' && window.location.search.includes('code=')) {
+const PKCE_VERIFIER_KEY = 'oauth_code_verifier';
+const PKCE_REDIRECT_KEY = 'oauth_redirect_uri';
+
+// Dismiss auth session and pass redirect to useAuthRequest. Web: skipRedirectCheck when ?code=
+// to avoid trailing-slash/URL normalization mismatches (Azure + Cloudflare).
+// Guard window.location: it exists on web but is undefined on React Native.
+if (typeof window !== 'undefined' && window.location?.search?.includes('code=')) {
   WebBrowser.maybeCompleteAuthSession({ skipRedirectCheck: true });
 } else {
   WebBrowser.maybeCompleteAuthSession();
+}
+
+function isMobileWeb(): boolean {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 }
 
 export default function LoginScreen() {
@@ -24,15 +33,29 @@ export default function LoginScreen() {
     'https://login.microsoftonline.com/common/v2.0'
   );
 
-  const baseRedirect = makeRedirectUri({
-    preferLocalhost: true,
-    path: Platform.OS === 'web' ? undefined : 'auth',
-  });
+  const baseRedirect = makeRedirectUri(
+    Platform.OS === 'web'
+      ? { preferLocalhost: true }
+      : { native: 'wiseplan://auth' }
+  );
   const redirectUri = Platform.OS === 'web' && baseRedirect && !baseRedirect.includes('/app')
     ? baseRedirect.replace(/(\/)?$/, '/app$1')
     : baseRedirect;
 
+  if (__DEV__ && Platform.OS === 'web') {
+    console.log('[Login] redirectUri sent to Microsoft:', redirectUri);
+  }
+
   const [exchangeError, setExchangeError] = useState<string | null>(null);
+  const [authDebug, setAuthDebug] = useState<string>('');
+  const [isRedirecting, setIsRedirecting] = useState(false);
+  const showDebug =
+    Platform.OS === 'web' &&
+    typeof window !== 'undefined' &&
+    (window.location?.search?.includes('debug=1') ?? false);
+
+  const useRedirectFlow = Platform.OS === 'web' && isMobileWeb();
+
   const [request, response, promptAsync] = useAuthRequest(
     {
       clientId: MS_CLIENT_ID,
@@ -41,6 +64,66 @@ export default function LoginScreen() {
     },
     discovery ?? undefined
   );
+
+  // Handle return from redirect flow (mobile web): we landed with ?code= and have verifier in sessionStorage
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !discovery?.tokenEndpoint) return;
+    const params = typeof window !== 'undefined' ? new URLSearchParams(window.location?.search ?? '') : null;
+    const code = params?.get('code');
+    if (!code) return;
+    const verifier = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(PKCE_VERIFIER_KEY) : null;
+    const storedRedirect = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(PKCE_REDIRECT_KEY) : null;
+    const finalRedirect = storedRedirect || redirectUri;
+    if (!verifier) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const tokenResponse = await exchangeCodeAsync(
+          { clientId: MS_CLIENT_ID, redirectUri: finalRedirect, code, extraParams: { code_verifier: verifier } },
+          discovery
+        );
+        sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+        sessionStorage.removeItem(PKCE_REDIRECT_KEY);
+        if (typeof window !== 'undefined' && window.history?.replaceState) {
+          const path = window.location?.pathname ?? '/app';
+          window.history.replaceState({}, '', path);
+        }
+        if (!cancelled) await signIn(tokenResponse.accessToken, (tokenResponse as { refreshToken?: string }).refreshToken);
+      } catch (e) {
+        if (!cancelled) setExchangeError(e instanceof Error ? e.message : 'Login failed.');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [discovery, redirectUri, signIn]);
+
+  useEffect(() => {
+    if (showDebug && response) {
+      setAuthDebug(
+        `response: ${response.type}\n` +
+          (response.type === 'error' ? `error: ${JSON.stringify((response as { error?: string }).error ?? response)}` : '') +
+          (response.type === 'dismiss' ? '\nPopup was closed or cancelled.' : '')
+      );
+    }
+  }, [response, showDebug]);
+
+  const handleSignIn = useCallback(async () => {
+    if (useRedirectFlow && request && discovery && request.url) {
+      try {
+        setIsRedirecting(true);
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.setItem(PKCE_VERIFIER_KEY, request.codeVerifier ?? '');
+          sessionStorage.setItem(PKCE_REDIRECT_KEY, redirectUri);
+        }
+        if (typeof window !== 'undefined') window.location.href = request.url;
+      } catch (e) {
+        setIsRedirecting(false);
+        setExchangeError(e instanceof Error ? e.message : 'Failed to start login');
+      }
+    } else {
+      await promptAsync();
+    }
+  }, [useRedirectFlow, request, discovery, redirectUri, promptAsync]);
 
   useEffect(() => {
     setExchangeError(null);
@@ -89,21 +172,32 @@ export default function LoginScreen() {
       <Text style={styles.subtitle}>Your AI Logistics Assistant</Text>
       <TouchableOpacity
         style={styles.button}
-        onPress={() => promptAsync()}
-        disabled={!request}
+        onPress={handleSignIn}
+        disabled={!request || isRedirecting}
         activeOpacity={0.85}
       >
-        <Text style={styles.buttonText}>Sign in with Microsoft</Text>
+        <Text style={styles.buttonText}>
+          {isRedirecting ? 'Redirecting…' : 'Sign in with Microsoft'}
+        </Text>
       </TouchableOpacity>
       {exchangeError ? (
         <Text style={styles.errorText}>{exchangeError}</Text>
+      ) : null}
+      {showDebug ? (
+        <View style={styles.debugBox}>
+          <Text style={styles.debugTitle}>Debug (?debug=1)</Text>
+          <Text style={styles.debugText}>redirectUri: {redirectUri}</Text>
+          <Text style={styles.debugText}>origin: {typeof window !== 'undefined' ? window.location?.origin : '—'}</Text>
+          <Text style={styles.debugText}>flow: {useRedirectFlow ? 'redirect (mobile)' : 'popup'}</Text>
+          {authDebug ? <Text style={styles.debugText}>{authDebug}</Text> : <Text style={styles.debugText}>No response yet. Tap Sign in.</Text>}
+        </View>
       ) : null}
       <TouchableOpacity
         style={styles.resetButton}
         onPress={() => {
           setExchangeError(null);
           signOut();
-          if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.search) {
+          if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.search) {
             window.history.replaceState({}, '', window.location.pathname);
           }
         }}
@@ -191,5 +285,25 @@ const styles = StyleSheet.create({
   devButtonText: {
     fontSize: 13,
     color: '#64748b',
+  },
+  debugBox: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+    maxWidth: 320,
+    alignSelf: 'center',
+  },
+  debugTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#444',
+    marginBottom: 8,
+  },
+  debugText: {
+    fontSize: 11,
+    color: '#666',
+    fontFamily: 'monospace',
+    marginBottom: 4,
   },
 });

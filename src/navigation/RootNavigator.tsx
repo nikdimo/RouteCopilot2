@@ -1,11 +1,18 @@
-import React from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import React, { useEffect } from 'react';
+import { Platform, View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 import { useAuth } from '../context/AuthContext';
 import LoginScreen from '../screens/LoginScreen';
 import AppNavigator from './AppNavigator';
 
 export default function RootNavigator() {
   const { userToken, isRestoringSession } = useAuth();
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      SplashScreen.hideAsync();
+    }
+  }, []);
 
   if (isRestoringSession) {
     return (
