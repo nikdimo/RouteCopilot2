@@ -1,0 +1,27 @@
+---
+description: Protect WisePlan working auth and deployment config
+globs: App.tsx, **/LoginScreen.tsx, **/RootNavigator.tsx, vps-landing/**/*
+alwaysApply: true
+---
+
+# WisePlan Config Protection
+
+When editing auth, splash, or deployment files, do NOT break the working setup. See `WORKING_CONFIG.md` for reference.
+
+## Critical invariants
+
+1. **LoginScreen.tsx**
+   - Use `localStorage` (not `sessionStorage`) for `code_verifier` so redirect flow survives.
+   - Redirect flow for mobile web: full-page redirect, not popup.
+   - Web redirect URI must be `https://wiseplan.dk/app/` in production.
+   - Native redirect URI: `wiseplan://auth`.
+
+2. **App.tsx**
+   - `WebBrowser.maybeCompleteAuthSession()` at app root + `Linking` listener must remain for OAuth callback.
+   - Splash: `preventAutoHideAsync` before load, `hideAsync` after ready.
+
+3. **vps-landing/nginx-wiseplan-domain.conf**
+   - `location = / { try_files /index.html =404; }` MUST exist. Removing it causes ERR_TOO_MANY_REDIRECTS.
+
+4. **Cloudflare**
+   - SSL mode must be Full or Full (strict). Flexible causes redirect loops.
