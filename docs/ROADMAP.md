@@ -91,10 +91,10 @@
 
 | File | Purpose |
 |------|---------|
-| `ROADMAP.md` | This file – status, problems, next steps |
-| `WORKING_CONFIG.md` | Protected config – deploy workflow, nginx, Cloudflare, Azure, revert |
-| `DOMAIN_AND_AZURE_SETUP.md` | Specs: domain → VPS, SSL, Azure redirect URIs |
-| `CURRENT_STATE.md` | App features, Phase 7, QA notes, recent accomplishments |
-| `SPEC.md` | Phase 7 smart scheduling logic |
+| `docs/ROADMAP.md` | This file – status, problems, next steps |
+| `docs/WORKING_CONFIG.md` | Protected config – deploy workflow, nginx, Cloudflare, Azure, revert |
+| `docs/DOMAIN_AND_AZURE_SETUP.md` | Specs: domain → VPS, SSL, Azure redirect URIs |
+| `docs/CURRENT_STATE.md` | App features, Phase 7, QA notes, recent accomplishments |
+| `docs/SPEC.md` | Phase 7 smart scheduling logic |
 | `vps-landing/` | Landing page (index.html), nginx config, setup scripts |
 | `eas.json` | EAS build/submit profiles |

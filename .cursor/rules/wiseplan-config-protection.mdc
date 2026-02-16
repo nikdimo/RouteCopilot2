@@ -6,7 +6,7 @@ alwaysApply: true
 
 # WisePlan Config Protection
 
-When editing auth, splash, or deployment files, do NOT break the working setup. See `WORKING_CONFIG.md` for reference.
+When editing auth, splash, or deployment files, do NOT break the working setup. See `docs/WORKING_CONFIG.md` for reference.
 
 ## Critical invariants
 
