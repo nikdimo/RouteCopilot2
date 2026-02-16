@@ -1,5 +1,15 @@
 # WisePlan – Release Notes
 
+## 2026-02-16 – TestFlight & Auth Fixes
+
+**TestFlight:** White screen fixed. Builds now show app correctly. Causes: `expo-splash-screen` (preventAutoHideAsync, hideAsync) and `newArchEnabled: false` in app.json. EAS build + submit; Microsoft auth works on device.
+
+**Web/mobile auth:** Microsoft sign-in now works on PC and mobile browsers. Fixes: `localStorage` for code_verifier (survives redirect); redirect flow for mobile web (no popup); production redirect URI `https://wiseplan.dk/app/`; native `wiseplan://auth`; landing page redirects `?code=` to `/app/`.
+
+**Redirect loop:** Fixed ERR_TOO_MANY_REDIRECTS with Cloudflare SSL = Full and nginx `location = /` block.
+
+---
+
 ## Version 1.0.0 (Initial Release)
 
 ---

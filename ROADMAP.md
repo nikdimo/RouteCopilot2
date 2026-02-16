@@ -1,7 +1,7 @@
 # WisePlan – Deployment Roadmap
 
 **Project:** WisePlan (formerly Route Copilot)  
-**Last updated:** 2026-02-13
+**Last updated:** 2026-02-16
 
 ---
 
@@ -10,10 +10,10 @@
 | Phase | Goal | Status | Notes |
 |-------|------|--------|-------|
 | 1 | EAS setup | ✅ Done | eas.json, bundle IDs in app.json |
-| 2 | TestFlight (iOS) | ⏳ Pending | After EAS build + submit |
+| 2 | TestFlight (iOS) | ✅ Done | White screen fixed; auth works; submitted via EAS |
 | 3 | Google Play Internal | ⏳ Pending | After EAS build + submit |
 | 4 | VPS landing + web app | ✅ Done | Nginx, landing page, web app at /app/ |
-| 5 | Domain + HTTPS | 🔄 In progress | wiseplan.dk purchased |
+| 5 | Domain + HTTPS | ✅ Done | wiseplan.dk live; Cloudflare SSL Full |
 | 6 | Production release | ⏳ Pending | App Store + Play Store |
 
 ---
@@ -23,56 +23,67 @@
 ### Completed
 - **App:** Renamed to WisePlan, bundle IDs `com.wiseplan.app`
 - **VPS:** Contabo Linux at 207.180.222.248
-- **Nginx:** Serving landing page (/) and web app (/app/)
-- **Cloudflare tunnel:** Was used for HTTPS (quick tunnel), URL changes on reboot
-- **Azure:** Route Copilot app, redirect URIs for Cloudflare URLs and localhost
-- **Git:** Repo at github.com/nikdimo/RouteCopilot2, vps-landing in repo
+- **Nginx:** Serving landing page (/) and web app (/app/); `location = /` block prevents redirect loop
+- **Domain:** wiseplan.dk live via Cloudflare (DNS → VPS, SSL Full, not Flexible)
+- **Azure:** Route Copilot app, redirect URIs for wiseplan.dk, wiseplan.dk/app/, wiseplan://auth, localhost
+- **Web auth:** Microsoft sign-in works on PC and mobile (redirect flow for mobile web; localStorage for code_verifier)
+- **TestFlight:** iOS build working; white screen fixed (splash + newArchEnabled: false)
+- **Git:** Repo at github.com/nikdimo/RouteCopilot2, tag v1-working-2026-02-16
+- **Docs:** WORKING_CONFIG.md, Cursor rule for config protection
 
 ### In Progress
-- **Domain:** wiseplan.dk purchased – needs DNS, SSL, nginx update
-- **Local login:** redirect_uri errors with localhost – Azure config not accepting
-- **VPS login:** OAuth code exchange sometimes fails (code_verifier/session lost)
+- **Local login (localhost):** redirect_uri errors – Azure config; production (wiseplan.dk) works
 
 ### Not Started
-- EAS iOS/Android builds
-- TestFlight + Play internal testing
+- Google Play internal testing
 - App Store / Play Store production
 
 ---
 
-## Problems We're Facing
+## Accomplishments (2026-02-16)
 
-### 1. Local development – Microsoft login fails
-**Symptom:** `invalid_request: redirect_uri is not valid` when signing in at localhost:8086  
+**TestFlight fix:** White screen resolved with `expo-splash-screen` (preventAutoHideAsync, hideAsync) and `newArchEnabled: false` in app.json. EAS build + submit; auth works on device.
+
+**Web/mobile auth fix:** OAuth code exchange was failing (code_verifier lost on redirect). Fixed with: (1) `localStorage` for code_verifier (persists across redirect); (2) redirect flow for mobile web instead of popup; (3) production redirect URI `https://wiseplan.dk/app/`; (4) landing page script redirects `?code=` to `/app/` so exchange completes.
+
+**ERR_TOO_MANY_REDIRECTS:** Cloudflare SSL set to Full (not Flexible). Nginx `location = / { try_files /index.html =404; }` added to prevent root redirect loop.
+
+**Protection:** Created WORKING_CONFIG.md, .cursor/rules/wiseplan-config-protection.mdc, Git tag v1-working-2026-02-16.
+
+---
+
+## Problems (Reference – Some Fixed)
+
+### 1. Local development – Microsoft login fails (still open)
+**Symptom:** `invalid_request: redirect_uri is not valid` when signing in at localhost  
 **Cause:** Azure rejecting the exact redirect_uri the app sends  
-**Tried:** Adding `http://localhost:8086` and `http://localhost:8086/` to Azure Single-page application  
-**Status:** Still failing – URI format mismatch or Azure config issue
+**Tried:** Adding localhost variants to Azure Single-page application  
+**Status:** Still failing; production (wiseplan.dk/app/) works
 
-### 2. VPS – OAuth code not exchanged
-**Symptom:** User returns from Microsoft with `?code=...` in URL but stays on login screen  
-**Cause:** code_verifier lost (PKCE) or redirect path mismatch; possible landing-page redirect from / to /app/ loses session  
-**Tried:** Landing page redirect to /app/ when URL has ?code=; LoginScreen forces /app in redirectUri for web  
-**Status:** Intermittent – fresh flow sometimes works
+### 2. VPS – OAuth code not exchanged (fixed)
+**Was:** User returns with `?code=...` but stays on login screen  
+**Fix:** localStorage for code_verifier; redirect flow for mobile; landing page redirects ?code= to /app/
 
-### 3. Cloudflare tunnel – unstable URL
-**Symptom:** URL (e.g. corporate-competitors-bid-riders.trycloudflare.com) changes when tunnel restarts  
-**Cause:** Quick tunnel assigns new random URL each run  
-**Fix:** Use domain wiseplan.dk with Let's Encrypt – stable URLs
+### 3. Cloudflare tunnel – unstable URL (obsolete)
+**Was:** Quick tunnel URL changes on reboot  
+**Fix:** Use wiseplan.dk with Cloudflare DNS (not tunnel)
 
-### 4. Blank /app/ page (fixed)
+### 4. ERR_TOO_MANY_REDIRECTS (fixed)
+**Was:** Infinite redirect loop  
+**Fix:** Cloudflare SSL = Full; nginx `location = /` block
+
+### 5. Blank /app/ page (fixed)
 **Was:** App at /app/ showed blank – assets at /_expo/ returned 404  
-**Fix:** Nginx alias `/ _expo/` → app folder; added baseUrl to app.json for future builds
+**Fix:** Nginx alias `/_expo/` → app folder; baseUrl in app.json
 
 ---
 
 ## Next Steps (in order)
 
-1. **Set up wiseplan.dk** – DNS → VPS, certbot SSL, nginx config (see DOMAIN_AND_AZURE_SETUP.md)
-2. **Update Azure** – Add https://wiseplan.dk and https://wiseplan.dk/app (with/without trailing slash)
-3. **Stop Cloudflare tunnel** – Use domain directly
-4. **Retest login** – At https://wiseplan.dk/app/
-5. **EAS builds** – When ready: iOS → TestFlight, Android → Play internal
-6. **Update landing page** – Add TestFlight + Play links when available
+1. **Google Play Internal** – EAS build + submit for Android
+2. **Landing page** – Update vps-landing/index.html with TestFlight/Play links when ready; deploy to VPS root
+3. **Local login (optional)** – Fix localhost redirect_uri if needed for dev
+4. **Production release** – App Store + Play Store when ready
 
 ---
 
@@ -81,8 +92,9 @@
 | File | Purpose |
 |------|---------|
 | `ROADMAP.md` | This file – status, problems, next steps |
+| `WORKING_CONFIG.md` | Protected config – deploy workflow, nginx, Cloudflare, Azure, revert |
 | `DOMAIN_AND_AZURE_SETUP.md` | Specs: domain → VPS, SSL, Azure redirect URIs |
-| `CURRENT_STATE.md` | App features, Phase 7, QA notes |
+| `CURRENT_STATE.md` | App features, Phase 7, QA notes, recent accomplishments |
 | `SPEC.md` | Phase 7 smart scheduling logic |
-| `vps-landing/` | Landing page, nginx config, setup scripts |
+| `vps-landing/` | Landing page (index.html), nginx config, setup scripts |
 | `eas.json` | EAS build/submit profiles |

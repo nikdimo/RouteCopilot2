@@ -1,24 +1,38 @@
 # WisePlan (Route Copilot) - Project Status
-**Date:** 2026-02-13
+**Date:** 2026-02-16
 **Current Phase:** Phase 7 – Smart Scheduling + Deployment
 
 ---
 
 ## 🚀 Deployment Status
 
-See **ROADMAP.md** for full deployment status and **DOMAIN_AND_AZURE_SETUP.md** for domain setup.
+See **ROADMAP.md** for full deployment status, **WORKING_CONFIG.md** for protected config, and **DOMAIN_AND_AZURE_SETUP.md** for domain setup.
 
 | Item | Status |
 |------|--------|
 | VPS (207.180.222.248) | ✅ Nginx, landing + web app |
-| Domain (wiseplan.dk) | 🔄 DNS + SSL pending |
-| Azure redirect URIs | ✅ Cloudflare URLs; adding wiseplan.dk |
-| Local login | ❌ redirect_uri errors |
-| EAS / TestFlight / Play | ⏳ Not started |
+| Domain (wiseplan.dk) | ✅ Live with Cloudflare; SSL Full (not Flexible) |
+| Azure redirect URIs | ✅ wiseplan.dk, wiseplan.dk/app/, wiseplan://auth |
+| Web login (wiseplan.dk/app/) | ✅ PC and mobile Chrome/Safari (redirect flow on mobile) |
+| TestFlight (iOS) | ✅ Working – white screen fixed, auth works |
+| Google Play Internal | ⏳ Pending |
+| Local login (localhost) | ❌ redirect_uri errors (production works) |
 
 ---
 
-## App Status (unchanged)
+## Recent Accomplishments (2026-02-16)
+
+**TestFlight:** Fixed white screen with `expo-splash-screen` (preventAutoHideAsync/hideAsync) and `newArchEnabled: false`. Build submitted via EAS; Microsoft auth works on device.
+
+**Web auth:** OAuth now works on PC and mobile browsers. Fixes: `localStorage` for `code_verifier` (not sessionStorage, survives redirect); redirect flow for mobile web (full-page redirect instead of popup); production redirect URI `https://wiseplan.dk/app/`; native redirect `wiseplan://auth`. Landing page redirects `?code=` URLs to `/app/` so code exchange completes.
+
+**Redirect loop (ERR_TOO_MANY_REDIRECTS):** Fixed by setting Cloudflare SSL mode to Full (not Flexible) and adding nginx `location = / { try_files /index.html =404; }` to prevent root redirect loop.
+
+**Documentation:** Created `WORKING_CONFIG.md` and `.cursor/rules/wiseplan-config-protection.mdc` to protect the working setup. Git tag `v1-working-2026-02-16` marks this state.
+
+---
+
+## App Status
 **Current Phase:** Phase 7 – Smart Scheduling (Foundation)
 
 ## ✅ What Works

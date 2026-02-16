@@ -3,6 +3,17 @@
 **Last verified:** 2026-02-16  
 **Status:** ✅ Landing, web app, and Microsoft sign-in work on PC and mobile
 
+**Git tag:** `v1-working-2026-02-16` (restore with `git checkout v1-working-2026-02-16`)
+
+---
+
+## How We Got Here (2026-02-16)
+
+- **TestFlight:** Fixed white screen (splash + newArchEnabled: false); EAS build submitted; auth works on device
+- **Web auth:** OAuth fixed with localStorage for code_verifier, redirect flow for mobile web, redirect URI https://wiseplan.dk/app/
+- **Redirect loop:** Cloudflare SSL = Full; nginx `location = /` block
+- **Protection:** This doc, Cursor rule, Git tag created
+
 ---
 
 ## Features That Work
@@ -117,6 +128,15 @@ scp -r vps-landing\app\* nikola@207.180.222.248:~/app-deploy/
 ```bash
 sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/
 rm -r ~/app-deploy
+```
+
+**Landing page (index.html):** Deploy separately if you change `vps-landing/index.html`:
+```powershell
+scp vps-landing\index.html nikola@207.180.222.248:~/
+```
+```bash
+# On VPS
+sudo cp ~/index.html /var/www/wiseplan-test/
 ```
 
 ### Pull source on VPS (updates repo only, not deployed files)

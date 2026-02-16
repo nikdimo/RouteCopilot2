@@ -1,339 +1,432 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WisePlan – Your AI Logistics Assistant</title>
-  <meta name="description" content="See your Outlook calendar on a map. Find best meeting times. Built for field reps and mobile workers.">
-  <meta property="og:title" content="WisePlan – Your AI Logistics Assistant">
-  <meta property="og:description" content="See your Outlook calendar on a map. Find best meeting times. Built for field reps.">
-  <meta property="og:url" content="https://wiseplan.dk/">
-  <meta property="og:type" content="website">
-  <link rel="icon" href="/app/favicon.ico">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg: #0f172a;
-      --surface: #1e293b;
-      --surface-2: #334155;
-      --accent: #3b82f6;
-      --accent-hover: #2563eb;
-      --text: #f1f5f9;
-      --text-muted: #94a3b8;
-      --border: rgba(148, 163, 184, 0.2);
-      --radius: 16px;
-      --radius-sm: 12px;
-    }
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-behavior: smooth; }
-    body {
-      font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-      min-height: 100vh;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { color: var(--accent-hover); text-decoration: underline; }
-    a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    img { max-width: 100%; height: auto; display: block; }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WisePlan – Your AI Logistics Assistant</title>
+    <meta name="description" content="See your Outlook calendar on a map. Find best meeting times. Built for field reps.">
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-    .container { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem; }
-    .section { padding: 4rem 0; }
-    .section-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 2rem; text-align: center; }
+    <style>
+        :root {
+            /* Brand Colors */
+            --brand-blue: #0090FF;
+            --brand-green: #22c55e;
+            --brand-red: #ef4444;
+            --brand-orange: #f59e0b;
+            --ui-bg: #f2f2f7;
+            
+            /* Dark Theme */
+            --bg-deep: #050507;
+            --glass-bg: rgba(255, 255, 255, 0.04);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #ffffff;
+            --text-secondary: #9496a1;
+            
+            --container-width: 1100px;
+        }
 
-    /* Hero */
-    .hero {
-      min-height: 85vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: 3rem 1.5rem;
-    }
-    .hero h1 {
-      font-size: clamp(2rem, 5vw, 3.5rem);
-      font-weight: 700;
-      line-height: 1.2;
-      margin-bottom: 1rem;
-      letter-spacing: -0.02em;
-    }
-    .hero .tagline {
-      font-size: 1.125rem;
-      color: var(--text-muted);
-      max-width: 520px;
-      margin: 0 auto 2.5rem;
-    }
-    .hero-ctas {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1rem;
-      justify-content: center;
-      align-items: center;
-    }
-    .badge-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.75rem 1.25rem;
-      border-radius: var(--radius-sm);
-      font-weight: 600;
-      font-size: 1rem;
-      transition: transform 0.15s, box-shadow 0.15s;
-      min-height: 44px;
-    }
-    .badge-btn:hover { transform: translateY(-1px); text-decoration: none; }
-    .badge-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .badge-ios {
-      background: #000;
-      color: #fff;
-    }
-    .badge-ios:hover { color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-    .badge-android {
-      background: #1a1a1a;
-      color: #fff;
-      border: 1px solid var(--border);
-    }
-    .badge-android:hover { color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-    .badge-btn svg { width: 24px; height: 24px; flex-shrink: 0; }
-    .hero-try {
-      margin-top: 1.5rem;
-      font-size: 0.95rem;
-    }
-    .hero-try a {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      color: var(--accent);
-      font-weight: 500;
-    }
-    .hero-try a:hover { color: var(--accent-hover); }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    /* Product cards */
-    .product-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 1.5rem;
-    }
-    .product-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1.75rem;
-    }
-    .product-card .icon {
-      width: 48px;
-      height: 48px;
-      margin-bottom: 1rem;
-      color: var(--accent);
-    }
-    .product-card h3 { font-size: 1.125rem; margin-bottom: 0.5rem; }
-    .product-card p { color: var(--text-muted); font-size: 0.95rem; }
+        body {
+            background-color: var(--bg-deep);
+            color: var(--text-primary);
+            font-family: 'DM Sans', sans-serif;
+            overflow-x: hidden;
+            line-height: 1.5;
+        }
 
-    /* Benefits */
-    .benefits-list {
-      max-width: 560px;
-      margin: 0 auto;
-    }
-    .benefit-item {
-      display: flex;
-      gap: 1rem;
-      align-items: flex-start;
-      padding: 1rem 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .benefit-item:last-child { border-bottom: none; }
-    .benefit-item .icon {
-      width: 24px;
-      height: 24px;
-      flex-shrink: 0;
-      color: var(--accent);
-    }
-    .benefit-item strong { display: block; margin-bottom: 0.25rem; }
+        .container { max-width: var(--container-width); margin: 0 auto; padding: 0 24px; position: relative; z-index: 2; }
+        .gradient-text {
+            background: linear-gradient(135deg, #ffffff 0%, #0090FF 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        a { text-decoration: none; color: inherit; transition: 0.3s; }
+        
+        .btn-primary {
+            display: inline-flex; align-items: center; justify-content: center;
+            padding: 12px 28px; font-weight: 600; border-radius: 12px;
+            background: var(--brand-blue); color: white;
+            box-shadow: 0 0 20px rgba(0, 144, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 30px rgba(0, 144, 255, 0.5); }
+        
+        .store-badge {
+            display: inline-flex; align-items: center; gap: 10px; padding: 10px 18px;
+            background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border);
+            border-radius: 12px; color: var(--text-secondary); font-size: 0.9rem;
+        }
+        .store-badge:hover { background: rgba(255,255,255,0.1); color: white; }
+        .store-badge svg { width: 20px; height: 20px; fill: currentColor; }
 
-    /* Playground */
-    .playground-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 2.5rem;
-      text-align: center;
-      max-width: 480px;
-      margin: 0 auto;
-    }
-    .playground-card p { color: var(--text-muted); margin-bottom: 1.5rem; }
-    .btn-primary {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 1rem 1.5rem;
-      background: var(--accent);
-      color: #fff;
-      font-weight: 600;
-      font-size: 1rem;
-      border-radius: var(--radius-sm);
-      min-height: 44px;
-      transition: background 0.15s;
-    }
-    .btn-primary:hover { background: var(--accent-hover); color: #fff; text-decoration: none; }
-    .btn-primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        /* --- HERO --- */
+        .hero { padding: 120px 0 80px; text-align: center; position: relative; }
+        .hero h1 { font-size: clamp(2.5rem, 5vw, 4.5rem); line-height: 1.1; margin-bottom: 24px; letter-spacing: -0.02em; }
+        .hero p { font-size: 1.25rem; color: var(--text-secondary); max-width: 580px; margin: 0 auto 40px; }
 
-    /* Final CTA */
-    .final-cta {
-      background: var(--surface);
-      border-top: 1px solid var(--border);
-    }
-    .final-cta .section-title { margin-bottom: 1.5rem; }
-    .final-cta .hero-ctas { margin-bottom: 0; }
+        /* --- 3D PHONE MOCKUP --- */
+        .phone-mockup-container {
+            perspective: 1500px; margin-top: 40px; display: flex; justify-content: center;
+        }
+        .phone-frame {
+            width: 340px; height: 680px; background: #000; border-radius: 48px;
+            box-shadow: 0 0 0 4px #333, 0 50px 100px -20px rgba(0,0,0,0.7);
+            position: relative; overflow: hidden; transform: rotateX(10deg) rotateY(-10deg);
+            transition: transform 0.6s ease;
+        }
+        .phone-frame:hover { transform: rotateX(0) rotateY(0); }
+        .notch {
+            position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+            width: 100px; height: 28px; background: #000;
+            border-bottom-left-radius: 16px; border-bottom-right-radius: 16px; z-index: 50;
+        }
 
-    /* Footer */
-    footer {
-      padding: 2rem 1.5rem;
-      text-align: center;
-      color: var(--text-muted);
-      font-size: 0.875rem;
-    }
-    footer a { color: var(--text-muted); }
-    footer a:hover { color: var(--text); }
-    .footer-links { margin-top: 0.5rem; }
-    .footer-links a { margin: 0 0.5rem; }
-  </style>
+        /* --- APP UI LAYERS --- */
+        .app-screen { width: 100%; height: 100%; background: #fff; position: relative; display: flex; flex-direction: column; }
+        
+        /* Map Background Utils (Used in Hero & Step 1) */
+        .map-bg { flex: 1; background: #f2f2f7; position: relative; overflow: hidden; }
+        .road-grid {
+            position: absolute; inset: 0;
+            background-image: linear-gradient(#e5e5ea 1px, transparent 1px), linear-gradient(90deg, #e5e5ea 1px, transparent 1px);
+            background-size: 40px 40px; opacity: 0.6;
+        }
+        .terrain-park { position: absolute; background: #dcfce7; border-radius: 50%; }
+        .terrain-water { position: absolute; background: #dbeafe; border-radius: 50%; }
+
+        /* Hero Specifics */
+        .hero-map .terrain-park { top: 20px; right: -50px; width: 200px; height: 200px; }
+        .hero-map .terrain-water { bottom: 100px; left: -50px; width: 150px; height: 150px; }
+        
+        .route-poly {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            fill: none; stroke: var(--brand-blue); stroke-width: 4; stroke-linecap: round;
+            stroke-dasharray: 1000; stroke-dashoffset: 1000;
+            animation: drawPoly 4s ease-out forwards;
+        }
+        @keyframes drawPoly { to { stroke-dashoffset: 0; } }
+
+        .hero-pin {
+            width: 24px; height: 24px; background: var(--brand-blue); color: white;
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            font-size: 10px; font-weight: bold; border: 2px solid white;
+            position: absolute; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            z-index: 10; transform: scale(0);
+            animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+        .hp-1 { top: 120px; left: 80px; animation-delay: 0.5s; }
+        .hp-2 { top: 200px; left: 220px; animation-delay: 1.0s; background: #666; }
+        .hp-3 { top: 320px; left: 140px; animation-delay: 1.5s; background: #666; }
+
+        .hero-cards {
+            height: 260px; background: white; border-top-left-radius: 24px; border-top-right-radius: 24px;
+            box-shadow: 0 -10px 40px rgba(0,0,0,0.1); padding: 24px; z-index: 20; position: relative;
+        }
+        .drag-handle { width: 40px; height: 4px; background: #e5e5ea; border-radius: 2px; margin: 0 auto 16px; }
+        .visit-row {
+            display: flex; gap: 12px; padding: 12px; border-radius: 12px; margin-bottom: 8px;
+            border: 1px solid #f2f2f7; transition: 0.3s;
+        }
+        .visit-row.active { background: #eff6ff; border-color: var(--brand-blue); }
+        .visit-time { font-size: 12px; font-weight: 700; color: #333; width: 45px; }
+        .visit-info { flex: 1; }
+        .visit-title { font-size: 14px; font-weight: 600; color: #000; }
+        .visit-sub { font-size: 12px; color: #666; }
+        .status-pill { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--brand-blue); color: white; display: inline-block; margin-top: 4px; }
+
+        /* --- ANIMATED FEATURES --- */
+        .features-section { padding: 80px 0; }
+        .feature-row { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; margin-bottom: 140px; }
+        .feature-row.reverse { direction: rtl; }
+        .feature-row.reverse .feature-text { direction: ltr; }
+        .feature-text h3 { font-size: 2rem; margin-bottom: 16px; }
+        .feature-text p { color: var(--text-secondary); font-size: 1.1rem; max-width: 400px; line-height: 1.6; }
+        .step-badge {
+            display: inline-block; background: rgba(0, 144, 255, 0.1); color: var(--brand-blue);
+            padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.9rem; margin-bottom: 16px;
+        }
+
+        .micro-video {
+            width: 100%; max-width: 480px; height: 320px;
+            background: #1c1c1e; border-radius: 24px; border: 1px solid var(--glass-border);
+            position: relative; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            display: flex; flex-direction: column;
+        }
+
+        /* --- VIDEO 1: GAP FILLER TRANSFORMATION (New) --- */
+        .anim-gap-map { flex: 1; background: #1c1c1e; position: relative; overflow: hidden; }
+        
+        /* Map Blobs for Video 1 */
+        .ag-park { top: -20px; left: -20px; width: 180px; height: 180px; opacity: 0.8; }
+        .ag-water { bottom: -30px; right: -30px; width: 200px; height: 200px; opacity: 0.8; }
+
+        /* Pins */
+        .map-pin {
+            width: 24px; height: 24px; border: 2px solid white; border-radius: 50%;
+            position: absolute; z-index: 20; font-size: 11px; font-weight: bold;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+        }
+        /* Existing Pins */
+        .mp-1 { top: 20%; left: 15%; background: var(--brand-blue); color: white; }
+        .mp-2 { top: 50%; left: 85%; background: #555; color: #ccc; }
+        .mp-3 { top: 80%; left: 50%; background: #555; color: #ccc; }
+        
+        /* The New Pin (Green) */
+        .mp-new {
+            top: 35%; left: 50%; /* Positioned visually between 1 and 2 */
+            background: var(--brand-green); color: black;
+            opacity: 0; transform: scale(0) translateY(-30px);
+            animation: dropNewPin 6s infinite;
+        }
+
+        /* Route Lines SVG */
+        .route-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        
+        /* Path 1: Original (1 -> 2 -> 3) */
+        /* M(15%,20%) L(85%,50%) L(50%,80%) */
+        /* Coords relative to 480x320: 1(72,64) 2(408,160) 3(240,256) */
+        .line-old {
+            fill: none; stroke: #555; stroke-width: 3; 
+            opacity: 1; animation: fadeOldLine 6s infinite;
+        }
+
+        /* Path 2: New (1 -> New -> 2 -> 3) */
+        /* New(50%,35%) -> (240, 112) */
+        /* Path: 1(72,64) -> New(240,112) -> 2(408,160) -> 3(240,256) */
+        .line-new {
+            fill: none; stroke: var(--brand-blue); stroke-width: 4; stroke-linecap: round;
+            stroke-dasharray: 600; stroke-dashoffset: 600;
+            animation: drawNewRoute 6s infinite;
+        }
+
+        @keyframes dropNewPin {
+            0%, 20% { opacity: 0; transform: scale(0) translateY(-30px); }
+            30% { opacity: 1; transform: scale(1.2) translateY(0); }
+            35%, 90% { opacity: 1; transform: scale(1) translateY(0); }
+            100% { opacity: 0; transform: scale(0); }
+        }
+        @keyframes fadeOldLine {
+            0%, 30% { opacity: 1; stroke-dasharray: 0; }
+            40%, 100% { opacity: 0.2; stroke-dasharray: 8,4; }
+        }
+        @keyframes drawNewRoute {
+            0%, 35% { stroke-dashoffset: 600; opacity: 0; }
+            36% { opacity: 1; }
+            50%, 90% { stroke-dashoffset: 0; opacity: 1; }
+            100% { stroke-dashoffset: 0; opacity: 0; }
+        }
+
+        /* --- VIDEO 2: SCHEDULE LOGIC --- */
+        .anim-schedule-ui { padding: 24px; background: #111; flex: 1; display: flex; flex-direction: column; gap: 12px; }
+        .cal-event { background: #2c2c2e; border-left: 4px solid #666; padding: 12px; border-radius: 8px; color: #aaa; font-size: 13px; font-weight: 500; }
+        .cal-event strong { display: block; color: white; font-size: 14px; margin-bottom: 2px; }
+        .gap-indicator {
+            height: 0; overflow: hidden; border-radius: 8px;
+            background: rgba(34, 197, 94, 0.15); border: 1px dashed var(--brand-green);
+            display: flex; align-items: center; padding: 0 16px;
+            animation: openGap 4s ease-in-out infinite;
+        }
+        .suggestion-content {
+            display: flex; width: 100%; align-items: center; justify-content: space-between;
+            color: var(--brand-green); font-weight: 700; font-size: 14px; opacity: 0;
+            animation: fadeInContent 4s ease-in-out infinite;
+        }
+        @keyframes openGap {
+            0%, 20% { height: 0; border-width: 0; margin: 0; }
+            30%, 80% { height: 60px; border-width: 1px; margin: 8px 0; }
+            90%, 100% { height: 0; border-width: 0; margin: 0; }
+        }
+        @keyframes fadeInContent { 0%, 30% { opacity: 0; transform: translateY(10px); } 40%, 80% { opacity: 1; transform: translateY(0); } 90%, 100% { opacity: 0; } }
+
+        /* --- VIDEO 3: DONE LIST --- */
+        .done-list { padding: 20px; display: flex; flex-direction: column; gap: 12px; position: relative; top: 0; animation: scrollUp 4s ease-in-out infinite; }
+        .task-card {
+            background: #fff; padding: 16px; border-radius: 12px; display: flex; align-items: center;
+            justify-content: space-between; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            position: relative; overflow: hidden;
+        }
+        .task-info strong { display: block; color: #000; font-size: 14px; }
+        .task-info span { font-size: 12px; color: #666; }
+        .check-circle { width: 24px; height: 24px; border: 2px solid #ddd; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+        .check-fill { width: 14px; height: 14px; background: var(--brand-green); border-radius: 50%; transform: scale(0); animation: fillCheck 4s infinite; }
+        .strikethrough { position: absolute; top: 50%; left: 10px; width: 0; height: 2px; background: #888; animation: strikeLine 4s infinite; z-index: 10; }
+        @keyframes fillCheck { 0%, 20% { transform: scale(0); } 25%, 90% { transform: scale(1); } 100% { transform: scale(0); } }
+        @keyframes strikeLine { 0%, 25% { width: 0; } 35%, 90% { width: 80%; } 100% { width: 0; } }
+        @keyframes scrollUp { 0%, 50% { top: 0; } 60%, 90% { top: -80px; } 100% { top: 0; } }
+
+        /* --- FOOTER --- */
+        .final-cta { text-align: center; padding: 100px 0; border-top: 1px solid var(--glass-border); }
+
+        @media (max-width: 900px) {
+            .feature-row, .feature-row.reverse { grid-template-columns: 1fr; direction: ltr; gap: 30px; }
+            .feature-row .feature-text { direction: ltr; }
+            .phone-mockup-container { transform: scale(0.9); margin-top: 0; }
+        }
+    </style>
 </head>
 <body>
-  <main>
-    <header class="hero">
-      <h1>WisePlan — Your AI Logistics Assistant</h1>
-      <p class="tagline">See your Outlook calendar on a map. Find the best times for new visits. Mark them done.</p>
-      <div class="hero-ctas">
-        <a href="#" class="badge-btn badge-ios" id="ios-link" aria-label="Download on the App Store">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-          App Store
-        </a>
-        <a href="#" class="badge-btn badge-android" id="android-link" aria-label="Get it on Google Play">
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.5,12.92 20.16,13.19L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z"/></svg>
-          Google Play
-        </a>
-      </div>
-      <p class="hero-try">
-        <a href="/app/">Open WisePlan in browser →</a>
-      </p>
-    </header>
 
-    <section class="section" id="product">
-      <div class="container">
-        <h2 class="section-title">One place for your visits and routes</h2>
-        <div class="product-grid">
-          <article class="product-card">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
-              <circle cx="12" cy="9" r="2.5"/>
-            </svg>
-            <h3>Map view</h3>
-            <p>Your day on a map. Numbered pins, directions, done at a glance.</p>
-          </article>
-          <article class="product-card">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <rect x="3" y="4" width="18" height="18" rx="2"/>
-              <path d="M16 2v4M8 2v4M3 10h18"/>
-            </svg>
-            <h3>Smart scheduling</h3>
-            <p>Best meeting times based on your calendar and travel.</p>
-          </article>
-          <article class="product-card">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-            <h3>Outlook sync</h3>
-            <p>Calendar and contacts in one place. Changes sync automatically.</p>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section class="section" id="benefits">
-      <div class="container">
-        <h2 class="section-title">Built for people on the move</h2>
-        <ul class="benefits-list">
-          <li class="benefit-item">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <div>
-              <strong>Less back-and-forth</strong>
-              See your route before you start.
+    <div class="container">
+        
+        <section class="hero">
+            <h1>
+                WisePlan<br>
+                <span class="gradient-text">Your AI Logistics Assistant</span>
+            </h1>
+            <p>See your Outlook calendar on a map. Find the best times for new visits. Mark them done.</p>
+            
+            <div style="display:flex; gap:16px; justify-content:center; margin-bottom:40px;">
+                <a href="/app/" class="btn-primary">Open in Browser</a>
             </div>
-          </li>
-          <li class="benefit-item">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <div>
-              <strong>Fewer missed visits</strong>
-              Schedule times that fit your day.
-            </div>
-          </li>
-          <li class="benefit-item">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <div>
-              <strong>One sign-in</strong>
-              Microsoft account, no new passwords.
-            </div>
-          </li>
-          <li class="benefit-item">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-            <div>
-              <strong>Works offline</strong>
-              Completed visits saved on your device.
-            </div>
-          </li>
-        </ul>
-      </div>
-    </section>
 
-    <section class="section" id="playground">
-      <div class="container">
-        <h2 class="section-title">Try it now — no download</h2>
-        <div class="playground-card">
-          <p>Sign in with Microsoft and use WisePlan in your browser. Same features as the app.</p>
-          <a href="/app/" class="btn-primary">Open WisePlan in browser →</a>
-        </div>
-      </div>
-    </section>
+            <div class="phone-mockup-container">
+                <div class="phone-frame">
+                    <div class="notch"></div>
+                    <div class="app-screen">
+                        <div class="map-bg hero-map">
+                            <div class="road-grid"></div>
+                            <div class="terrain-park"></div>
+                            <div class="terrain-water"></div>
+                            <svg class="route-poly" viewBox="0 0 340 400"><path d="M80,120 Q120,120 150,160 T220,200 T140,320" /></svg>
+                            <div class="hero-pin hp-1">1</div>
+                            <div class="hero-pin hp-2">2</div>
+                            <div class="hero-pin hp-3">3</div>
+                        </div>
+                        <div class="hero-cards">
+                            <div class="drag-handle"></div>
+                            <div style="font-size:18px; font-weight:700; color:#000; margin-bottom:16px;">Today, Feb 16</div>
+                            <div class="visit-row active">
+                                <div class="visit-time">09:00<br><span style="color:#999; font-weight:400;">10:00</span></div>
+                                <div class="visit-info">
+                                    <div class="visit-title">Client A (Køge)</div>
+                                    <div class="visit-sub">15 min drive • On time</div>
+                                    <div class="status-pill">Next Stop</div>
+                                </div>
+                            </div>
+                            <div class="visit-row">
+                                <div class="visit-time">11:00<br><span style="color:#999; font-weight:400;">12:00</span></div>
+                                <div class="visit-info">
+                                    <div class="visit-title">Client B (Roskilde)</div>
+                                    <div class="visit-sub">Lunch break after this</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
 
-    <section class="section final-cta" id="cta">
-      <div class="container">
-        <h2 class="section-title">Ready for your routes?</h2>
-        <div class="hero-ctas">
-          <a href="#" class="badge-btn badge-ios" id="ios-link-2" aria-label="Download on the App Store">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-            App Store
-          </a>
-          <a href="#" class="badge-btn badge-android" id="android-link-2" aria-label="Get it on Google Play">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.5,12.92 20.16,13.19L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z"/></svg>
-            Google Play
-          </a>
-        </div>
-      </div>
-    </section>
-  </main>
+        <section class="features-section">
+            <div class="feature-row">
+                <div class="feature-text">
+                    <span class="step-badge">Step 1</span>
+                    <h3>Smart Map & Gap Finder</h3>
+                    <p>WisePlan visualizes your route and automatically finds open slots. Watch as it identifies a gap between your first and second stop, drops a new pin, and instantly recalculates the optimal path.</p>
+                </div>
+                <div class="micro-video">
+                    <div class="anim-gap-map">
+                        <div class="road-grid"></div>
+                        <div class="terrain-park ag-park"></div>
+                        <div class="terrain-water ag-water"></div>
+                        
+                        <svg class="route-svg" viewBox="0 0 480 320">
+                            <path class="line-old" d="M 72 64 L 408 160 L 240 256" />
+                            <path class="line-new" d="M 72 64 L 240 112 L 408 160 L 240 256" />
+                        </svg>
 
-  <footer>
-    <p>© WisePlan</p>
-    <div class="footer-links">
-      <a href="#">Privacy</a>
-      <a href="#">Terms</a>
+                        <div class="map-pin mp-1">1</div>
+                        <div class="map-pin mp-2">2</div>
+                        <div class="map-pin mp-3">3</div>
+                        
+                        <div class="map-pin mp-new">NEW</div>
+                        
+                    </div>
+                    <div style="position:absolute; bottom:16px; left:0; width:100%; text-align:center;">
+                        <span style="background:rgba(0,0,0,0.6); padding:6px 12px; border-radius:20px; color:white; font-size:12px;">Optimizing route...</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-row reverse">
+                <div class="feature-text">
+                    <span class="step-badge">Step 2</span>
+                    <h3>Smart Suggestions</h3>
+                    <p>Stop guessing travel times. The app calculates traffic, distance, and your working hours to suggest the "Green Slots" that minimize driving and fit your schedule.</p>
+                </div>
+                <div class="micro-video">
+                    <div class="anim-schedule-ui">
+                        <div class="cal-event"><strong>10:00 - 11:00</strong> Client A (Køge)</div>
+                        <div class="gap-indicator">
+                            <div class="suggestion-content">
+                                <span>+ Client C</span>
+                                <span>11:30 - 12:30</span>
+                                <span style="background:#dcfce7; padding:2px 6px; border-radius:4px; font-size:10px; color:#15803d;">BEST MATCH</span>
+                            </div>
+                        </div>
+                        <div class="cal-event"><strong>13:00 - 14:00</strong> Client B (Roskilde)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feature-row">
+                <div class="feature-text">
+                    <span class="step-badge">Step 3</span>
+                    <h3>Mark done and keep moving</h3>
+                    <p>Mark visits as complete with a single tap. The app saves your progress offline and automatically scrolls to your next destination.</p>
+                </div>
+                <div class="micro-video" style="background: #f2f2f7;">
+                    <div style="height:100%; overflow:hidden; position:relative;">
+                        <div class="done-list">
+                            <div class="task-card" style="opacity: 0.6;">
+                                <div class="strikethrough"></div>
+                                <div class="task-info"><strong>09:00 • Client A</strong><span>Completed</span></div>
+                                <div class="check-circle" style="border-color:#22c55e;"><div class="check-fill" style="transform:scale(1); animation:none;"></div></div>
+                            </div>
+                            <div class="task-card">
+                                <div class="strikethrough"></div>
+                                <div class="task-info"><strong>11:30 • Client C</strong><span>High Priority</span></div>
+                                <div class="check-circle"><div class="check-fill"></div></div>
+                            </div>
+                            <div class="task-card">
+                                <div class="task-info"><strong>13:00 • Client B</strong><span>Roskilde Harbour</span></div>
+                                <div class="check-circle"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <footer class="final-cta">
+            <h2 style="font-size: 2rem; margin-bottom: 24px;">Ready for your routes?</h2>
+            <div style="display:flex; gap:16px; justify-content:center;">
+                <a href="#" class="store-badge" id="ios-link-2">App Store</a>
+                <a href="#" class="store-badge" id="android-link-2">Google Play</a>
+            </div>
+            <p style="margin-top:40px; color:var(--text-secondary); font-size:0.9rem;">&copy; 2026 WisePlan</p>
+        </footer>
+
     </div>
-  </footer>
 
-  <script>
-    // Store links – replace # with your TestFlight / App Store / Play URLs when ready
-    var STORE = { ios: '#', android: '#' };
-    document.querySelectorAll('[id^="ios-link"]').forEach(function(a){ a.href = STORE.ios; });
-    document.querySelectorAll('[id^="android-link"]').forEach(function(a){ a.href = STORE.android; });
-    if (window.location.search && window.location.search.includes('code=')) {
-      window.location.replace('/app/' + window.location.search);
-    }
-  </script>
+    <script>
+        var STORE = { ios: '#', android: '#' };
+        function setLinks(idIos, idAndroid) {
+            var i = document.getElementById(idIos);
+            var a = document.getElementById(idAndroid);
+            if(i) i.href = STORE.ios;
+            if(a) a.href = STORE.android;
+        }
+        setLinks('ios-link-2', 'android-link-2');
+
+        if (window.location.search && window.location.search.includes('code=')) {
+            window.location.replace('/app/' + window.location.search);
+        }
+    </script>
 </body>
 </html>
