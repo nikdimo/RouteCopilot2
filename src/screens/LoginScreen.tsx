@@ -12,6 +12,22 @@ import { useAuth } from '../context/AuthContext';
 
 const PKCE_VERIFIER_KEY = 'oauth_code_verifier';
 const PKCE_REDIRECT_KEY = 'oauth_redirect_uri';
+// Use localStorage so it persists across redirect chains (e.g. Microsoft -> wiseplan.dk/ -> landing forwards to /app/)
+function getStored(key: string): string | null {
+  try {
+    return (typeof localStorage !== 'undefined' ? localStorage : typeof sessionStorage !== 'undefined' ? sessionStorage : null)?.getItem(key) ?? null;
+  } catch { return null; }
+}
+function setStored(key: string, value: string): void {
+  try {
+    (typeof localStorage !== 'undefined' ? localStorage : typeof sessionStorage !== 'undefined' ? sessionStorage : null)?.setItem(key, value);
+  } catch {}
+}
+function removeStored(key: string): void {
+  try {
+    (typeof localStorage !== 'undefined' ? localStorage : typeof sessionStorage !== 'undefined' ? sessionStorage : null)?.removeItem(key);
+  } catch {}
+}
 
 // Dismiss auth session and pass redirect to useAuthRequest. Web: skipRedirectCheck when ?code=
 // to avoid trailing-slash/URL normalization mismatches (Azure + Cloudflare).
@@ -38,9 +54,13 @@ export default function LoginScreen() {
       ? { preferLocalhost: true }
       : { native: 'wiseplan://auth' }
   );
-  const redirectUri = Platform.OS === 'web' && baseRedirect && !baseRedirect.includes('/app')
+  let redirectUri = Platform.OS === 'web' && baseRedirect && !baseRedirect.includes('/app')
     ? baseRedirect.replace(/(\/)?$/, '/app$1')
     : baseRedirect;
+  // Production: force https://wiseplan.dk/app/ so Microsoft redirects to app, not landing root
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname === 'wiseplan.dk') {
+    redirectUri = 'https://wiseplan.dk/app/';
+  }
 
   if (__DEV__ && Platform.OS === 'web') {
     console.log('[Login] redirectUri sent to Microsoft:', redirectUri);
@@ -71,10 +91,17 @@ export default function LoginScreen() {
     const params = typeof window !== 'undefined' ? new URLSearchParams(window.location?.search ?? '') : null;
     const code = params?.get('code');
     if (!code) return;
-    const verifier = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(PKCE_VERIFIER_KEY) : null;
-    const storedRedirect = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(PKCE_REDIRECT_KEY) : null;
+    const verifier = getStored(PKCE_VERIFIER_KEY);
+    const storedRedirect = getStored(PKCE_REDIRECT_KEY);
     const finalRedirect = storedRedirect || redirectUri;
-    if (!verifier) return;
+    if (!verifier) {
+      // Landed with ?code= but no verifier (e.g. redirect via landing page lost storage, or stale link)
+      setExchangeError('Your session expired. Please tap "Sign in with Microsoft" again.');
+      if (typeof window !== 'undefined' && window.history?.replaceState) {
+        window.history.replaceState({}, '', window.location?.pathname ?? '/app');
+      }
+      return;
+    }
 
     let cancelled = false;
     (async () => {
@@ -83,8 +110,8 @@ export default function LoginScreen() {
           { clientId: MS_CLIENT_ID, redirectUri: finalRedirect, code, extraParams: { code_verifier: verifier } },
           discovery
         );
-        sessionStorage.removeItem(PKCE_VERIFIER_KEY);
-        sessionStorage.removeItem(PKCE_REDIRECT_KEY);
+        removeStored(PKCE_VERIFIER_KEY);
+        removeStored(PKCE_REDIRECT_KEY);
         if (typeof window !== 'undefined' && window.history?.replaceState) {
           const path = window.location?.pathname ?? '/app';
           window.history.replaceState({}, '', path);
@@ -111,10 +138,8 @@ export default function LoginScreen() {
     if (useRedirectFlow && request && discovery && request.url) {
       try {
         setIsRedirecting(true);
-        if (typeof sessionStorage !== 'undefined') {
-          sessionStorage.setItem(PKCE_VERIFIER_KEY, request.codeVerifier ?? '');
-          sessionStorage.setItem(PKCE_REDIRECT_KEY, redirectUri);
-        }
+        setStored(PKCE_VERIFIER_KEY, request.codeVerifier ?? '');
+        setStored(PKCE_REDIRECT_KEY, redirectUri);
         if (typeof window !== 'undefined') window.location.href = request.url;
       } catch (e) {
         setIsRedirecting(false);
