@@ -1,6 +1,12 @@
 import { useEffect } from 'react';
 import { Linking, Platform } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
+
+// Force HTTPS on production: localStorage is per-origin; http and https don't share it.
+// If user lands on http after Microsoft redirects to https, we lose the code_verifier.
+if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname === 'wiseplan.dk' && window.location?.protocol === 'http:') {
+  window.location.replace('https://wiseplan.dk' + (window.location.pathname || '/app/') + (window.location.search || ''));
+}
 import * as WebBrowser from 'expo-web-browser';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
