@@ -26,6 +26,7 @@ export default function ProfileScreen() {
   const { preferences, updatePreferences } = useUserPreferences();
   const [preBuffer, setPreBuffer] = useState((preferences.preMeetingBuffer ?? 15).toString());
   const [postBuffer, setPostBuffer] = useState((preferences.postMeetingBuffer ?? 15).toString());
+  const [distanceThreshold, setDistanceThreshold] = useState((preferences.distanceThresholdKm ?? 30).toString());
   const [workStart, setWorkStart] = useState(preferences.workingHours?.start ?? '08:00');
   const [workEnd, setWorkEnd] = useState(preferences.workingHours?.end ?? '17:00');
   const workingDays = preferences.workingDays ?? DEFAULT_WORKING_DAYS;
@@ -52,12 +53,18 @@ export default function ProfileScreen() {
         homeBase: { lat: sel.coords.lat, lon: sel.coords.lon },
         homeBaseLabel: sel.address,
       });
+    } else if (sel.type === 'none') {
+      updatePreferences({
+        homeBase: undefined,
+        homeBaseLabel: undefined,
+      });
     }
   };
 
   useEffect(() => {
     setPreBuffer((preferences.preMeetingBuffer ?? 15).toString());
     setPostBuffer((preferences.postMeetingBuffer ?? 15).toString());
+    setDistanceThreshold((preferences.distanceThresholdKm ?? 30).toString());
     setWorkStart(preferences.workingHours.start);
     setWorkEnd(preferences.workingHours.end);
   }, [preferences]);
@@ -72,6 +79,12 @@ export default function ProfileScreen() {
     const n = parseNumber(postBuffer, 0, 60);
     updatePreferences({ postMeetingBuffer: n });
     setPostBuffer(n.toString());
+  };
+
+  const saveDistanceThreshold = () => {
+    const n = parseNumber(distanceThreshold, 5, 300);
+    updatePreferences({ distanceThresholdKm: n });
+    setDistanceThreshold(n.toString());
   };
 
   const saveWorkingHours = () => {
@@ -103,7 +116,7 @@ export default function ProfileScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Home Base (Start/End Address)</Text>
         <Text style={styles.hint}>
-          Search contacts or addresses, same as when creating meetings.
+          Search contacts or addresses, same as when creating meetings. Tap the X to clear, or tap the field and type to change.
         </Text>
         <LocationSearch
           token={token}
@@ -181,6 +194,23 @@ export default function ProfileScreen() {
             placeholderTextColor="#94a3b8"
           />
           <Text style={styles.unit}>min</Text>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Max Detour Distance</Text>
+        <Text style={styles.hint}>Same-day slot skipped when detour &gt; threshold km; empty day suggested instead.</Text>
+        <View style={styles.row}>
+          <TextInput
+            style={styles.input}
+            value={distanceThreshold}
+            onChangeText={setDistanceThreshold}
+            onBlur={saveDistanceThreshold}
+            keyboardType="number-pad"
+            placeholder="30"
+            placeholderTextColor="#94a3b8"
+          />
+          <Text style={styles.unit}>km</Text>
         </View>
       </View>
 

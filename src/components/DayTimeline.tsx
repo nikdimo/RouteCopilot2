@@ -87,6 +87,8 @@ export type DayTimelineProps = {
   bestOptionIds: Set<string>;
   onSelectSlot: (slot: ScoredSlot) => void;
   onMapPress: (slot: ScoredSlot) => void;
+  /** When provided, selected ghost slots show "Book this time" to open the confirm sheet */
+  onBookSlot?: (slot: ScoredSlot) => void;
 };
 
 export default function DayTimeline({
@@ -98,6 +100,7 @@ export default function DayTimeline({
   bestOptionIds,
   onSelectSlot,
   onMapPress,
+  onBookSlot,
 }: DayTimelineProps) {
   if (entries.length === 0) return null;
 
@@ -114,6 +117,8 @@ export default function DayTimeline({
               address={entry.event.location ?? ''}
               statusColor="#107C10"
               variantBooked
+              phone={entry.event.phone}
+              email={entry.event.email}
             />
           );
         }
@@ -129,6 +134,7 @@ export default function DayTimeline({
             isBestOption={bestOptionIds.has(id)}
             onSelect={() => onSelectSlot(slot)}
             onMapPress={() => onMapPress(slot)}
+            onBookPress={onBookSlot ? () => onBookSlot(slot) : undefined}
           />
         );
       })}

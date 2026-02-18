@@ -45,8 +45,8 @@ function SlotCard({ slot, preBuffer, postBuffer, isBestMatch }: SlotCardProps) {
   const arriveByMs = slot.startMs - preBuffer * MS_PER_MIN;
   const departAtMs = slot.endMs + postBuffer * MS_PER_MIN;
 
-  /** On Your Route: detour < 5 min means the new stop fits well on the existing route */
-  const isOnRoute = slot.metrics.detourMinutes < 5;
+  /** On Your Route: detour ≤ 5 km means the new stop is on the existing route */
+  const isOnRoute = (slot.metrics.detourKm ?? 0) <= 5;
 
   return (
     <View style={styles.card}>
@@ -55,9 +55,19 @@ function SlotCard({ slot, preBuffer, postBuffer, isBestMatch }: SlotCardProps) {
           <Text style={styles.badgeBestText}>✨ Best Match</Text>
         </View>
       )}
-      {isOnRoute && !isBestMatch && (
+      {slot.tier === 4 && !isBestMatch && (
+        <View style={[styles.badgeOnRoute, { backgroundColor: '#e0f2fe' }]}>
+          <Text style={[styles.badgeOnRouteText, { color: '#0369a1' }]}>🗓 New Day</Text>
+        </View>
+      )}
+      {slot.tier === 1 && !isBestMatch && (
         <View style={styles.badgeOnRoute}>
-          <Text style={styles.badgeOnRouteText}>⚡ On Your Route</Text>
+          <Text style={styles.badgeOnRouteText}>⚡ On Route</Text>
+        </View>
+      )}
+      {slot.tier === 2 && !isBestMatch && (
+        <View style={[styles.badgeOnRoute, { backgroundColor: '#fef3c7' }]}>
+          <Text style={[styles.badgeOnRouteText, { color: '#92400e' }]}>📍 Nearby</Text>
         </View>
       )}
       <Text style={styles.cardDay}>{formatDayIso(slot.dayIso)}</Text>
@@ -72,7 +82,11 @@ function SlotCard({ slot, preBuffer, postBuffer, isBestMatch }: SlotCardProps) {
       </Text>
       <Text style={styles.reasoning}>{slot.label}</Text>
       <View style={styles.impactRow}>
-        <Text style={styles.impactItem}>🚗 Detour: {formatDetour(slot.metrics.detourMinutes)}</Text>
+        <Text style={styles.impactItem}>
+          🚗 {slot.tier === 4
+            ? `Round trip: ${slot.metrics.detourKm != null ? `${slot.metrics.detourKm.toFixed(1)} km` : `${slot.metrics.detourMinutes} min`}`
+            : `Detour: ${slot.metrics.detourKm != null ? (slot.metrics.detourKm > 0 ? `+${slot.metrics.detourKm.toFixed(1)} km` : '0 km') : formatDetour(slot.metrics.detourMinutes)}`}
+        </Text>
         <Text style={styles.impactItem}>Slack: {slot.metrics.slackMinutes} min</Text>
         <Text style={styles.impactItem}>
           Travel: {slot.metrics.travelToMinutes}m + {slot.metrics.travelFromMinutes}m

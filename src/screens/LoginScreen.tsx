@@ -7,6 +7,7 @@ import {
   makeRedirectUri,
   exchangeCodeAsync,
 } from 'expo-auth-session';
+import Constants from 'expo-constants';
 import { MS_CLIENT_ID, MS_SCOPES } from '../config/auth';
 import { useAuth } from '../context/AuthContext';
 
@@ -49,11 +50,14 @@ export default function LoginScreen() {
     'https://login.microsoftonline.com/common/v2.0'
   );
 
-  const baseRedirect = makeRedirectUri(
+  // Expo Go uses exp://... (makeRedirectUri); standalone uses wiseplan://auth
+  const isExpoGo = Constants.appOwnership === 'expo';
+  const baseRedirect =
     Platform.OS === 'web'
-      ? { preferLocalhost: true }
-      : { native: 'wiseplan://auth' }
-  );
+      ? makeRedirectUri({ preferLocalhost: true })
+      : isExpoGo
+        ? makeRedirectUri()
+        : 'wiseplan://auth';
   let redirectUri = Platform.OS === 'web' && baseRedirect && !baseRedirect.includes('/app')
     ? baseRedirect.replace(/(\/)?$/, '/app$1')
     : baseRedirect;
@@ -64,6 +68,9 @@ export default function LoginScreen() {
 
   if (__DEV__ && Platform.OS === 'web') {
     console.log('[Login] redirectUri sent to Microsoft:', redirectUri);
+  }
+  if (__DEV__ && Platform.OS !== 'web' && isExpoGo) {
+    console.log('[Login] Expo Go redirectUri (add to Azure):', redirectUri);
   }
 
   const [exchangeError, setExchangeError] = useState<string | null>(null);
@@ -208,6 +215,12 @@ export default function LoginScreen() {
       {exchangeError ? (
         <Text style={styles.errorText}>{exchangeError}</Text>
       ) : null}
+      {__DEV__ && Platform.OS !== 'web' && isExpoGo ? (
+        <Text style={styles.expoGoHint}>
+          Add this to Azure redirect URIs:{'\n'}
+          {redirectUri}
+        </Text>
+      ) : null}
       {showDebug ? (
         <View style={styles.debugBox}>
           <Text style={styles.debugTitle}>Debug (?debug=1)</Text>
@@ -292,6 +305,14 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 16,
     paddingHorizontal: 24,
+  },
+  expoGoHint: {
+    fontSize: 11,
+    color: '#64748b',
+    textAlign: 'center',
+    marginTop: 12,
+    paddingHorizontal: 16,
+    fontFamily: 'monospace',
   },
   resetButton: {
     marginTop: 24,

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -39,12 +39,15 @@ type DaySliderProps = {
   meetingCountByDay?: Record<string, number>;
 };
 
+type ScrollViewRef = React.ElementRef<typeof ScrollView> & { getScrollableNode?: () => HTMLElement | null };
+
 export default function DaySlider({
   selectedDate,
   onSelectDate,
   meetingCountByDay,
 }: DaySliderProps) {
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewRef>(null);
+  const wrapperRef = useRef<View>(null);
   const today = startOfDay(new Date());
   const isWeb = Platform.OS === 'web';
   const startDate = isWeb ? addDays(today, -DAYS_BACK_WEB) : today;
@@ -59,19 +62,44 @@ export default function DaySlider({
 
   const [scrollMonthDate, setScrollMonthDate] = useState<Date>(selectedDate);
   const pillStep = PILL_WIDTH + PILL_GAP;
+  const initialScrollDoneRef = useRef(false);
   useEffect(() => {
     setScrollMonthDate(selectedDate);
   }, [selectedDate]);
   const containerPadding = 16;
 
-  useEffect(() => {
-    if (selectedIndex >= 0 && selectedIndex < totalDays && scrollRef.current) {
-      scrollRef.current.scrollTo({
-        x: selectedIndex * pillStep - (isWeb ? 40 : 20),
-        animated: true,
-      });
+  // Keep strip on selected day: set position immediately on first run (no animation),
+  // then when user picks another day use scrollTo with animation.
+  useLayoutEffect(() => {
+    if (selectedIndex < 0 || selectedIndex >= totalDays || !scrollRef.current) return;
+    const offsetX = selectedIndex * pillStep - (isWeb ? 40 : 20);
+    const isInitial = !initialScrollDoneRef.current;
+    initialScrollDoneRef.current = true;
+    if (isInitial && isWeb) {
+      const node = scrollRef.current.getScrollableNode?.();
+      if (node) node.scrollLeft = offsetX;
+      return;
     }
+    scrollRef.current.scrollTo({ x: offsetX, animated: !isInitial });
   }, [selectedDate, selectedIndex, totalDays, isWeb, pillStep]);
+
+  // On web: prevent vertical wheel from scrolling the horizontal day strip
+  useEffect(() => {
+    if (!isWeb) return;
+    const wrapper = (wrapperRef.current as unknown as HTMLElement) ?? null;
+    if (!wrapper) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0) return;
+      const scrollNode = scrollRef.current?.getScrollableNode?.() ?? null;
+      if (!scrollNode) return;
+      const savedScrollLeft = scrollNode.scrollLeft;
+      requestAnimationFrame(() => {
+        scrollNode.scrollLeft = savedScrollLeft;
+      });
+    };
+    wrapper.addEventListener('wheel', handleWheel, { capture: true });
+    return () => wrapper.removeEventListener('wheel', handleWheel, { capture: true });
+  }, [isWeb]);
 
   const handleScroll = (e: { nativeEvent: { contentOffset: { x: number } } }) => {
     if (!isWeb) return;
@@ -146,7 +174,7 @@ export default function DaySlider({
 
   if (isWeb) {
     return (
-      <View style={styles.wrapper}>
+      <View ref={wrapperRef} style={styles.wrapper} collapsable={false}>
         <Text style={styles.monthLabel}>{monthLabel}</Text>
         {scrollContent}
       </View>

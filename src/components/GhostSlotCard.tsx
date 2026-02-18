@@ -44,7 +44,7 @@ function ExplainSheet({ explain, onClose }: { explain: SlotExplain; onClose: () 
   const reachable = (explain.reachableFromWorkStart ?? true) && (explain.travelFeasibleFromNow ?? explain.travelFeasible ?? true);
   const conflictFree = explain.noOverlap;
   const onTime = explain.arriveEarlyPreferred === true || (explain.arrivalMarginMinutes != null && explain.arrivalMarginMinutes >= 0);
-  const efficient = explain.detourMinutes <= 20;
+  const efficient = explain.detourKm <= 10;
 
   return (
     <Modal visible transparent animationType="slide">
@@ -55,7 +55,7 @@ function ExplainSheet({ explain, onClose }: { explain: SlotExplain; onClose: () 
           <Text style={explainStyles.checkItem}>{reachable ? '✅' : '○'} Reachable from start</Text>
           <Text style={explainStyles.checkItem}>{conflictFree ? '✅' : '○'} Conflict-free</Text>
           <Text style={explainStyles.checkItem}>{onTime ? '✅' : '○'} On time (travel + buffer)</Text>
-          <Text style={explainStyles.checkItem}>{efficient ? '✅' : '○'} Efficient: +{explain.detourMinutes} min detour</Text>
+          <Text style={explainStyles.checkItem}>{efficient ? '✅' : '○'} Efficient: +{explain.detourKm.toFixed(1)} km detour</Text>
           <Text style={explainStyles.section}>Prev: {prevStr}</Text>
           <Text style={explainStyles.section}>Next: {nextStr}</Text>
           <ScrollView style={explainStyles.scroll}>
@@ -63,7 +63,7 @@ function ExplainSheet({ explain, onClose }: { explain: SlotExplain; onClose: () 
             <Text style={explainStyles.section}>Travel: {explain.travelToMinutes}m to, {explain.travelFromMinutes}m from {explain.travelToUsedFallback || explain.travelFromUsedFallback ? '(fallback coords)' : ''}</Text>
             <Text style={explainStyles.section}>Buffers: pre={explain.preBuffer}m post={explain.postBuffer}m</Text>
             <Text style={explainStyles.section}>Meeting: {formatTime(explain.meetingStartMs)}–{formatTime(explain.meetingEndMs)}</Text>
-            <Text style={explainStyles.section}>Baseline: {explain.baselineMinutes}m | New path: {explain.newPathMinutes}m | Detour: {explain.detourMinutes}m</Text>
+            <Text style={explainStyles.section}>Baseline: {explain.baselineMinutes}m | New path: {explain.newPathMinutes}m | Detour: {explain.detourMinutes}m ({explain.detourKm.toFixed(1)} km) | Tier: {explain.tier}</Text>
             <Text style={explainStyles.section}>Slack: {explain.slackMinutes}m | Score: {explain.score}</Text>
             <Text style={explainStyles.section}>Times: arriveBy={formatTime(explain.arriveByMs)} departAt={formatTime(explain.departAtMs)}</Text>
             <Text style={explainStyles.section}>Constraints: fitsGap={explain.fitsGap} withinHours={explain.withinWorkingHours} notPast={explain.notPast} noOverlap={explain.noOverlap} travelFeasible={explain.travelFeasible}</Text>
@@ -108,6 +108,8 @@ export type GhostSlotCardProps = {
   showDate?: boolean;
   onSelect: () => void;
   onMapPress: () => void;
+  /** When provided and slot is selected, show "Book this time" to open confirm sheet */
+  onBookPress?: () => void;
 };
 
 export default function GhostSlotCard({
@@ -119,12 +121,13 @@ export default function GhostSlotCard({
   showDate,
   onSelect,
   onMapPress,
+  onBookPress,
 }: GhostSlotCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showExplain, setShowExplain] = useState(false);
   const arriveByMs = slot.startMs - preBuffer * MS_PER_MIN;
   const departAtMs = slot.endMs + postBuffer * MS_PER_MIN;
-  const isOnRoute = slot.metrics.detourMinutes <= 5;
+  const isOnRoute = (slot.metrics.detourKm ?? 0) <= 5;
   const hasExplain = typeof __DEV__ !== 'undefined' && __DEV__ && slot.explain;
 
   const handleInfoPress = () => {
@@ -164,13 +167,21 @@ export default function GhostSlotCard({
             <Text style={styles.whyLine} numberOfLines={2}>{whyLine}</Text>
           )}
           <View style={styles.badges}>
-            {isOnRoute ? (
-              <View style={styles.onRouteBadge}>
+            {slot.tier === 4 ? (
+              <Text style={styles.detourText}>
+                🗓 New day · {slot.metrics.detourKm != null ? `${slot.metrics.detourKm.toFixed(1)} km round trip` : `${slot.metrics.travelToMinutes + slot.metrics.travelFromMinutes} min`}
+              </Text>
+            ) : isOnRoute ? (
+              <Text style={styles.detourText}>
                 <Text style={styles.onRouteText}>⚡ On your route</Text>
-              </View>
+                {' · '}
+                {slot.metrics.detourKm != null
+                  ? (slot.metrics.detourKm === 0 ? '0 km' : `+${slot.metrics.detourKm.toFixed(1)} km`)
+                  : `${slot.metrics.detourMinutes} min`}
+              </Text>
             ) : (
               <Text style={styles.detourText}>
-                🚗 Detour: {formatDetour(slot.metrics.detourMinutes)}
+                🚗 +{slot.metrics.detourKm != null ? `${slot.metrics.detourKm.toFixed(1)} km` : `${slot.metrics.detourMinutes} min`} detour
               </Text>
             )}
           </View>
@@ -187,6 +198,11 @@ export default function GhostSlotCard({
               </Text>
               <Text style={styles.expandedLine}>Slack: {slot.metrics.slackMinutes} min</Text>
             </View>
+          )}
+          {isSelected && onBookPress && (
+            <TouchableOpacity style={styles.bookBtn} onPress={onBookPress} activeOpacity={0.8}>
+              <Text style={styles.bookBtnText}>Book this time</Text>
+            </TouchableOpacity>
           )}
         </View>
         <View style={styles.actions}>
@@ -310,6 +326,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#605E5C',
     marginBottom: 2,
+  },
+  bookBtn: {
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#0078D4',
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  bookBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
   },
   actions: {
     flexDirection: 'row',

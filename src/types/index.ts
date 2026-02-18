@@ -24,6 +24,8 @@ export type UserPreferences = {
   homeBaseLabel?: string;
   /** Working days filter: [Sun,Mon,Tue,Wed,Thu,Fri,Sat]. Non-working days excluded from slot generation. */
   workingDays?: WorkingDays;
+  /** Max same-day detour km (default 30). Same-day slots with detour > threshold are excluded; empty day suggested instead. */
+  distanceThresholdKm?: number;
 };
 
 /** Default Mon–Fri enabled, Sat–Sun disabled (matches Date.getDay() 0=Sun..6=Sat) */
@@ -41,6 +43,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   preMeetingBuffer: 15,
   workingDays: DEFAULT_WORKING_DAYS,
   homeBase: DEFAULT_HOME_BASE,
+  distanceThresholdKm: 30,
 };
 
 /** Proposed time slot from smart scheduling (Phase 7) */

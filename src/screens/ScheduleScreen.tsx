@@ -1,4 +1,4 @@
-import React, { useState, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,23 +10,45 @@ import {
   RefreshControl,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  Platform,
 } from 'react-native';
+import type { RenderItemParams } from 'react-native-draggable-flatlist';
+import { GripVertical, ChevronUp, ChevronDown } from 'lucide-react-native';
+
+let cachedDraggableFlatList: React.ComponentType<any> | null | undefined = undefined;
+function getDraggableFlatList(): React.ComponentType<any> | null {
+  if (cachedDraggableFlatList !== undefined) return cachedDraggableFlatList;
+  try {
+    const mod = require('react-native-draggable-flatlist');
+    cachedDraggableFlatList = mod?.default ?? mod ?? null;
+  } catch {
+    cachedDraggableFlatList = null;
+  }
+  return cachedDraggableFlatList;
+}
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { ScheduleStackParamList } from '../navigation/ScheduleStack';
-import { Plus } from 'lucide-react-native';
 import { startOfDay, endOfDay, isSameDay, format, addDays } from 'date-fns';
 import { toLocalDayKey } from '../utils/dateUtils';
 import DaySlider from '../components/DaySlider';
 import SwipeableMeetingRow from '../components/SwipeableMeetingRow';
+import LegBetweenRow from '../components/LegBetweenRow';
+import DaySummaryBar from '../components/DaySummaryBar';
+import ViewModeToggle, { type ViewMode } from '../components/ViewModeToggle';
+import DayTimelineStrip from '../components/DayTimelineStrip';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
+import { useRouteData } from '../hooks/useRouteData';
 import { openNativeDirections } from '../utils/maps';
 import { getCalendarEvents, GraphUnauthorizedError, type CalendarEvent } from '../services/graph';
 import { sortAppointmentsByTime } from '../utils/optimization';
 import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Constants from 'expo-constants';
 import MapScreen from './MapScreen';
+
+const isExpoGo = Constants.appOwnership === 'expo';
 
 const GREEN = '#107C10';
 
@@ -52,6 +74,105 @@ function eventToMeetingItem(ev: CalendarEvent): MeetingItem {
 
 const TODAY = startOfDay(new Date());
 
+export type ScheduleListMeetingItem = {
+  type: 'meeting';
+  key: string;
+  appointmentIndex: number;
+};
+export type ScheduleListLegItem = {
+  type: 'leg';
+  key: string;
+  durationSec: number;
+  distanceM: number;
+  etaAtNextMs: number;
+  waitMin: number;
+  stress: 'ok' | 'tight' | 'late';
+  label?: string;
+};
+export type ScheduleListItem = ScheduleListMeetingItem | ScheduleListLegItem;
+
+/** One draggable block = one meeting + its following leg (for reorder mode). */
+export type ScheduleBlockItem = { id: string; appointmentIndex: number };
+
+function getLegAfterMeeting(
+  items: ScheduleListItem[],
+  appointmentIndex: number
+): ScheduleListLegItem | null {
+  const idx = items.findIndex(
+    (x) => x.type === 'meeting' && x.appointmentIndex === appointmentIndex
+  );
+  if (idx < 0) return null;
+  const next = items[idx + 1];
+  return next?.type === 'leg' ? next : null;
+}
+
+function getLegFromHome(items: ScheduleListItem[]): ScheduleListLegItem | null {
+  const first = items[0];
+  return first?.type === 'leg' ? first : null;
+}
+
+function getCoordIndex(appointments: CalendarEvent[], coords: { id: string }[], index: number): number {
+  if (!appointments[index]?.coordinates) return -1;
+  const id = appointments[index]!.id;
+  return coords.findIndex((c) => c.id === id);
+}
+
+function buildScheduleListItems(
+  appointments: CalendarEvent[],
+  coords: { id: string }[],
+  legStats: { durationSec: number; distanceM: number }[],
+  etas: number[],
+  waitTimeBeforeMeetingMin: number[],
+  returnByMs: number
+): ScheduleListItem[] {
+  const items: ScheduleListItem[] = [];
+  if (appointments.length === 0) return items;
+  for (let i = 0; i < appointments.length; i++) {
+    const ci = getCoordIndex(appointments, coords, i);
+    if (i === 0 && ci === 0 && legStats[0]) {
+      const waitMin = waitTimeBeforeMeetingMin[0] ?? 0;
+      items.push({
+        type: 'leg',
+        key: 'leg-from-home',
+        durationSec: legStats[0].durationSec,
+        distanceM: legStats[0].distanceM,
+        etaAtNextMs: etas[0] ?? 0,
+        waitMin,
+        stress: waitMin < 0 ? 'late' : waitMin < 5 ? 'tight' : 'ok',
+        label: 'From home',
+      });
+    }
+    items.push({ type: 'meeting', key: `m-${i}`, appointmentIndex: i });
+    if (i < appointments.length - 1) {
+      const ciNext = getCoordIndex(appointments, coords, i + 1);
+      if (ci >= 0 && ciNext === ci + 1 && legStats[ci + 1] && etas[ci + 1] != null) {
+        const waitMin = waitTimeBeforeMeetingMin[ci + 1] ?? 0;
+        items.push({
+          type: 'leg',
+          key: `leg-${i}-${i + 1}`,
+          durationSec: legStats[ci + 1].durationSec,
+          distanceM: legStats[ci + 1].distanceM,
+          etaAtNextMs: etas[ci + 1]!,
+          waitMin,
+          stress: waitMin < 0 ? 'late' : waitMin < 5 ? 'tight' : 'ok',
+        });
+      }
+    } else if (ci >= 0 && legStats[ci + 1]) {
+      items.push({
+        type: 'leg',
+        key: 'leg-to-home',
+        durationSec: legStats[ci + 1].durationSec,
+        distanceM: legStats[ci + 1].distanceM,
+        etaAtNextMs: returnByMs,
+        waitMin: 0,
+        stress: 'ok',
+        label: 'To home',
+      });
+    }
+  }
+  return items;
+}
+
 function EmptySchedule() {
   return (
     <View style={styles.emptyContainer}>
@@ -68,18 +189,66 @@ export default function ScheduleScreen() {
   const {
     appointments,
     setAppointments,
+    setAppointmentsLoading,
     markEventAsDone,
     unmarkEventAsDone,
     removeAppointment,
+    saveDayOrder,
+    getDayOrder,
+    optimize,
   } = useRoute();
+  const { coords, legStats, etas, waitTimeBeforeMeetingMin, departByMs, returnByMs, homeBase } = useRouteData();
   const [selectedDate, setSelectedDate] = useState<Date>(TODAY);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [meetingCountByDay, setMeetingCountByDay] = useState<Record<string, number>>({});
   const [loadedRange, setLoadedRange] = useState<{ start: string; end: string } | null>(null);
+  const dayCache = useRef<Map<string, CalendarEvent[]>>(new Map());
+  const [showDaySlider, setShowDaySlider] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [reorderMode, setReorderMode] = useState(false);
 
-  const meetings = (appointments ?? []).map(eventToMeetingItem);
+  const appointmentsList = appointments ?? [];
+  const meetings = appointmentsList.map(eventToMeetingItem);
+
+  const scheduleListItems = useMemo((): ScheduleListItem[] => {
+    if (legStats.length === 0 || coords.length === 0) {
+      return appointmentsList.map((_, i) => ({ type: 'meeting', key: `m-${i}`, appointmentIndex: i }));
+    }
+    return buildScheduleListItems(
+      appointmentsList,
+      coords,
+      legStats,
+      etas,
+      waitTimeBeforeMeetingMin,
+      returnByMs
+    );
+  }, [appointmentsList, coords, legStats, etas, waitTimeBeforeMeetingMin, returnByMs]);
+
+  const blockData = useMemo(
+    (): ScheduleBlockItem[] =>
+      appointmentsList.map((ev, i) => ({ id: ev.id, appointmentIndex: i })),
+    [appointmentsList]
+  );
+
+  const daySummary = useMemo(() => {
+    if (legStats.length === 0) return null;
+    const totalDriveSec = legStats.reduce((s, l) => s + l.durationSec, 0);
+    const totalDistanceM = legStats.reduce((s, l) => s + l.distanceM, 0);
+    const lateCount = waitTimeBeforeMeetingMin.filter((w) => w < 0).length;
+    const tightCount = waitTimeBeforeMeetingMin.filter((w) => w >= 0 && w < 5).length;
+    const longWaitCount = waitTimeBeforeMeetingMin.filter((w) => w >= 30).length;
+    return {
+      totalDriveSec,
+      totalDistanceM,
+      departByMs,
+      returnByMs,
+      tightCount,
+      lateCount,
+      longWaitCount,
+    };
+  }, [legStats, waitTimeBeforeMeetingMin, departByMs, returnByMs]);
 
   /** Check if we have counts for the given date; if not, fetch a window around it and merge. */
   const ensureMeetingCountsForDate = useCallback(
@@ -128,34 +297,84 @@ export default function ScheduleScreen() {
     [userToken, getValidToken, loadedRange]
   );
 
+  const applyOrderSync = useCallback((events: CalendarEvent[], order: string[] | null): CalendarEvent[] => {
+    if (!order || order.length === 0) return events;
+    const byId = new Map(events.map((e) => [e.id, e]));
+    const result: CalendarEvent[] = [];
+    for (const id of order) {
+      const ev = byId.get(id);
+      if (ev) {
+        result.push(ev);
+        byId.delete(id);
+      }
+    }
+    byId.forEach((ev) => result.push(ev));
+    return result;
+  }, []);
+
   const fetchData = useCallback(async () => {
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
     if (!token) {
       setAppointments([]);
       return;
     }
+    const dayKey = toLocalDayKey(selectedDate);
+    const cached = dayCache.current.get(dayKey);
+    if (cached) {
+      setAppointments(cached);
+      setLoading(false);
+      setAppointmentsLoading(false);
+      return;
+    }
+    setLoading(true);
+    setAppointmentsLoading(true);
+    setError(null);
     const start = startOfDay(selectedDate);
     const end = endOfDay(selectedDate);
-    setLoading(true);
-    setError(null);
-    getCalendarEvents(token, start, end)
-      .then((events) => {
-        const sorted = sortAppointmentsByTime(events);
-        setAppointments(sorted);
-      })
-      .catch((e) => {
-        setAppointments([]);
-        if (e instanceof GraphUnauthorizedError) {
-          signOut();
-          return;
-        }
-        setError(e instanceof Error ? e.message : 'Failed to load events');
-      })
-      .finally(() => {
-        setLoading(false);
-        setRefreshing(false);
-      });
-  }, [userToken, getValidToken, selectedDate, setAppointments, signOut]);
+    try {
+      const [events, savedOrder] = await Promise.all([
+        getCalendarEvents(token, start, end),
+        getDayOrder(dayKey),
+      ]);
+      const sorted = sortAppointmentsByTime(events);
+      const ordered = applyOrderSync(sorted, savedOrder);
+      dayCache.current.set(dayKey, ordered);
+      setAppointments(ordered);
+      // Prefetch adjacent days in background (no await)
+      const prevKey = toLocalDayKey(addDays(selectedDate, -1));
+      const nextKey = toLocalDayKey(addDays(selectedDate, 1));
+      if (!dayCache.current.has(prevKey)) {
+        const prevStart = startOfDay(addDays(selectedDate, -1));
+        const prevEnd = endOfDay(addDays(selectedDate, -1));
+        Promise.all([
+          getCalendarEvents(token, prevStart, prevEnd),
+          getDayOrder(prevKey),
+        ])
+          .then(([ev, o]) => applyOrderSync(sortAppointmentsByTime(ev), o))
+          .then((ordered) => dayCache.current.set(prevKey, ordered))
+          .catch(() => {});
+      }
+      if (!dayCache.current.has(nextKey)) {
+        const nextStart = startOfDay(addDays(selectedDate, 1));
+        const nextEnd = endOfDay(addDays(selectedDate, 1));
+        Promise.all([
+          getCalendarEvents(token, nextStart, nextEnd),
+          getDayOrder(nextKey),
+        ])
+          .then(([ev, o]) => applyOrderSync(sortAppointmentsByTime(ev), o))
+          .then((ordered) => dayCache.current.set(nextKey, ordered))
+          .catch(() => {});
+      }
+    } catch (e) {
+      setAppointments([]);
+      if (e instanceof GraphUnauthorizedError) signOut();
+      else setError(e instanceof Error ? e.message : 'Failed to load events');
+    } finally {
+      setLoading(false);
+      setAppointmentsLoading(false);
+      setRefreshing(false);
+    }
+  }, [userToken, getValidToken, selectedDate, setAppointments, setAppointmentsLoading, signOut, getDayOrder, applyOrderSync]);
 
   useFocusEffect(
     useCallback(() => {
@@ -175,6 +394,7 @@ export default function ScheduleScreen() {
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     setLoadedRange(null);
+    dayCache.current.delete(toLocalDayKey(selectedDate));
     fetchData();
     ensureMeetingCountsForDate(selectedDate);
   }, [fetchData, ensureMeetingCountsForDate, selectedDate]);
@@ -183,19 +403,70 @@ export default function ScheduleScreen() {
     ? "Today's Route"
     : format(selectedDate, 'EEE, MMM d');
 
+  const handleDragEnd = useCallback(
+    ({ data }: { data: ScheduleBlockItem[] }) => {
+      const newAppointments = data.map(
+        (b) => appointmentsList[b.appointmentIndex]!
+      );
+      setAppointments(newAppointments);
+    },
+    [appointmentsList, setAppointments]
+  );
 
-  const renderItem: ListRenderItem<MeetingItem> = ({ item }) => {
-    const event = appointments?.find((e) => e.id === item.id);
+  const handleMoveMeeting = useCallback(
+    (fromIndex: number, direction: 'up' | 'down') => {
+      const toIndex = direction === 'up' ? fromIndex - 1 : fromIndex + 1;
+      if (toIndex < 0 || toIndex >= appointmentsList.length) return;
+      const next = [...appointmentsList];
+      const a = next[fromIndex]!;
+      const b = next[toIndex]!;
+      next[fromIndex] = b;
+      next[toIndex] = a;
+      setAppointments(next);
+    },
+    [appointmentsList, setAppointments]
+  );
+
+  const handleSaveOrder = useCallback(() => {
+    const dayKey = toLocalDayKey(selectedDate);
+    saveDayOrder(dayKey, appointmentsList.map((a) => a.id));
+    setReorderMode(false);
+  }, [selectedDate, appointmentsList, saveDayOrder]);
+
+  const handleReoptimize = useCallback(() => {
+    optimize({ latitude: homeBase.lat, longitude: homeBase.lon });
+    setReorderMode(false);
+  }, [optimize, homeBase.lat, homeBase.lon]);
+
+  const renderItem: ListRenderItem<ScheduleListItem> = ({ item }) => {
+    if (item.type === 'leg') {
+      return (
+        <LegBetweenRow
+          durationSec={item.durationSec}
+          distanceM={item.distanceM}
+          etaAtNextMs={item.etaAtNextMs}
+          waitMin={item.waitMin}
+          stress={item.stress}
+          label={item.label}
+        />
+      );
+    }
+    const meeting = meetings[item.appointmentIndex]!;
+    const event = appointmentsList[item.appointmentIndex]!;
     const hasCoords = event?.coordinates != null;
-    return (
+    const isLate = (waitTimeBeforeMeetingMin[item.appointmentIndex] ?? 0) < 0;
+    const row = (
       <SwipeableMeetingRow
-        timeRange={item.timeRange}
-        client={item.client}
-        address={item.address}
-        statusColor={item.statusColor}
-        isCompleted={item.status === 'completed'}
+        timeRange={meeting.timeRange}
+        client={meeting.client}
+        address={meeting.address}
+        statusColor={meeting.statusColor}
+        waypointNumber={item.appointmentIndex + 1}
+        phone={event.phone}
+        email={event.email}
+        isCompleted={meeting.status === 'completed'}
         onToggleDone={() =>
-          item.status === 'completed' ? unmarkEventAsDone(item.id) : markEventAsDone(item.id)
+          meeting.status === 'completed' ? unmarkEventAsDone(meeting.id) : markEventAsDone(meeting.id)
         }
         onNavigate={
           hasCoords
@@ -203,22 +474,187 @@ export default function ScheduleScreen() {
                 openNativeDirections(
                   event!.coordinates!.latitude,
                   event!.coordinates!.longitude,
-                  item.client
+                  meeting.client
                 )
             : undefined
         }
-        onPress={() => navigation.navigate('MeetingDetails', { eventId: item.id })}
-        onDelete={() => removeAppointment(item.id)}
+        onPress={() => navigation.navigate('MeetingDetails', { eventId: meeting.id })}
+        onDelete={() => removeAppointment(meeting.id)}
       />
     );
+    const useArrowReorder = reorderMode && (Platform.OS === 'web' || !useDragList);
+    if (useArrowReorder) {
+      return (
+        <View style={[styles.meetingRowWithReorder, isLate && styles.meetingRowLate]}>
+          <View style={styles.meetingRowMain}>{row}</View>
+          <View style={styles.moveButtons}>
+            <TouchableOpacity
+              style={[styles.moveButton, item.appointmentIndex === 0 && styles.moveButtonDisabled]}
+              onPress={() => handleMoveMeeting(item.appointmentIndex, 'up')}
+              disabled={item.appointmentIndex === 0}
+            >
+              <ChevronUp size={20} color={item.appointmentIndex === 0 ? '#ccc' : '#0078D4'} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.moveButton,
+                item.appointmentIndex === appointmentsList.length - 1 && styles.moveButtonDisabled,
+              ]}
+              onPress={() => handleMoveMeeting(item.appointmentIndex, 'down')}
+              disabled={item.appointmentIndex === appointmentsList.length - 1}
+            >
+              <ChevronDown size={20} color={item.appointmentIndex === appointmentsList.length - 1 ? '#ccc' : '#0078D4'} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
+    if (isLate) {
+      return <View style={styles.meetingRowLateWrap}>{row}</View>;
+    }
+    return row;
   };
+
+  const renderBlockItem = useCallback(
+    ({
+      item,
+      drag,
+      isActive,
+      getIndex,
+    }: RenderItemParams<ScheduleBlockItem>) => {
+      const meeting = meetings[item.appointmentIndex]!;
+      const event = appointmentsList[item.appointmentIndex]!;
+      const hasCoords = event?.coordinates != null;
+      const legAfter = getLegAfterMeeting(scheduleListItems, item.appointmentIndex);
+      const legFromHome = getIndex() === 0 ? getLegFromHome(scheduleListItems) : null;
+      const isLate = (waitTimeBeforeMeetingMin[item.appointmentIndex] ?? 0) < 0;
+      return (
+        <View style={[styles.blockRow, isActive && styles.blockRowActive, isLate && styles.meetingRowLate]}>
+          <TouchableOpacity
+            onLongPress={drag}
+            style={styles.dragHandle}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <GripVertical size={22} color="#605E5C" />
+          </TouchableOpacity>
+          <View style={styles.blockContent}>
+            {legFromHome ? (
+              <LegBetweenRow
+                durationSec={legFromHome.durationSec}
+                distanceM={legFromHome.distanceM}
+                etaAtNextMs={legFromHome.etaAtNextMs}
+                waitMin={legFromHome.waitMin}
+                stress={legFromHome.stress}
+                label={legFromHome.label}
+              />
+            ) : null}
+            <SwipeableMeetingRow
+              timeRange={meeting.timeRange}
+              client={meeting.client}
+              address={meeting.address}
+              statusColor={meeting.statusColor}
+              waypointNumber={item.appointmentIndex + 1}
+              phone={event.phone}
+              email={event.email}
+              isCompleted={meeting.status === 'completed'}
+              onToggleDone={() =>
+                meeting.status === 'completed'
+                  ? unmarkEventAsDone(meeting.id)
+                  : markEventAsDone(meeting.id)
+              }
+              onNavigate={
+                hasCoords
+                  ? () =>
+                      openNativeDirections(
+                        event!.coordinates!.latitude,
+                        event!.coordinates!.longitude,
+                        meeting.client
+                      )
+                  : undefined
+              }
+              onPress={() => navigation.navigate('MeetingDetails', { eventId: meeting.id })}
+              onDelete={() => removeAppointment(meeting.id)}
+            />
+            {legAfter ? (
+              <LegBetweenRow
+                durationSec={legAfter.durationSec}
+                distanceM={legAfter.distanceM}
+                etaAtNextMs={legAfter.etaAtNextMs}
+                waitMin={legAfter.waitMin}
+                stress={legAfter.stress}
+                label={legAfter.label}
+              />
+            ) : null}
+          </View>
+        </View>
+      );
+    },
+    [
+      meetings,
+      appointmentsList,
+      scheduleListItems,
+      waitTimeBeforeMeetingMin,
+      navigation,
+      unmarkEventAsDone,
+      markEventAsDone,
+      removeAppointment,
+    ]
+  );
+
+  const listHeader = (
+    <>
+      {daySummary ? (
+        <DaySummaryBar
+          totalDriveSec={daySummary.totalDriveSec}
+          totalDistanceM={daySummary.totalDistanceM}
+          departByMs={daySummary.departByMs}
+          returnByMs={daySummary.returnByMs}
+          tightCount={daySummary.tightCount}
+          lateCount={daySummary.lateCount}
+          longWaitCount={daySummary.longWaitCount}
+        />
+      ) : null}
+      <View style={styles.toolbarRow}>
+        <View style={styles.viewModeWrap}>
+          <ViewModeToggle value={viewMode} onChange={setViewMode} />
+        </View>
+        {appointmentsList.length > 0 ? (
+          <TouchableOpacity
+            style={styles.reorderButton}
+            onPress={() => setReorderMode((m) => !m)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.reorderButtonText}>
+              {reorderMode ? 'Cancel' : 'Reorder'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      {reorderMode && appointmentsList.length > 0 ? (
+        <View style={styles.reorderBar}>
+          <TouchableOpacity style={styles.reorderBarButton} onPress={handleSaveOrder}>
+            <Text style={styles.reorderBarButtonText}>Save order</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.reorderBarButton} onPress={handleReoptimize}>
+            <Text style={styles.reorderBarButtonText}>Re-optimize</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      {viewMode === 'timeline' && appointmentsList.length > 0 ? (
+        <DayTimelineStrip
+          appointments={appointmentsList}
+          selectedDateMs={selectedDate.getTime()}
+        />
+      ) : null}
+    </>
+  );
 
   const isWide = useIsWideScreen();
   const insets = useSafeAreaInsets();
-  const [showDaySlider, setShowDaySlider] = useState(true);
 
   useLayoutEffect(() => {
     navigation.setOptions({
+      headerShown: showDaySlider,
       headerTitle,
       headerTitleStyle: {
         fontWeight: '600',
@@ -229,17 +665,25 @@ export default function ScheduleScreen() {
         ...(isWide && { minHeight: 44 }),
       },
     });
-  }, [navigation, headerTitle, isWide]);
+  }, [navigation, headerTitle, isWide, showDaySlider]);
 
   const handleScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const y = e.nativeEvent.contentOffset.y;
-      if (y > 80) setShowDaySlider(false);
-      else if (y < 30) setShowDaySlider(true);
+      const { contentOffset, velocity } = e.nativeEvent;
+      const y = contentOffset.y;
+      if (velocity) {
+        if (velocity.y > 0) setShowDaySlider(false);
+        else if (velocity.y < 0 || y < 30) setShowDaySlider(true);
+      } else {
+        if (y > 80) setShowDaySlider(false);
+        else if (y < 30) setShowDaySlider(true);
+      }
     },
     []
   );
 
+  const useDragList = reorderMode && appointmentsList.length > 0 && Platform.OS !== 'web' && !isExpoGo;
+  const DraggableFlatListComponent = useDragList ? getDraggableFlatList() : null;
   const scheduleContent = (
     <>
       {showDaySlider && (
@@ -249,7 +693,7 @@ export default function ScheduleScreen() {
           meetingCountByDay={meetingCountByDay}
         />
       )}
-      {loading && !refreshing ? (
+      {loading && !refreshing && appointmentsList.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#0078D4" />
         </View>
@@ -257,13 +701,25 @@ export default function ScheduleScreen() {
         <View style={styles.emptyContainer}>
           <Text style={styles.errorText}>{error}</Text>
         </View>
+      ) : useDragList && DraggableFlatListComponent ? (
+        <DraggableFlatListComponent
+          data={blockData}
+          keyExtractor={(item: ScheduleBlockItem) => item.id}
+          renderItem={renderBlockItem}
+          onDragEnd={handleDragEnd}
+          ListHeaderComponent={listHeader}
+          contentContainerStyle={styles.listContent}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+        />
       ) : (
         <FlatList
-          data={meetings}
-          keyExtractor={(item) => item.id}
+          data={scheduleListItems}
+          keyExtractor={(item) => item.key}
           renderItem={renderItem}
+          ListHeaderComponent={listHeader}
           contentContainerStyle={
-            meetings.length === 0 ? styles.listEmpty : styles.listContent
+            scheduleListItems.length === 0 ? styles.listEmpty : styles.listContent
           }
           ListEmptyComponent={EmptySchedule}
           refreshControl={
@@ -278,15 +734,6 @@ export default function ScheduleScreen() {
           scrollEventThrottle={16}
         />
       )}
-      {!isWide && (
-        <TouchableOpacity
-          style={styles.fab}
-          onPress={() => navigation.navigate('AddMeeting')}
-          activeOpacity={0.9}
-        >
-          <Plus color="#fff" size={28} strokeWidth={2.5} />
-        </TouchableOpacity>
-      )}
     </>
   );
 
@@ -297,14 +744,7 @@ export default function ScheduleScreen() {
           {scheduleContent}
         </View>
         <View style={styles.mapPane}>
-          <MapScreen />
-          <TouchableOpacity
-            style={styles.fabMap}
-            onPress={() => navigation.navigate('AddMeeting')}
-            activeOpacity={0.9}
-          >
-            <Plus color="#fff" size={28} strokeWidth={2.5} />
-          </TouchableOpacity>
+          <MapScreen embeddedInSchedule />
         </View>
       </View>
     );
@@ -330,6 +770,86 @@ const styles = StyleSheet.create({
   mapPane: {
     flex: 1,
     minWidth: 0,
+  },
+  toolbarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    gap: 8,
+  },
+  viewModeWrap: {
+    flex: 1,
+  },
+  reorderButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#E8E8E8',
+    borderRadius: 8,
+  },
+  reorderButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0078D4',
+  },
+  reorderBar: {
+    flexDirection: 'row',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+  },
+  reorderBarButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: '#0078D4',
+    borderRadius: 8,
+  },
+  reorderBarButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  blockRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  blockRowActive: {
+    opacity: 0.9,
+  },
+  dragHandle: {
+    paddingVertical: 12,
+    paddingRight: 8,
+    justifyContent: 'center',
+  },
+  blockContent: {
+    flex: 1,
+  },
+  meetingRowWithReorder: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  meetingRowLate: {
+    backgroundColor: '#FDE7E9',
+  },
+  meetingRowLateWrap: {
+    backgroundColor: '#FDE7E9',
+    marginBottom: 12,
+  },
+  meetingRowMain: {
+    flex: 1,
+  },
+  moveButtons: {
+    flexDirection: 'row',
+    paddingRight: 8,
+    gap: 4,
+  },
+  moveButton: {
+    padding: 8,
+  },
+  moveButtonDisabled: {
+    opacity: 0.5,
   },
   listContent: {
     padding: 16,
@@ -359,37 +879,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#D13438',
     textAlign: 'center',
-  },
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#0078D4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  fabMap: {
-    position: 'absolute',
-    right: 20,
-    bottom: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#0078D4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 6,
   },
 });

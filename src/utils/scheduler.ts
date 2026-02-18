@@ -58,8 +58,11 @@ export type SlotExplain = {
   baselineMinutes: number;
   newPathMinutes: number;
   detourMinutes: number;
+  /** Straight-line detour km (v2 primary metric) */
+  detourKm: number;
   slackMinutes: number;
   score: number;
+  tier: SlotTier;
   fitsGap: boolean;
   withinWorkingHours: boolean;
   notPast: boolean;
@@ -81,12 +84,27 @@ export type SlotExplain = {
   eventsWithMissingCoordsUsed: string[];
 };
 
+/**
+ * Slot tier (v2):
+ * 1 = On Route – same day as other meetings, detourKm ≤ 5
+ * 2 = Nearby – same day as other meetings, detourKm > 5 but ≤ distanceThresholdKm
+ * 4 = New Day – no meetings that day (empty day, round-trip from home)
+ * (Tier 3 = over threshold, excluded entirely from results)
+ */
+export type SlotTier = 1 | 2 | 4;
+
 export type ScoredSlot = {
   dayIso: string;
   startMs: number;
   endMs: number;
+  /** Lower = better. Within tier: detourKm*10 + slackPenalty. Primary sort key is tier. */
   score: number;
+  /** Tier 1=On Route, 2=Nearby, 4=New Day */
+  tier: SlotTier;
   metrics: {
+    /** Extra km added to the day's route by inserting this meeting (primary metric v2) */
+    detourKm: number;
+    /** Extra driving time in minutes (for display) */
     detourMinutes: number;
     slackMinutes: number;
     travelToMinutes: number;
@@ -393,6 +411,8 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
   const preBuffer = prefs.preMeetingBuffer ?? 15;
   const postBuffer = prefs.postMeetingBuffer ?? 15;
   const workingDays = prefs.workingDays ?? DEFAULT_WORKING_DAYS;
+  /** v2: Detour km threshold. Same-day slots with detourKm > threshold are excluded; empty days suggested instead. */
+  const distanceThresholdKm = prefs.distanceThresholdKm ?? 30;
 
   const newLoc: Coordinate =
     'lat' in newLocation
@@ -474,17 +494,17 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
           const travelToMinutes = getTravelMinutes(home, newLoc, effectiveStartMs);
           const departAtMs = slotEndMs + postBuffer * MS_PER_MIN;
           const travelFromMinutes = getTravelMinutes(newLoc, home, departAtMs);
-          const baseline = 0;
-          const detourMinutes = travelToMinutes + travelFromMinutes - baseline;
-          const slackMinutes = 0; // End anchor: skip slack penalties (boundary waiver)
-          let score = detourMinutes * 10;
-          score += 150;
+          const detourMinutes = travelToMinutes + travelFromMinutes;
+          const detourKm = 2 * haversineKm(home, newLoc);
+          const slackMinutes = 0;
+          const score = detourKm * 10;
           const slot: ScoredSlot = {
             dayIso: toLocalDayKey(dayStart),
             startMs: meetingStartMs,
             endMs: slotEndMs,
             score,
-            metrics: { detourMinutes, slackMinutes, travelToMinutes, travelFromMinutes },
+            tier: 4,
+            metrics: { detourKm, detourMinutes, slackMinutes, travelToMinutes, travelFromMinutes },
             label: 'At start of day',
           };
           if (includeExplain) {
@@ -509,8 +529,10 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               baselineMinutes: 0,
               newPathMinutes: travelToMinutes + travelFromMinutes,
               detourMinutes,
+              detourKm,
               slackMinutes,
               score,
+              tier: 4,
               fitsGap: true,
               withinWorkingHours: true,
               notPast: true,
@@ -625,17 +647,28 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         const noOverlap = !dayEvents.some((e) => intervalsOverlap(meetingStartMs, slotEndMs, e.startMs, e.endMs));
         if (!noOverlap) { qaReject('Overlaps existing meeting'); continue; }
 
+        const baselineKm = haversineKm(prev.coord, next.coord);
+        const newPathKm = haversineKm(prev.coord, newLoc) + haversineKm(newLoc, next.coord);
+        const detourKmVal = newPathKm - baselineKm;
+        const isEmptyDay = dayEvents.length === 0;
+
+        if (!isEmptyDay && detourKmVal > distanceThresholdKm) {
+          qaReject(`Detour ${detourKmVal.toFixed(1)} km exceeds threshold ${distanceThresholdKm} km`);
+          continue;
+        }
+
+        const tier: SlotTier = isEmptyDay ? 4 : (detourKmVal <= 5 ? 1 : 2);
+
         const slackMinutes = bufferWaivedAtEnd ? 0 : (nextArriveByMs - (departAtMs + travelFromMinutes * MS_PER_MIN)) / MS_PER_MIN;
         const baselineMinutes = getTravelMinutes(prev.coord, next.coord, prevDepartMs);
         const newPathMinutes = travelToMinutes + travelFromMinutes;
         const detourMinutes = newPathMinutes - baselineMinutes;
-        const emptyDayPenalty = dayEvents.length === 0 ? 150 : 0;
-        let score = detourMinutes * 10;
+        const detourKm = Math.round(detourKmVal * 10) / 10;
+        let score = detourKm * 10;
         if (!bufferWaivedAtEnd) {
           if (slackMinutes < 10) score += 5000;
           else if (slackMinutes > 90) score += (slackMinutes - 90) * 2;
         }
-        score += emptyDayPenalty;
 
         const arriveByMs = meetingStartMs - preBuffer * MS_PER_MIN;
         const travelFeasibleFromNow = bufferWaivedAtStart && isToday
@@ -648,7 +681,11 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
           ? (meetingStartMs - (prevDepartMs + travelToMinutes * MS_PER_MIN)) / MS_PER_MIN
           : undefined;
         const arriveEarlyPreferred = arrivalMarginMinutes != null && arrivalMarginMinutes >= preBuffer;
-        const label = next.type === 'end' ? `After ${prev.title}` : `Between ${prev.title} and ${next.title}`;
+        const label = isEmptyDay
+          ? 'Only meeting of the day'
+          : next.type === 'end'
+            ? `After ${prev.title}`
+            : `Between ${prev.title} and ${next.title}`;
         const dayIso = toLocalDayKey(dayStart);
         const dayLabelSlot = formatDayLabel(dayIso);
         const travelToUsedFallback = prev.type === 'event' && prev.hasCoord === false;
@@ -668,7 +705,8 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
           startMs: meetingStartMs,
           endMs: slotEndMs,
           score,
-          metrics: { detourMinutes, slackMinutes, travelToMinutes, travelFromMinutes },
+          tier,
+          metrics: { detourKm, detourMinutes, slackMinutes, travelToMinutes, travelFromMinutes },
           label,
         };
         if (includeExplain) {
@@ -692,8 +730,10 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
             baselineMinutes,
             newPathMinutes,
             detourMinutes,
+            detourKm,
             slackMinutes,
             score,
+            tier,
             fitsGap: gapMinutes >= requiredMinutes,
             withinWorkingHours: meetingStartMs >= effectiveStartMs && slotEndMs <= effectiveEndMs,
             notPast: meetingStartMs >= minStartMs,
@@ -711,18 +751,15 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         }
         slots.push(slot);
         if (onSlotConsidered) {
-          const newPathKm = haversineKm(prev.coord, newLoc) + haversineKm(newLoc, next.coord);
-          const baselineKm = haversineKm(prev.coord, next.coord);
-          const detourKmVal = Math.round((newPathKm - baselineKm) * 10) / 10;
           const detourStr = detourMinutes >= 0 ? `+${detourMinutes} min` : `Saves ${Math.abs(detourMinutes)} min`;
-          const kmStr = detourKmVal >= 0 ? `+${detourKmVal.toFixed(1)} km` : `Saves ${(-detourKmVal).toFixed(1)} km`;
-          const onRoute = detourMinutes < 5 ? ' On route.' : '';
+          const kmStr = detourKm >= 0 ? `+${detourKm.toFixed(1)} km` : `Saves ${(-detourKm).toFixed(1)} km`;
+          const tierLabel = tier === 1 ? ' On Route.' : tier === 2 ? ' Nearby.' : ' New Day.';
           onSlotConsidered({
             dayIso,
             dayLabel: dayLabelSlot,
             timeRange: formatTimeRangeMs(meetingStartMs, slotEndMs),
             status: 'accepted',
-            detourKm: Math.abs(detourKmVal),
+            detourKm: Math.abs(detourKm),
             addToRouteMin: detourMinutes,
             baselineMin: baselineMinutes,
             newPathMin: newPathMinutes,
@@ -731,7 +768,7 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
             label,
             prev: prev.title,
             next: next.title,
-            summary: `${detourStr} (${kmStr}), ${slackMinutes} min slack. Score ${score}.${onRoute}`,
+            summary: `Tier ${tier}${tierLabel} ${detourStr} (${kmStr}), ${slackMinutes} min slack. Score ${score.toFixed(1)}.`,
           });
         }
       }
@@ -741,20 +778,21 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
   }
 
   slots.sort((a, b) => {
-    // Empty week: dayIso asc, then startMs asc (earliest day first)
     if (!hasRealMeetingsInWindow) {
       const dayCmp = a.dayIso.localeCompare(b.dayIso);
       if (dayCmp !== 0) return dayCmp;
       return a.startMs - b.startMs;
     }
-    // Real meetings: score asc, startMs asc, dayIso asc
+    if (a.tier !== b.tier) return a.tier - b.tier;
     if (a.score !== b.score) return a.score - b.score;
     if (a.startMs !== b.startMs) return a.startMs - b.startMs;
     return a.dayIso.localeCompare(b.dayIso);
   });
 
-  // Defense in depth: never return infeasible slots (save must never be blocked for proposals)
-  const feasible = slots.filter((s) => {
+  const hasSameDaySlots = slots.some((s) => s.tier === 1 || s.tier === 2);
+  const adminFiltered = hasSameDaySlots ? slots.filter((s) => s.tier !== 4) : slots;
+
+  const feasible = adminFiltered.filter((s) => {
     if (s.explain) {
       if (s.explain.travelFeasible === false || s.explain.noOverlap === false) return false;
       if (s.explain.bufferWaivedAtStart && s.explain.reachableFromWorkStart === false) return false;

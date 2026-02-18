@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { Trash2 } from 'lucide-react-native';
@@ -13,8 +13,19 @@ export type SwipeableMeetingRowProps = MeetingCardProps & {
 
 export default function SwipeableMeetingRow({
   onDelete,
+  onPress,
   ...cardProps
 }: SwipeableMeetingRowProps) {
+  const didDragRef = useRef(false);
+
+  const handleCardPress = () => {
+    if (didDragRef.current) {
+      didDragRef.current = false;
+      return;
+    }
+    onPress?.();
+  };
+
   const handleDeletePress = (swipeable: { close: () => void }) => {
     swipeable.close();
     Alert.alert(
@@ -47,8 +58,14 @@ export default function SwipeableMeetingRow({
       renderRightActions={renderRightActions}
       friction={2}
       rightThreshold={80}
+      onSwipeableOpenStartDrag={() => {
+        didDragRef.current = true;
+      }}
+      onSwipeableClose={() => {
+        didDragRef.current = false;
+      }}
     >
-      <MeetingCard {...cardProps} />
+      <MeetingCard {...cardProps} onPress={handleCardPress} />
     </Swipeable>
   );
 }

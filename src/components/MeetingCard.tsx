@@ -1,8 +1,9 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { Navigation, Circle, Check } from 'lucide-react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
+import { Navigation, Check, Phone, Mail, MessageCircle } from 'lucide-react-native';
 
 const DEFAULT_STATUS_COLOR = '#107C10';
+const MS_BLUE = '#0078D4';
 
 export type MeetingCardProps = {
   timeRange: string;
@@ -13,6 +14,12 @@ export type MeetingCardProps = {
   variantBooked?: boolean;
   /** Opens native directions (Apple/Google Maps) to this meeting */
   onNavigate?: () => void;
+  /** Waypoint number (1-based) matching the map marker for easy cross-reference */
+  waypointNumber?: number;
+  /** Contact phone number; when set, shows a tappable phone icon to call */
+  phone?: string;
+  /** Contact email; when set, shows a tappable mail icon to send email */
+  email?: string;
   isCompleted?: boolean;
   /** Toggles done state (check/uncheck) */
   onToggleDone?: () => void;
@@ -26,12 +33,34 @@ export default function MeetingCard({
   statusColor = DEFAULT_STATUS_COLOR,
   variantBooked,
   onNavigate,
+  waypointNumber,
+  phone,
+  email,
   isCompleted = false,
   onToggleDone,
   onPress,
 }: MeetingCardProps) {
+  const hasPhone = phone != null && phone.trim() !== '';
+  const hasEmail = email != null && email.trim() !== '';
   const content = (
     <View style={[styles.card, variantBooked && styles.cardBooked, isCompleted && styles.cardCompleted]}>
+      <View style={styles.leftColumn}>
+        {waypointNumber != null && (
+          <View style={styles.waypointBadge}>
+            <Text style={styles.waypointBadgeText}>{waypointNumber}</Text>
+          </View>
+        )}
+        {onToggleDone != null && (
+          <TouchableOpacity
+            style={[styles.doneBox, isCompleted && styles.doneBoxCompleted]}
+            onPress={onToggleDone}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            {isCompleted && <Check color="#fff" size={14} strokeWidth={3} />}
+          </TouchableOpacity>
+        )}
+      </View>
       <View style={[styles.pastelLine, { backgroundColor: statusColor }]} />
       <View style={styles.content}>
         <View style={styles.main}>
@@ -39,20 +68,34 @@ export default function MeetingCard({
           <Text style={[styles.client, isCompleted && styles.strikeThrough]}>{client}</Text>
           <Text style={[styles.address, isCompleted && styles.strikeThrough]}>{address}</Text>
         </View>
-        {onToggleDone != null && (
+        {hasPhone && (
           <TouchableOpacity
-            style={styles.checkButton}
-            onPress={onToggleDone}
+            style={styles.iconButton}
+            onPress={() => Linking.openURL(`tel:${phone!.trim()}`)}
             activeOpacity={0.7}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
-            {isCompleted ? (
-              <View style={styles.checkDone}>
-                <Check color="#fff" size={16} strokeWidth={3} />
-              </View>
-            ) : (
-              <Circle color="#107C10" size={24} />
-            )}
+            <Phone color={MS_BLUE} size={22} />
+          </TouchableOpacity>
+        )}
+        {hasPhone && (
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => Linking.openURL(`sms:${phone!.trim()}`)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <MessageCircle color={MS_BLUE} size={22} />
+          </TouchableOpacity>
+        )}
+        {hasEmail && (
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => Linking.openURL(`mailto:${email!.trim()}`)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Mail color={MS_BLUE} size={22} />
           </TouchableOpacity>
         )}
         {onNavigate != null && (
@@ -62,7 +105,7 @@ export default function MeetingCard({
             activeOpacity={0.7}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
-            <Navigation color="#0078D4" size={22} />
+            <Navigation color={MS_BLUE} size={22} />
           </TouchableOpacity>
         )}
       </View>
@@ -104,17 +147,41 @@ const styles = StyleSheet.create({
     textDecorationLine: 'line-through',
     color: '#808080',
   },
-  checkButton: {
-    padding: 8,
-    marginLeft: 4,
+  leftColumn: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingLeft: 10,
+    paddingVertical: 10,
   },
-  checkDone: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#107C10',
+  waypointBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: MS_BLUE,
+    borderWidth: 2,
+    borderColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  doneBox: {
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    backgroundColor: '#E5E7EB',
+    borderWidth: 2,
+    borderColor: '#9ca3af',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  doneBoxCompleted: {
+    backgroundColor: '#6b7280',
+    borderColor: '#6b7280',
+  },
+  waypointBadgeText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
   },
   pastelLine: {
     width: 4,
@@ -145,6 +212,10 @@ const styles = StyleSheet.create({
   address: {
     fontSize: 13,
     color: '#605E5C',
+  },
+  iconButton: {
+    padding: 8,
+    marginLeft: 4,
   },
   navButton: {
     padding: 8,

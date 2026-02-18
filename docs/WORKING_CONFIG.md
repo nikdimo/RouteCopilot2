@@ -5,6 +5,8 @@
 
 **Git tag:** `v1-working-2026-02-16` (restore with `git checkout v1-working-2026-02-16`)
 
+> **Architecture:** See [ARCHITECTURE.md](./ARCHITECTURE.md) for shared map/route logic, `useRouteData`, and platform responsibilities.
+
 ---
 
 ## How We Got Here (2026-02-16)
@@ -23,7 +25,7 @@
 | **Landing page** | Web (wiseplan.dk) | ✅ Dark theme, hero, App Store / Google Play links, "Open WisePlan in browser" |
 | **Sign in with Microsoft** | Web (wiseplan.dk/app/) | ✅ PC Chrome, mobile Chrome/Safari (redirect flow on mobile) |
 | **Outlook Calendar** | Web, iOS, Android | ✅ View and sync events |
-| **Map view** | Web, iOS, Android | ✅ Pins, polyline, directions |
+| **Map view** | Web, iOS, Android | ✅ OSRM routing, pins, polyline, segment bubbles (duration/distance), ETAs |
 | **Schedule** | Web, iOS, Android | ✅ Meeting list, tap for details |
 | **Mark as done** | Web, iOS, Android | ✅ Persists locally |
 | **Plan Visit** | Web, iOS, Android | ✅ Best time suggestions |
@@ -58,7 +60,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-Full reference config is in `vps-landing/nginx-wiseplan-domain.conf` (Certbot adds SSL blocks when you run it).
+Full reference config: use `vps-landing/nginx-multi-project.conf` when hosting both WisePlan and eurbanizam on the VPS. For WisePlan-only, use `vps-landing/nginx-wiseplan-domain.conf`. Certbot adds SSL blocks when you run it.
 
 ---
 

@@ -181,12 +181,48 @@ function ArchitectureSection() {
 function LogicSpecsSection() {
   return (
     <View style={styles.section}>
-      <Text style={styles.h1}>Logic Specs</Text>
+      <Text style={styles.h1}>Logic Specs v2</Text>
+
+      <Text style={styles.h2}>Goal</Text>
+      <Text style={styles.body}>
+        Minimize total driving distance when inserting a new meeting. Preserve admin days —
+        avoid creating single-meeting days when a geographically compatible slot exists on a day
+        with other meetings. Home to first meeting and last meeting to home are both included.
+      </Text>
+
+      <Text style={styles.h2}>Tier System</Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• Tier 1 – On Route: same day as meetings, detourKm ≤ 5 km</Text>
+        <Text style={styles.ruleItem}>• Tier 2 – Nearby: same day, 5 km &lt; detourKm ≤ distanceThresholdKm</Text>
+        <Text style={styles.ruleItem}>• Tier 3 – Over threshold: detourKm &gt; threshold → excluded; empty day suggested instead</Text>
+        <Text style={styles.ruleItem}>• Tier 4 – New Day: empty day, round-trip from home. Only shown when no Tier 1/2 exist (admin-day protection).</Text>
+      </View>
+
+      <Text style={styles.h2}>Distance Threshold (Profile)</Text>
+      <Text style={styles.body}>
+        distanceThresholdKm (default 30 km, Profile → Max Detour Distance). Same-day slots with
+        detour &gt; threshold are skipped; empty day suggested instead.
+      </Text>
+
+      <Text style={styles.h2}>Detour km (Primary Metric)</Text>
+      <Text style={styles.body}>
+        detourKm = haversineKm(prev, newLoc) + haversineKm(newLoc, next) - haversineKm(prev, next).
+        Empty day: 2 × haversineKm(home, newLoc).
+      </Text>
+
+      <Text style={styles.h2}>Score &amp; Ranking (within tier)</Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• score = detourKm × 10 + slackPenalty</Text>
+        <Text style={styles.ruleItem}>• slack &lt;10: +5000; slack 10–90: 0; slack &gt;90: +(slack−90)×2</Text>
+        <Text style={styles.ruleItem}>• Sort: tier asc, score asc, startMs asc, dayIso asc</Text>
+        <Text style={styles.ruleItem}>• Empty week: dayIso asc, startMs asc</Text>
+        <Text style={styles.ruleItem}>• "On Route" badge: detourKm ≤ 5</Text>
+      </View>
 
       <Text style={styles.h2}>Hard Constraints (slot discarded if any fails)</Text>
       <View style={styles.ruleList}>
-        <Text style={styles.ruleItem}>• Meeting within work window: meetingStart ≥ workStart, meetingEnd ≤ workEnd (constrain meeting, not arrive/depart buffers)</Text>
-        <Text style={styles.ruleItem}>• Day-boundary waiver: first meeting may start at workStart; last may end at workEnd (buffers waived at Start/End anchors)</Text>
+        <Text style={styles.ruleItem}>• Meeting within work window: meetingStart ≥ workStart, meetingEnd ≤ workEnd</Text>
+        <Text style={styles.ruleItem}>• Day-boundary waiver: first meeting may start at workStart; last may end at workEnd</Text>
         <Text style={styles.ruleItem}>• No overlap: [meetingStart, meetingEnd] must not overlap ANY event (even without coords)</Text>
         <Text style={styles.ruleItem}>• No past: meetingStartMs ≥ now + preBuffer</Text>
         <Text style={styles.ruleItem}>• Today after working hours end → skip today entirely</Text>
@@ -196,32 +232,16 @@ function LogicSpecsSection() {
 
       <Text style={styles.h2}>Gap Formula (Buffer-Aware)</Text>
       <Text style={styles.body}>
-        prevDepartMs = Prev.endMs + postBuffer (Start anchor: prev.endMs); nextArriveByMs = Next.startMs − preBuffer (End anchor: next.startMs).
-        At Start anchor: meeting may start at workStart (waive travel+preBuffer). At End anchor: meeting may end at workEnd (waive postBuffer+travelFrom).
-        required = TravelTo + preBuffer + duration + postBuffer + TravelFrom (reduced when at boundary). Events without coords block time (use homeBase).
+        prevDepartMs = Prev.endMs + postBuffer (Start: prev.endMs). nextArriveByMs = Next.startMs − preBuffer (End: next.startMs).
+        required = travelTo + preBuffer + duration + postBuffer + travelFrom (reduced at boundaries). Events without coords block time via homeBase.
       </Text>
 
-      <Text style={styles.h2}>Score & Ranking</Text>
-      <View style={styles.ruleList}>
-        <Text style={styles.ruleItem}>• score = detour*10; slack&lt;10: +5000; slack 10–45: 0; slack&gt;90: +(slack−90)*2; empty-day: +150</Text>
-        <Text style={styles.ruleItem}>• Sort normal: score asc, startMs asc, dayIso asc</Text>
-        <Text style={styles.ruleItem}>• Sort empty-week: dayIso asc, startMs asc</Text>
-        <Text style={styles.ruleItem}>• "On your route" badge: detourMinutes ≤ 5</Text>
-      </View>
-
-      <Text style={styles.h2}>3-Hour Block Rule</Text>
+      <Text style={styles.h2}>Gap-Based Search</Text>
       <Text style={styles.body}>
-        Each suggested meeting block is treated as a 3-hour unit:
-      </Text>
-      <View style={styles.ruleList}>
-        <Text style={styles.ruleItem}>• 1 hour — Travel (to the area or between nearby stops)</Text>
-        <Text style={styles.ruleItem}>• 1 hour — Meeting (the actual appointment)</Text>
-        <Text style={styles.ruleItem}>• 1 hour — Buffer (unexpected delays, wrap-up, next leg)</Text>
-      </View>
-      <Text style={styles.body}>
-        When scanning the week, the algorithm looks for open 3-hour windows
-        that align with geographic clusters. Shorter or longer blocks can be
-        derived from this base rule (e.g. 2h for very local follow-ups).
+        Scans gaps between timeline anchors (Start, events, End). For each gap
+        checks if required time fits, computes detourKm, assigns tier, excludes
+        Tier 3 (over threshold). Travel uses getTravelMinutes (haversine +
+        road factor + rush-hour speed).
       </Text>
 
       <Text style={styles.h2}>Ghost-Slot Timeline (Plan Visit)</Text>
@@ -270,23 +290,18 @@ function LogicSpecsSection() {
         <Text style={styles.ruleItem}>• Map preview always shows full route (Home → stops → Home) and fits reliably</Text>
       </View>
       <Text style={styles.body}>
-        Profile preferences (preMeetingBuffer, postMeetingBuffer)
+        Profile preferences (preMeetingBuffer, postMeetingBuffer, distanceThresholdKm)
         are used throughout the scheduler and reflected in the UI ("arrive by",
-        "depart at" in the expandable info).
+        "depart at", Max Detour Distance in the expandable info).
       </Text>
 
-      <Text style={styles.h2}>Outlook Contacts First</Text>
+      <Text style={styles.h2}>Location Search (Plan Visit)</Text>
       <Text style={styles.body}>
-        The search strategy prioritizes people the user already works with:
-        contacts from Outlook (and later other sources) are considered first
-        when suggesting “who to meet in this cluster.” The system may
-        suggest: “You have meetings in Køge on Thursday; 4 of your contacts
-        have offices there—consider scheduling one of them in the same
-        block.”
-      </Text>
-      <Text style={styles.body}>
-        This keeps suggestions relevant and increases the chance that
-        suggested slots turn into real meetings with existing relationships.
+        Location search combines Outlook contacts and address suggestions in one dropdown.
+        When the user types, both searchContacts (Graph) and getAddressSuggestions (geocoding)
+        run in parallel. Contacts with addresses are shown first; then address suggestions.
+        User selects a contact (geocoded to coords) or address. There is no proactive
+        suggestion of contacts based on geographic clusters or existing meetings.
       </Text>
     </View>
   );

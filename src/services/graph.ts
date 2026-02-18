@@ -23,6 +23,10 @@ export type CalendarEvent = {
   endIso?: string;
   /** Local notes (MVP; not synced to Outlook yet) */
   notes?: string;
+  /** Contact phone for call button (populated from contact lookup when available) */
+  phone?: string;
+  /** Contact email for mail button (populated from contact lookup when available) */
+  email?: string;
 };
 
 type GraphLocationCoordinates = {
@@ -201,10 +205,63 @@ export async function getCalendarEvents(
 
   const mapped = await Promise.all(allGraphEvents.map(mapEventAsync));
   try {
-    return await enrichCalendarEventsWithContactAddresses(token, mapped);
+    const withAddresses = await enrichCalendarEventsWithContactAddresses(token, mapped);
+    return await enrichCalendarEventsWithContactInfo(token, withAddresses);
   } catch {
     return mapped;
   }
+}
+
+/**
+ * For events missing phone/email, try to find a matching Outlook contact by event title or location
+ * and attach their phone and email. Runs for all events (including those that already have coordinates)
+ * so that e.g. "D4_Faxe" at "Hovedgaden 24, 4654 Faxe" gets contact details from the D4_Faxe contact.
+ */
+async function enrichCalendarEventsWithContactInfo(
+  token: string,
+  events: CalendarEvent[]
+): Promise<CalendarEvent[]> {
+  const needInfo = events.filter(
+    (e) => (!e.phone || !e.email) && ((e.title?.trim() ?? '') !== '' || (e.location?.trim() ?? '') !== '')
+  );
+  if (needInfo.length === 0) return events;
+
+  const keys = new Set<string>();
+  for (const e of needInfo) {
+    const t = e.title?.trim();
+    const loc = e.location?.trim();
+    if (t) keys.add(t);
+    if (loc && loc !== t) keys.add(loc);
+  }
+
+  const keyToContact = new Map<string, { phone?: string; email?: string }>();
+  for (const key of keys) {
+    const result = await searchContacts(token, key);
+    if (!result.success || !result.contacts?.length) continue;
+    const exact = result.contacts.find((c) => c.displayName.toLowerCase() === key.toLowerCase());
+    const contact = exact ?? result.contacts.find((c) => c.phones.length > 0 || c.emails.length > 0);
+    if (contact) {
+      keyToContact.set(key, {
+        phone: contact.phones[0]?.trim() || undefined,
+        email: contact.emails[0]?.trim() || undefined,
+      });
+    }
+  }
+
+  if (keyToContact.size === 0) return events;
+
+  return events.map((ev) => {
+    if (ev.phone && ev.email) return ev;
+    const byTitle = ev.title?.trim() ? keyToContact.get(ev.title.trim()) : undefined;
+    const byLocation = ev.location?.trim() ? keyToContact.get(ev.location.trim()) : undefined;
+    const data = byTitle ?? byLocation;
+    if (!data) return ev;
+    return {
+      ...ev,
+      ...(ev.phone ? {} : data.phone ? { phone: data.phone } : {}),
+      ...(ev.email ? {} : data.email ? { email: data.email } : {}),
+    };
+  });
 }
 
 /**
@@ -220,7 +277,10 @@ export async function enrichCalendarEventsWithContactAddresses(
   if (needEnrichment.length === 0) return events;
 
   const uniqueLocations = [...new Set(needEnrichment.map((e) => e.location!.trim()))];
-  const locationToEnriched = new Map<string, { location: string; coordinates: { latitude: number; longitude: number } }>();
+  const locationToEnriched = new Map<
+    string,
+    { location: string; coordinates: { latitude: number; longitude: number }; phone?: string; email?: string }
+  >();
 
   for (const loc of uniqueLocations) {
     const result = await searchContacts(token, loc);
@@ -241,6 +301,8 @@ export async function enrichCalendarEventsWithContactAddresses(
     locationToEnriched.set(loc, {
       location: contact.formattedAddress,
       coordinates: { latitude: geocodeResult.lat, longitude: geocodeResult.lon },
+      phone: contact.phones[0]?.trim() || undefined,
+      email: contact.emails[0]?.trim() || undefined,
     });
   }
 
@@ -250,7 +312,13 @@ export async function enrichCalendarEventsWithContactAddresses(
     if (!ev.coordinates && ev.location) {
       const enriched = locationToEnriched.get(ev.location.trim());
       if (enriched) {
-        return { ...ev, location: enriched.location, coordinates: enriched.coordinates };
+        return {
+          ...ev,
+          location: enriched.location,
+          coordinates: enriched.coordinates,
+          ...(enriched.phone && { phone: enriched.phone }),
+          ...(enriched.email && { email: enriched.email }),
+        };
       }
     }
     return ev;

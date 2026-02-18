@@ -116,7 +116,12 @@ export default function ConfirmBookingSheet({
                 <X color="#1a1a1a" size={24} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.body} keyboardShouldPersistTaps="handled">
+            <ScrollView
+              style={styles.scrollView}
+              contentContainerStyle={styles.bodyContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={true}
+            >
               <Text style={styles.summary}>
                 {formatDayLabel(slot.dayIso)} @ {formatTimeMs(slot.startMs)} – {formatTimeMs(slot.endMs)}
               </Text>
@@ -210,9 +215,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
   },
   sheetWrap: {
-    maxHeight: '70%',
+    flex: 1,
+    maxHeight: '85%',
+    width: '100%',
   },
   sheet: {
+    flex: 1,
+    minHeight: 0,
+    maxHeight: '100%',
     backgroundColor: '#fff',
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
@@ -235,8 +245,13 @@ const styles = StyleSheet.create({
   closeBtn: {
     padding: 4,
   },
-  body: {
+  scrollView: {
+    flex: 1,
+    minHeight: 0,
+  },
+  bodyContent: {
     padding: 16,
+    paddingBottom: 24,
   },
   summary: {
     fontSize: 16,

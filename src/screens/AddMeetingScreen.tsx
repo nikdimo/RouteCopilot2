@@ -342,6 +342,11 @@ export default function AddMeetingScreen() {
 
   const handleSelectSlot = (slot: ScoredSlot) => {
     setSelectedSlotId(slotId(slot));
+    setMapSlot(slot);
+    setConfirmSlot(null);
+  };
+
+  const handleBookSlot = (slot: ScoredSlot) => {
     setConfirmSlot(slot);
   };
 
@@ -678,6 +683,7 @@ export default function AddMeetingScreen() {
                       showDate={true}
                       onSelect={() => handleSelectSlot(slot)}
                       onMapPress={() => handleMapPress(slot)}
+                      onBookPress={() => handleBookSlot(slot)}
                     />
                   </View>
                 ))}
@@ -705,6 +711,7 @@ export default function AddMeetingScreen() {
                   bestOptionIds={bestOptionIds}
                   onSelectSlot={handleSelectSlot}
                   onMapPress={handleMapPress}
+                  onBookSlot={handleBookSlot}
                 />
               ))
             )}

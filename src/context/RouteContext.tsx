@@ -6,9 +6,12 @@ import { optimizeRoute } from '../utils/optimization';
 export type UserLocation = { latitude: number; longitude: number };
 
 const COMPLETED_IDS_KEY = 'routeCopilot_completedEventIds';
+const DAY_ORDER_PREFIX = 'routeCopilot_dayOrder_';
 
 type RouteContextValue = {
   appointments: CalendarEvent[];
+  appointmentsLoading: boolean;
+  setAppointmentsLoading: (loading: boolean) => void;
   setAppointments: (events: CalendarEvent[]) => void;
   addAppointment: (event: CalendarEvent) => void;
   updateAppointment: (eventId: string, patch: Partial<CalendarEvent>) => void;
@@ -16,12 +19,19 @@ type RouteContextValue = {
   optimize: (userLocation: UserLocation) => void;
   markEventAsDone: (eventId: string) => void;
   unmarkEventAsDone: (eventId: string) => void;
+  /** Persist current appointment order for a day (YYYY-MM-DD). */
+  saveDayOrder: (dayKey: string, eventIds: string[]) => Promise<void>;
+  /** Load saved order for a day. Returns null if none. */
+  getDayOrder: (dayKey: string) => Promise<string[] | null>;
+  /** Reorder appointments to match saved order; append events not in saved. */
+  applyDayOrder: (events: CalendarEvent[], dayKey: string) => Promise<CalendarEvent[]>;
 };
 
 const RouteContext = createContext<RouteContextValue | null>(null);
 
 export function RouteProvider({ children }: { children: React.ReactNode }) {
   const [appointments, setAppointmentsState] = useState<CalendarEvent[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [completedEventIds, setCompletedEventIds] = useState<string[]>([]);
   const completedIdsRef = useRef<string[]>([]);
   completedIdsRef.current = completedEventIds;
@@ -122,8 +132,44 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
+  const saveDayOrder = useCallback(async (dayKey: string, eventIds: string[]) => {
+    await AsyncStorage.setItem(DAY_ORDER_PREFIX + dayKey, JSON.stringify(eventIds));
+  }, []);
+
+  const getDayOrder = useCallback(async (dayKey: string): Promise<string[] | null> => {
+    try {
+      const raw = await AsyncStorage.getItem(DAY_ORDER_PREFIX + dayKey);
+      if (!raw) return null;
+      const arr = JSON.parse(raw) as unknown;
+      return Array.isArray(arr) ? (arr as string[]) : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const applyDayOrder = useCallback(
+    async (events: CalendarEvent[], dayKey: string): Promise<CalendarEvent[]> => {
+      const order = await getDayOrder(dayKey);
+      if (!order || order.length === 0) return events;
+      const byId = new Map(events.map((e) => [e.id, e]));
+      const result: CalendarEvent[] = [];
+      for (const id of order) {
+        const ev = byId.get(id);
+        if (ev) {
+          result.push(ev);
+          byId.delete(id);
+        }
+      }
+      byId.forEach((ev) => result.push(ev));
+      return result;
+    },
+    [getDayOrder]
+  );
+
   const value: RouteContextValue = {
     appointments,
+    appointmentsLoading,
+    setAppointmentsLoading,
     setAppointments,
     addAppointment,
     updateAppointment,
@@ -131,6 +177,9 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     optimize,
     markEventAsDone,
     unmarkEventAsDone,
+    saveDayOrder,
+    getDayOrder,
+    applyDayOrder,
   };
 
   return (
