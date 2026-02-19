@@ -1,9 +1,11 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
-import { Navigation, Check, Phone, Mail, MessageCircle } from 'lucide-react-native';
+import Svg, { Polygon } from 'react-native-svg';
+import { Navigation, Phone, Mail, MessageCircle } from 'lucide-react-native';
 
-const DEFAULT_STATUS_COLOR = '#107C10';
 const MS_BLUE = '#0078D4';
+const DEFAULT_STATUS_COLOR = '#107C10';
+const CHAMFER_SIZE = 36;
 
 export type MeetingCardProps = {
   timeRange: string;
@@ -14,15 +16,13 @@ export type MeetingCardProps = {
   variantBooked?: boolean;
   /** Opens native directions (Apple/Google Maps) to this meeting */
   onNavigate?: () => void;
-  /** Waypoint number (1-based) matching the map marker for easy cross-reference */
+  /** Waypoint number (1-based) in blue chamfered top-right corner */
   waypointNumber?: number;
   /** Contact phone number; when set, shows a tappable phone icon to call */
   phone?: string;
   /** Contact email; when set, shows a tappable mail icon to send email */
   email?: string;
   isCompleted?: boolean;
-  /** Toggles done state (check/uncheck) */
-  onToggleDone?: () => void;
   onPress?: () => void;
 };
 
@@ -37,32 +37,23 @@ export default function MeetingCard({
   phone,
   email,
   isCompleted = false,
-  onToggleDone,
   onPress,
 }: MeetingCardProps) {
   const hasPhone = phone != null && phone.trim() !== '';
   const hasEmail = email != null && email.trim() !== '';
   const content = (
     <View style={[styles.card, variantBooked && styles.cardBooked, isCompleted && styles.cardCompleted]}>
-      <View style={styles.leftColumn}>
-        {waypointNumber != null && (
-          <View style={styles.waypointBadge}>
-            <Text style={styles.waypointBadgeText}>{waypointNumber}</Text>
+      {waypointNumber != null && (
+        <View style={styles.chamferWrap} pointerEvents="none">
+          <Svg width={CHAMFER_SIZE} height={CHAMFER_SIZE} style={styles.chamferSvg}>
+            <Polygon points={`0,0 ${CHAMFER_SIZE},0 ${CHAMFER_SIZE},${CHAMFER_SIZE}`} fill={MS_BLUE} />
+          </Svg>
+          <View style={styles.chamferNumberWrap}>
+            <Text style={styles.chamferNumber} allowFontScaling={false}>{waypointNumber}</Text>
           </View>
-        )}
-        {onToggleDone != null && (
-          <TouchableOpacity
-            style={[styles.doneBox, isCompleted && styles.doneBoxCompleted]}
-            onPress={onToggleDone}
-            activeOpacity={0.7}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            {isCompleted && <Check color="#fff" size={14} strokeWidth={3} />}
-          </TouchableOpacity>
-        )}
-      </View>
-      <View style={[styles.pastelLine, { backgroundColor: statusColor }]} />
-      <View style={styles.content}>
+        </View>
+      )}
+      <View style={[styles.content, waypointNumber != null && styles.contentWithChamfer]}>
         <View style={styles.main}>
           <Text style={[styles.time, isCompleted && styles.strikeThrough]}>{timeRange}</Text>
           <Text style={[styles.client, isCompleted && styles.strikeThrough]}>{client}</Text>
@@ -128,6 +119,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: '#fff',
     borderRadius: 8,
+    borderTopRightRadius: 0,
     marginBottom: 12,
     minHeight: 72,
     shadowColor: '#000',
@@ -136,6 +128,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
     overflow: 'hidden',
+    position: 'relative',
   },
   cardBooked: {
     backgroundColor: '#E8F4FC',
@@ -147,45 +140,33 @@ const styles = StyleSheet.create({
     textDecorationLine: 'line-through',
     color: '#808080',
   },
-  leftColumn: {
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingLeft: 10,
-    paddingVertical: 10,
+  chamferWrap: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: CHAMFER_SIZE,
+    height: CHAMFER_SIZE,
+    zIndex: 1,
   },
-  waypointBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: MS_BLUE,
-    borderWidth: 2,
-    borderColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
+  chamferSvg: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
   },
-  doneBox: {
-    width: 26,
-    height: 26,
-    borderRadius: 6,
-    backgroundColor: '#E5E7EB',
-    borderWidth: 2,
-    borderColor: '#9ca3af',
+  chamferNumberWrap: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: CHAMFER_SIZE,
+    height: CHAMFER_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 8,
+    transform: [{ translateX: 6 }, { translateY: -6 }],
   },
-  doneBoxCompleted: {
-    backgroundColor: '#6b7280',
-    borderColor: '#6b7280',
-  },
-  waypointBadgeText: {
+  chamferNumber: {
     color: '#fff',
     fontSize: 14,
     fontWeight: '700',
-  },
-  pastelLine: {
-    width: 4,
-    alignSelf: 'stretch',
   },
   content: {
     flex: 1,
@@ -193,6 +174,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 14,
+  },
+  contentWithChamfer: {
+    paddingRight: CHAMFER_SIZE + 6,
   },
   main: {
     flex: 1,

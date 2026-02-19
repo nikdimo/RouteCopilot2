@@ -1,18 +1,22 @@
 import React, { useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
-import { Trash2 } from 'lucide-react-native';
+import { Trash2, Check } from 'lucide-react-native';
 import MeetingCard, { type MeetingCardProps } from './MeetingCard';
 
 const RED = '#D13438';
+const GREEN = '#107C10';
 
 export type SwipeableMeetingRowProps = MeetingCardProps & {
   /** Called when user confirms delete */
   onDelete: () => void;
+  /** Toggles done state; swipe left to reveal Complete action */
+  onToggleDone?: () => void;
 };
 
 export default function SwipeableMeetingRow({
   onDelete,
+  onToggleDone,
   onPress,
   ...cardProps
 }: SwipeableMeetingRowProps) {
@@ -38,6 +42,11 @@ export default function SwipeableMeetingRow({
     );
   };
 
+  const handleCompletePress = (swipeable: { close: () => void }) => {
+    swipeable.close();
+    onToggleDone?.();
+  };
+
   const renderRightActions = (
     _progress: unknown,
     _drag: unknown,
@@ -53,11 +62,29 @@ export default function SwipeableMeetingRow({
     </TouchableOpacity>
   );
 
+  const renderLeftActions = (
+    _progress: unknown,
+    _drag: unknown,
+    swipeable: { close: () => void }
+  ) =>
+    onToggleDone ? (
+      <TouchableOpacity
+        style={styles.completeAction}
+        onPress={() => handleCompletePress(swipeable)}
+        activeOpacity={0.8}
+      >
+        <Check color="#fff" size={22} strokeWidth={3} />
+        <Text style={styles.completeActionText}>Complete</Text>
+      </TouchableOpacity>
+    ) : null;
+
   return (
     <Swipeable
       renderRightActions={renderRightActions}
+      renderLeftActions={renderLeftActions}
       friction={2}
       rightThreshold={80}
+      leftThreshold={80}
       onSwipeableOpenStartDrag={() => {
         didDragRef.current = true;
       }}
@@ -81,6 +108,21 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 8,
   },
   deleteActionText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  completeAction: {
+    backgroundColor: GREEN,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 90,
+    marginBottom: 12,
+    borderTopLeftRadius: 8,
+    borderBottomLeftRadius: 8,
+  },
+  completeActionText: {
     color: '#fff',
     fontSize: 13,
     fontWeight: '600',
