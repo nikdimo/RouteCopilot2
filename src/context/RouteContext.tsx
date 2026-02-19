@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { startOfDay } from 'date-fns';
 import type { CalendarEvent } from '../services/graph';
 import { optimizeRoute } from '../utils/optimization';
 
@@ -9,6 +10,15 @@ const COMPLETED_IDS_KEY = 'routeCopilot_completedEventIds';
 const DAY_ORDER_PREFIX = 'routeCopilot_dayOrder_';
 
 type RouteContextValue = {
+  selectedDate: Date;
+  setSelectedDate: (d: Date | ((prev: Date) => Date)) => void;
+  meetingCountByDay: Record<string, number>;
+  setMeetingCountByDay: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  loadedRange: { start: string; end: string } | null;
+  setLoadedRange: React.Dispatch<React.SetStateAction<{ start: string; end: string } | null>>;
+  /** Call to force refetch for current selectedDate (e.g. pull-to-refresh) */
+  triggerRefresh: () => void;
+  refreshTrigger: number;
   appointments: CalendarEvent[];
   appointmentsLoading: boolean;
   setAppointmentsLoading: (loading: boolean) => void;
@@ -30,6 +40,11 @@ type RouteContextValue = {
 const RouteContext = createContext<RouteContextValue | null>(null);
 
 export function RouteProvider({ children }: { children: React.ReactNode }) {
+  const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
+  const [meetingCountByDay, setMeetingCountByDay] = useState<Record<string, number>>({});
+  const [loadedRange, setLoadedRange] = useState<{ start: string; end: string } | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const triggerRefresh = useCallback(() => setRefreshTrigger((n) => n + 1), []);
   const [appointments, setAppointmentsState] = useState<CalendarEvent[]>([]);
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [completedEventIds, setCompletedEventIds] = useState<string[]>([]);
@@ -167,6 +182,14 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
   );
 
   const value: RouteContextValue = {
+    selectedDate,
+    setSelectedDate,
+    meetingCountByDay,
+    setMeetingCountByDay,
+    loadedRange,
+    setLoadedRange,
+    triggerRefresh,
+    refreshTrigger,
     appointments,
     appointmentsLoading,
     setAppointmentsLoading,

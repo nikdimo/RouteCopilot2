@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLoadAppointmentsForDate } from '../hooks/useLoadAppointmentsForDate';
 import LoginScreen from '../screens/LoginScreen';
 import AppNavigator from './AppNavigator';
+import SelectedDateSync from '../components/SelectedDateSync';
 
 export default function RootNavigator() {
   const { userToken, isRestoringSession } = useAuth();
@@ -55,7 +56,12 @@ export default function RootNavigator() {
     );
   }
 
-  return <AppNavigator />;
+  return (
+    <>
+      <SelectedDateSync />
+      <AppNavigator />
+    </>
+  );
 }
 
 const styles = StyleSheet.create({

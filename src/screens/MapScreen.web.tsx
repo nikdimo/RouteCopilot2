@@ -1,12 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useRoute } from '../context/RouteContext';
 import { useLoadAppointmentsForDate } from '../hooks/useLoadAppointmentsForDate';
 import { useRouteData } from '../hooks/useRouteData';
 import { getMarkerPositions } from '../utils/mapClusters';
 import { formatTime, formatDurationSeconds } from '../utils/dateUtils';
+import DaySlider from '../components/DaySlider';
+import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsForDate';
+import { format, isSameDay, startOfDay } from 'date-fns';
 import { type OSRMLeg } from '../utils/osrm';
 import {
   pointAlongSegmentAndForward,
@@ -340,6 +344,9 @@ const FOCUSED_ZOOM = 17;
 type MapScreenProps = { embeddedInSchedule?: boolean };
 
 export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
+  const navigation = useNavigation();
+  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay } = useRoute();
+  const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const [showDetails, setShowDetails] = useState(false);
   const [selectedArrivalLegIndex, setSelectedArrivalLegIndex] = useState<number | null>(null);
   const [selectedWaypointIndices, setSelectedWaypointIndices] = useState<number[] | null>(null);
@@ -375,13 +382,32 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     return MS_BLUE;
   };
 
+  const today = useMemo(() => startOfDay(new Date()), []);
+
   useFocusEffect(
     useCallback(() => {
-      if (appointments.length === 0) {
-        load();
-      }
-    }, [load, appointments.length])
+      if (appointments.length === 0 && isSameDay(ctxSelectedDate, today)) load();
+      if (!embeddedInSchedule) ensureMeetingCountsForDate(ctxSelectedDate);
+    }, [load, appointments.length, embeddedInSchedule, ensureMeetingCountsForDate, ctxSelectedDate, today])
   );
+  const headerTitle = isSameDay(ctxSelectedDate, today) ? "Today's Route" : format(ctxSelectedDate, 'EEE, MMM d');
+
+  const onSelectDate = useCallback(
+    (date: Date) => {
+      setSelectedDate(date);
+      ensureMeetingCountsForDate(date);
+    },
+    [setSelectedDate, ensureMeetingCountsForDate]
+  );
+
+  useLayoutEffect(() => {
+    if (embeddedInSchedule) return;
+    navigation.setOptions?.({
+      headerTitle: headerTitle,
+      headerStyle: { backgroundColor: MS_BLUE },
+      headerTintColor: '#fff',
+    });
+  }, [embeddedInSchedule, navigation, headerTitle]);
 
   const boundsCoords = useMemo(
     (): [number, number][] =>
@@ -399,6 +425,13 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   if (appointments.length === 0) {
     return (
       <View style={styles.container}>
+        {!embeddedInSchedule && (
+          <DaySlider
+            selectedDate={ctxSelectedDate}
+            onSelectDate={onSelectDate}
+            meetingCountByDay={meetingCountByDay}
+          />
+        )}
         <View style={styles.placeholderContainer}>
           <Text style={styles.placeholderText}>
             No meetings loaded. Go to Schedule to load your route.
@@ -411,6 +444,13 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   if (coords.length === 0) {
     return (
       <View style={styles.container}>
+        {!embeddedInSchedule && (
+          <DaySlider
+            selectedDate={ctxSelectedDate}
+            onSelectDate={onSelectDate}
+            meetingCountByDay={meetingCountByDay}
+          />
+        )}
         <View style={styles.placeholderContainer}>
           <Text style={styles.placeholderText}>
             No locations with addresses. Add addresses to your meetings to see them on the map.
@@ -439,6 +479,13 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   return (
     <View style={styles.container}>
+      {!embeddedInSchedule && (
+        <DaySlider
+          selectedDate={ctxSelectedDate}
+          onSelectDate={onSelectDate}
+          meetingCountByDay={meetingCountByDay}
+        />
+      )}
       {!embeddedInSchedule && routeLoading && (
         <View style={styles.loadingBar}>
           <Text style={styles.loadingBarText}>Loading route…</Text>

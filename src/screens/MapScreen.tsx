@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useMemo, useState, useCallback, useLayoutEffect } from 'react';
 import {
   View,
   Text,
@@ -11,13 +11,18 @@ import {
   Dimensions,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { useFocusEffect, useRoute as useNavRoute } from '@react-navigation/native';
+import { useFocusEffect, useRoute as useNavRoute, useNavigation } from '@react-navigation/native';
 import { Phone, Car } from 'lucide-react-native';
 import { openNativeDirections } from '../utils/maps';
 import MapView, { Marker, Polyline, Callout } from 'react-native-maps';
+import { useRoute } from '../context/RouteContext';
 import { useLoadAppointmentsForDate } from '../hooks/useLoadAppointmentsForDate';
 import { useRouteData } from '../hooks/useRouteData';
 import { formatTime } from '../utils/dateUtils';
+import DaySlider from '../components/DaySlider';
+import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsForDate';
+import { format, isSameDay, startOfDay } from 'date-fns';
+import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { formatDistance, offsetPolyline } from '../utils/routeBubbles';
 import { getMarkerPositions } from '../utils/mapClusters';
 
@@ -52,6 +57,10 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const [selectedArrivalLegIndex, setSelectedArrivalLegIndex] = useState<number | null>(null);
   /** Waypoint indices at the selected marker (for bottom info card). */
   const [selectedWaypointIndices, setSelectedWaypointIndices] = useState<number[] | null>(null);
+  const navigation = useNavigation();
+  const isWide = useIsWideScreen();
+  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay } = useRoute();
+  const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const navParams = useNavRoute<MapScreenNavParams>().params;
   const triggerLoadWhenEmpty = navParams?.triggerLoadWhenEmpty ?? false;
   const { load } = useLoadAppointmentsForDate(undefined);
@@ -81,12 +90,35 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     return legIndex % 2 === 1 ? '#00B0FF' : '#4FC3F7';
   };
 
+  const today = useMemo(() => startOfDay(new Date()), []);
+
   useFocusEffect(
     useCallback(() => {
-      if (triggerLoadWhenEmpty && appointments.length === 0) load();
+      if (triggerLoadWhenEmpty && appointments.length === 0 && isSameDay(ctxSelectedDate, today)) load();
+      if (!embeddedInSchedule) ensureMeetingCountsForDate(ctxSelectedDate);
       refetchRouteIfNeeded();
-    }, [triggerLoadWhenEmpty, load, appointments.length, refetchRouteIfNeeded])
+    }, [triggerLoadWhenEmpty, load, appointments.length, refetchRouteIfNeeded, embeddedInSchedule, ensureMeetingCountsForDate, ctxSelectedDate, today])
   );
+
+  const headerTitle = isSameDay(ctxSelectedDate, today) ? "Today's Route" : format(ctxSelectedDate, 'EEE, MMM d');
+
+  const onSelectDate = useCallback(
+    (date: Date) => {
+      setSelectedDate(date);
+      ensureMeetingCountsForDate(date);
+    },
+    [setSelectedDate, ensureMeetingCountsForDate]
+  );
+
+  useLayoutEffect(() => {
+    if (embeddedInSchedule) return;
+    navigation.setOptions({
+      headerTitle,
+      headerTitleStyle: { fontWeight: '600', fontSize: isWide ? 16 : undefined },
+      headerStyle: { backgroundColor: MS_BLUE },
+      headerTintColor: '#fff',
+    });
+  }, [embeddedInSchedule, navigation, headerTitle, isWide]);
 
   const routeCoordinates = osrmRoute?.coordinates?.length
     ? osrmRoute.coordinates
@@ -147,10 +179,21 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   return (
     <View style={styles.container}>
+      {!embeddedInSchedule && (
+        <DaySlider
+          selectedDate={ctxSelectedDate}
+          onSelectDate={onSelectDate}
+          meetingCountByDay={meetingCountByDay}
+        />
+      )}
       {showLoadingBar && <View style={styles.loadingBar} />}
       {showEmptyOverlay && (
         <View style={styles.emptyOverlay}>
-          <Text style={styles.emptyOverlayText}>No meetings today</Text>
+          <Text style={styles.emptyOverlayText}>
+            {isSameDay(ctxSelectedDate, today)
+              ? 'No meetings today'
+              : `No meetings on ${format(ctxSelectedDate, 'EEE, MMM d')}`}
+          </Text>
         </View>
       )}
       {showNoAddressOverlay && (

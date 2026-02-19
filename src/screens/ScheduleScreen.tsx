@@ -1,4 +1,4 @@
-import React, { useState, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useLayoutEffect, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -41,8 +41,8 @@ import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
 import { useRouteData } from '../hooks/useRouteData';
 import { openNativeDirections } from '../utils/maps';
-import { getCalendarEvents, GraphUnauthorizedError, type CalendarEvent } from '../services/graph';
-import { sortAppointmentsByTime } from '../utils/optimization';
+import type { CalendarEvent } from '../services/graph';
+import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsForDate';
 import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
@@ -173,10 +173,16 @@ function buildScheduleListItems(
   return items;
 }
 
+const TODAY_FOR_EMPTY = startOfDay(new Date());
+
 function EmptySchedule() {
+  const { selectedDate } = useRoute();
+  const label = isSameDay(selectedDate, TODAY_FOR_EMPTY)
+    ? "No visits today."
+    : `No visits on ${format(selectedDate, 'EEE, MMM d')}.`;
   return (
     <View style={styles.emptyContainer}>
-      <Text style={styles.emptyText}>No visits scheduled for this week.</Text>
+      <Text style={styles.emptyText}>{label}</Text>
     </View>
   );
 }
@@ -196,15 +202,19 @@ export default function ScheduleScreen() {
     saveDayOrder,
     getDayOrder,
     optimize,
+    selectedDate,
+    setSelectedDate,
+    meetingCountByDay,
+    setMeetingCountByDay,
+    loadedRange,
+    setLoadedRange,
+    triggerRefresh,
+    appointmentsLoading,
   } = useRoute();
+  const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const { coords, legStats, etas, waitTimeBeforeMeetingMin, departByMs, returnByMs, homeBase } = useRouteData();
-  const [selectedDate, setSelectedDate] = useState<Date>(TODAY);
-  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [meetingCountByDay, setMeetingCountByDay] = useState<Record<string, number>>({});
-  const [loadedRange, setLoadedRange] = useState<{ start: string; end: string } | null>(null);
-  const dayCache = useRef<Map<string, CalendarEvent[]>>(new Map());
   const [showDaySlider, setShowDaySlider] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [reorderMode, setReorderMode] = useState(false);
@@ -250,137 +260,10 @@ export default function ScheduleScreen() {
     };
   }, [legStats, waitTimeBeforeMeetingMin, departByMs, returnByMs]);
 
-  /** Check if we have counts for the given date; if not, fetch a window around it and merge. */
-  const ensureMeetingCountsForDate = useCallback(
-    async (date: Date) => {
-      const token = userToken ?? (getValidToken ? await getValidToken() : null);
-      if (!token) return;
-      const windowStart = startOfDay(addDays(date, -30));
-      const windowEnd = endOfDay(addDays(date, 30));
-      const startKey = toLocalDayKey(windowStart);
-      const endKey = toLocalDayKey(windowEnd);
-      const dateKey = toLocalDayKey(date);
-      if (
-        loadedRange &&
-        loadedRange.start <= startKey &&
-        loadedRange.end >= endKey
-      ) {
-        return;
-      }
-      getCalendarEvents(token, windowStart, windowEnd)
-        .then((events) => {
-          const counts: Record<string, number> = {};
-          for (const ev of events) {
-            if (ev.startIso) {
-              try {
-                const key = toLocalDayKey(new Date(ev.startIso));
-                counts[key] = (counts[key] ?? 0) + 1;
-              } catch {
-                /* skip */
-              }
-            }
-          }
-          setMeetingCountByDay((prev) => {
-            const merged = { ...prev };
-            for (const [k, v] of Object.entries(counts)) {
-              merged[k] = v;
-            }
-            return merged;
-          });
-          setLoadedRange((prev) => ({
-            start: prev ? (prev.start <= startKey ? prev.start : startKey) : startKey,
-            end: prev ? (prev.end >= endKey ? prev.end : endKey) : endKey,
-          }));
-        })
-        .catch(() => {});
-    },
-    [userToken, getValidToken, loadedRange]
-  );
-
-  const applyOrderSync = useCallback((events: CalendarEvent[], order: string[] | null): CalendarEvent[] => {
-    if (!order || order.length === 0) return events;
-    const byId = new Map(events.map((e) => [e.id, e]));
-    const result: CalendarEvent[] = [];
-    for (const id of order) {
-      const ev = byId.get(id);
-      if (ev) {
-        result.push(ev);
-        byId.delete(id);
-      }
-    }
-    byId.forEach((ev) => result.push(ev));
-    return result;
-  }, []);
-
-  const fetchData = useCallback(async () => {
-    const token = userToken ?? (getValidToken ? await getValidToken() : null);
-    if (!token) {
-      setAppointments([]);
-      return;
-    }
-    const dayKey = toLocalDayKey(selectedDate);
-    const cached = dayCache.current.get(dayKey);
-    if (cached) {
-      setAppointments(cached);
-      setLoading(false);
-      setAppointmentsLoading(false);
-      return;
-    }
-    setLoading(true);
-    setAppointmentsLoading(true);
-    setError(null);
-    const start = startOfDay(selectedDate);
-    const end = endOfDay(selectedDate);
-    try {
-      const [events, savedOrder] = await Promise.all([
-        getCalendarEvents(token, start, end),
-        getDayOrder(dayKey),
-      ]);
-      const sorted = sortAppointmentsByTime(events);
-      const ordered = applyOrderSync(sorted, savedOrder);
-      dayCache.current.set(dayKey, ordered);
-      setAppointments(ordered);
-      // Prefetch adjacent days in background (no await)
-      const prevKey = toLocalDayKey(addDays(selectedDate, -1));
-      const nextKey = toLocalDayKey(addDays(selectedDate, 1));
-      if (!dayCache.current.has(prevKey)) {
-        const prevStart = startOfDay(addDays(selectedDate, -1));
-        const prevEnd = endOfDay(addDays(selectedDate, -1));
-        Promise.all([
-          getCalendarEvents(token, prevStart, prevEnd),
-          getDayOrder(prevKey),
-        ])
-          .then(([ev, o]) => applyOrderSync(sortAppointmentsByTime(ev), o))
-          .then((ordered) => dayCache.current.set(prevKey, ordered))
-          .catch(() => {});
-      }
-      if (!dayCache.current.has(nextKey)) {
-        const nextStart = startOfDay(addDays(selectedDate, 1));
-        const nextEnd = endOfDay(addDays(selectedDate, 1));
-        Promise.all([
-          getCalendarEvents(token, nextStart, nextEnd),
-          getDayOrder(nextKey),
-        ])
-          .then(([ev, o]) => applyOrderSync(sortAppointmentsByTime(ev), o))
-          .then((ordered) => dayCache.current.set(nextKey, ordered))
-          .catch(() => {});
-      }
-    } catch (e) {
-      setAppointments([]);
-      if (e instanceof GraphUnauthorizedError) signOut();
-      else setError(e instanceof Error ? e.message : 'Failed to load events');
-    } finally {
-      setLoading(false);
-      setAppointmentsLoading(false);
-      setRefreshing(false);
-    }
-  }, [userToken, getValidToken, selectedDate, setAppointments, setAppointmentsLoading, signOut, getDayOrder, applyOrderSync]);
-
   useFocusEffect(
     useCallback(() => {
-      fetchData();
       ensureMeetingCountsForDate(selectedDate);
-    }, [fetchData, ensureMeetingCountsForDate, selectedDate])
+    }, [ensureMeetingCountsForDate, selectedDate])
   );
 
   const onSelectDate = useCallback(
@@ -388,16 +271,15 @@ export default function ScheduleScreen() {
       setSelectedDate(date);
       ensureMeetingCountsForDate(date);
     },
-    [ensureMeetingCountsForDate]
+    [setSelectedDate, ensureMeetingCountsForDate]
   );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     setLoadedRange(null);
-    dayCache.current.delete(toLocalDayKey(selectedDate));
-    fetchData();
+    triggerRefresh();
     ensureMeetingCountsForDate(selectedDate);
-  }, [fetchData, ensureMeetingCountsForDate, selectedDate]);
+  }, [triggerRefresh, ensureMeetingCountsForDate, selectedDate, setLoadedRange]);
 
   const headerTitle = isSameDay(selectedDate, TODAY)
     ? "Today's Route"
@@ -693,7 +575,7 @@ export default function ScheduleScreen() {
           meetingCountByDay={meetingCountByDay}
         />
       )}
-      {loading && !refreshing && appointmentsList.length === 0 ? (
+      {appointmentsLoading && !refreshing && appointmentsList.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#0078D4" />
         </View>
