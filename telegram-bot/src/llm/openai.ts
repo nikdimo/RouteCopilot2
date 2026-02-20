@@ -33,6 +33,16 @@ export function createOpenAIClient(apiKey: string, toolDefs: ToolDef[]) {
 
       if (toolResults && toolResults.results.length > 0) {
         messages.push({ role: "user", content: userMessage });
+        // OpenAI requires an assistant message with tool_calls before tool results
+        messages.push({
+          role: "assistant",
+          content: null,
+          tool_calls: toolResults.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: "function" as const,
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+          })),
+        });
         for (const r of toolResults.results) {
           messages.push({
             role: "tool",
