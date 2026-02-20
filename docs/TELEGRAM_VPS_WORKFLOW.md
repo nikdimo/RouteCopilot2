@@ -14,6 +14,8 @@ This doc describes how we plan to work on the repo from the VPS using the Telegr
 
 - **Flow when away:** You’re away from your PC. On the VPS the bot is running. You open Telegram, send e.g. “Pull latest and run prepare:vps” or “Bump iOS build, run EAS iOS production build, then submit to TestFlight”. The bot runs the right tools and reports back. So the VPS becomes the place where builds and deploys happen when you’re not at your desk.
 
+- **iOS build on the server:** When you ask the bot to “bump iOS build and start EAS iOS production build”, it runs: (1) bump build number, (2) `eas build --platform ios --profile production --non-interactive --no-wait`. The build runs in Expo’s cloud; the bot returns immediately with the build URL. It then asks you: when the build is done, do you want to submit to TestFlight or do anything else (e.g. Apple login)? You can reply “Submit to TestFlight” when the build has finished. On the VPS you do **not** need to log in with Apple ID: EAS uses the credentials already stored for the project (from when you ran the build or `eas credentials` on your PC). The VPS only needs to be logged in to EAS (`eas login` once or `EXPO_TOKEN` in the environment).
+
 ---
 
 ## How secrets are stored

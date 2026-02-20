@@ -81,12 +81,12 @@ export const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: "eas_build_ios",
-    description: "Start EAS iOS production build (runs in Expo cloud). Non-interactive. Bump build number first if needed.",
+    description: "Start EAS iOS production build (runs in Expo cloud). Returns immediately with build URL (does not wait for build to finish). Bump build number first if needed. After running, tell the user the build link and ask: when the build is done, do they want to submit to TestFlight or take any other actions (e.g. Apple login)?",
     parameters: { type: "object", properties: {} },
   },
   {
     name: "eas_submit_ios_testflight",
-    description: "Submit the latest iOS build to TestFlight. Run after eas_build_ios completes.",
+    description: "Submit the latest iOS build to TestFlight. Run after eas_build_ios has completed (user confirms build finished).",
     parameters: { type: "object", properties: {} },
   },
 ];
@@ -128,7 +128,7 @@ export function executeTool(name: string, args: Record<string, unknown>): string
     case "bump_ios_build":
       return run("node scripts/bump-ios-build.js");
     case "eas_build_ios":
-      return run("npx eas build --platform ios --profile production --non-interactive");
+      return run("npx eas build --platform ios --profile production --non-interactive --no-wait");
     case "eas_submit_ios_testflight":
       return run("npx eas submit --platform ios --profile production --latest --non-interactive");
     default:
