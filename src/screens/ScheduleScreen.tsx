@@ -274,12 +274,30 @@ export default function ScheduleScreen() {
     [setSelectedDate, ensureMeetingCountsForDate]
   );
 
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onRefresh = useCallback(() => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+      refreshTimeoutRef.current = null;
+    }
     setRefreshing(true);
     setLoadedRange(null);
     triggerRefresh();
     ensureMeetingCountsForDate(selectedDate);
+    refreshTimeoutRef.current = setTimeout(() => setRefreshing(false), 12000);
   }, [triggerRefresh, ensureMeetingCountsForDate, selectedDate, setLoadedRange]);
+
+  const prevLoadingRef = useRef(false);
+  useEffect(() => {
+    if (prevLoadingRef.current && !appointmentsLoading && refreshing) {
+      setRefreshing(false);
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = null;
+      }
+    }
+    prevLoadingRef.current = appointmentsLoading;
+  }, [appointmentsLoading, refreshing]);
 
   const headerTitle = isSameDay(selectedDate, TODAY)
     ? "Today's Route"
@@ -410,7 +428,7 @@ export default function ScheduleScreen() {
       const legAfter = getLegAfterMeeting(scheduleListItems, item.appointmentIndex);
       const legFromHome = getIndex() === 0 ? getLegFromHome(scheduleListItems) : null;
       const isLate = (waitTimeBeforeMeetingMin[item.appointmentIndex] ?? 0) < 0;
-      return (
+      const block = (
         <View style={[styles.blockRow, isActive && styles.blockRowActive, isLate && styles.meetingRowLate]}>
           <TouchableOpacity
             onLongPress={drag}
@@ -470,6 +488,7 @@ export default function ScheduleScreen() {
           </View>
         </View>
       );
+      return block;
     },
     [
       meetings,

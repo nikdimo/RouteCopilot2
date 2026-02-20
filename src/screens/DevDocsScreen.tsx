@@ -14,13 +14,14 @@ import { useQALog } from '../context/QALogContext';
 
 const MS_BLUE = '#0078D4';
 
-type Section = 'User Story' | 'Roadmap' | 'Architecture' | 'Logic Specs' | 'QA' | 'QA Log';
+type Section = 'User Story' | 'Roadmap' | 'Architecture' | 'Logic Specs' | 'Telegram VPS' | 'QA' | 'QA Log';
 
 const SECTIONS: Section[] = [
   'User Story',
   'Roadmap',
   'Architecture',
   'Logic Specs',
+  'Telegram VPS',
   'QA',
   'QA Log',
 ];
@@ -65,6 +66,7 @@ export default function DevDocsScreen() {
         {section === 'Roadmap' && <RoadmapSection />}
         {section === 'Architecture' && <ArchitectureSection />}
         {section === 'Logic Specs' && <LogicSpecsSection />}
+        {section === 'Telegram VPS' && <TelegramVpsSection />}
         {section === 'QA' && <QASection />}
         {section === 'QA Log' && <QALogViewerSection />}
       </ScrollView>
@@ -303,6 +305,34 @@ function LogicSpecsSection() {
         User selects a contact (geocoded to coords) or address. There is no proactive
         suggestion of contacts based on geographic clusters or existing meetings.
       </Text>
+    </View>
+  );
+}
+
+function TelegramVpsSection() {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.h1}>Editing Code on the VPS via Telegram</Text>
+      <Text style={styles.body}>
+        How we work on the repo from the VPS using the Telegram bot, and how secrets are stored. Full doc: docs/TELEGRAM_VPS_WORKFLOW.md
+      </Text>
+
+      <Text style={styles.h2}>How we edit code on the VPS via Telegram</Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>Bot lives in telegram-bot/. On the VPS: clone repo, cd telegram-bot && npm start. Bot runs tools from repo root (git, EAS, shell).</Text>
+        <Text style={styles.stackItem}>Send natural-language messages (e.g. "git status", "commit and push with message: fix map", "bump iOS build and submit to TestFlight"). LLM (default Gemini) picks tools and runs them; bot replies with outcome.</Text>
+        <Text style={styles.stackItem}>The bot does not edit source by itself — it runs shell, git, EAS. Edit locally or on GitHub; use the bot to pull, build, submit when away.</Text>
+        <Text style={styles.stackItem}>Flow when away: open Telegram → "Pull latest and run prepare:vps" or "Bump iOS build, EAS build, submit TestFlight" → bot runs tools and reports back.</Text>
+      </View>
+
+      <Text style={styles.h2}>How secrets are stored</Text>
+      <Text style={styles.body}>All bot/LLM secrets in telegram-bot/.env (not in git):</Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>TELEGRAM_BOT_TOKEN (from @BotFather), TELEGRAM_ALLOWED_CHAT_IDS (optional), LLM_PROVIDER, one of GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY</Text>
+      </View>
+      <Text style={styles.body}>Git (GitHub): SSH key or personal access token on the VPS only; not in repo.</Text>
+      <Text style={styles.body}>EAS/Expo/Apple: eas login or EXPO_TOKEN on VPS; Apple ID / app-specific password in EAS or EXPO_APPLE_APP_SPECIFIC_PASSWORD. All on VPS only.</Text>
+      <Text style={styles.body}>Nothing secret is committed; everything stays on the VPS (and EAS where applicable).</Text>
     </View>
   );
 }

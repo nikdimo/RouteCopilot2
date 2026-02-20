@@ -22,7 +22,7 @@ function parseNumber(s: string, min: number, max: number): number {
 }
 
 export default function ProfileScreen() {
-  const { userToken, getValidToken } = useAuth();
+  const { userToken, getValidToken, signOut } = useAuth();
   const { preferences, updatePreferences } = useUserPreferences();
   const [preBuffer, setPreBuffer] = useState((preferences.preMeetingBuffer ?? 15).toString());
   const [postBuffer, setPostBuffer] = useState((preferences.postMeetingBuffer ?? 15).toString());
@@ -254,6 +254,21 @@ export default function ProfileScreen() {
           />
         </View>
       </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Sign out</Text>
+        <Text style={styles.hint}>
+          When you sign out, your session ends and you will need to sign in again to access your calendar.
+          The schedule and meetings currently loaded in the app will be cleared. Your profile settings (home base, buffers, working days) stay saved on this device.
+        </Text>
+        <TouchableOpacity
+          style={styles.signOutButton}
+          onPress={signOut}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.signOutButtonText}>Sign out</Text>
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   );
 }
@@ -355,6 +370,19 @@ const styles = StyleSheet.create({
     color: '#605E5C',
   },
   dayPillTextActive: {
+    color: '#fff',
+  },
+  signOutButton: {
+    backgroundColor: '#D13438',
+    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  signOutButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
     color: '#fff',
   },
 });

@@ -200,8 +200,13 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Welcome to Route Copilot</Text>
+      <Text style={styles.title}>Welcome to WisePlan</Text>
       <Text style={styles.subtitle}>Your AI Logistics Assistant</Text>
+      <View style={styles.reviewerNote}>
+        <Text style={styles.reviewerNoteText}>
+          Sign in with Microsoft: tap the button below, then on the Microsoft sign-in page enter the demo account email and password from App Store Connect.
+        </Text>
+      </View>
       <TouchableOpacity
         style={styles.button}
         onPress={handleSignIn}
@@ -278,7 +283,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#605E5C',
     textAlign: 'center',
-    marginBottom: 48,
+    marginBottom: 24,
+  },
+  reviewerNote: {
+    backgroundColor: '#E8F4FC',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 8,
+    marginBottom: 24,
+    maxWidth: 320,
+  },
+  reviewerNoteText: {
+    fontSize: 13,
+    color: '#1a1a1a',
+    textAlign: 'center',
+    lineHeight: 20,
   },
   button: {
     backgroundColor: '#0078D4',

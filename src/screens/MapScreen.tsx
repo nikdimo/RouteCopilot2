@@ -46,7 +46,6 @@ type MapScreenProps = { embeddedInSchedule?: boolean };
 export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const mapRef = useRef<MapView>(null);
   const ignoreNextMapPressRef = useRef(false);
-  const [showDetails, setShowDetails] = useState(false);
   const [region, setRegion] = useState(DEFAULT_REGION);
   const [focusedClusterKey, setFocusedClusterKey] = useState<string | null>(null);
   const [focusedClusterCoord, setFocusedClusterCoord] = useState<{
@@ -104,6 +103,11 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   const onSelectDate = useCallback(
     (date: Date) => {
+      // Clear selection immediately so we never render with old indices and new date's coords
+      setSelectedArrivalLegIndex(null);
+      setSelectedWaypointIndices(null);
+      setFocusedClusterKey(null);
+      setFocusedClusterCoord(null);
       setSelectedDate(date);
       ensureMeetingCountsForDate(date);
     },
@@ -129,6 +133,8 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const fitWhenStable = true;
 
   useEffect(() => {
+    // Don't zoom on empty days – leave map as is and show "No meetings" overlay
+    if (appointments.length === 0) return;
     if (allCoordsForFit.length === 0) return;
     if (!fitWhenStable) return;
     try {
@@ -146,7 +152,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     } catch {
       // ignore
     }
-  }, [allCoordsForFit, fitWhenStable]);
+  }, [appointments.length, allCoordsForFit, fitWhenStable]);
 
   if (Platform.OS === 'web') {
     return (
@@ -200,66 +206,6 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
         <View style={styles.emptyOverlay}>
           <Text style={styles.emptyOverlayText}>Add addresses to see them on the map</Text>
         </View>
-      )}
-      <TouchableOpacity
-        style={styles.detailsButton}
-        onPress={() => setShowDetails((s) => !s)}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.detailsButtonText}>
-          {showDetails ? 'Hide details' : 'Show details'}
-        </Text>
-      </TouchableOpacity>
-      {showDetails && (
-        <ScrollView
-          style={styles.detailsOverlay}
-          contentContainerStyle={styles.detailsOverlayContent}
-        >
-          {showHomeBase && (
-            <View style={[styles.detailsCard, styles.detailsCardHome]}>
-              <View style={[styles.detailsBadge, { backgroundColor: HOME_GREEN }]}>
-                <Text style={styles.detailsBadgeText}>H</Text>
-              </View>
-              <View style={styles.detailsCardContent}>
-                <Text style={styles.detailsCardTitle}>{homeBaseLabel}</Text>
-                <Text style={styles.detailsCardTime}>
-                  Depart by {formatTime(departByMs)} · Return ~{formatTime(returnByMs)}
-                </Text>
-              </View>
-            </View>
-          )}
-          {coords.map((appointment, index) => (
-            <View key={appointment.id} style={styles.detailsCard}>
-              <View
-                style={[
-                  styles.detailsBadge,
-                  { backgroundColor: appointment.status === 'completed' ? '#808080' : MS_BLUE },
-                ]}
-              >
-                <Text style={styles.detailsBadgeText}>{index + 1}</Text>
-              </View>
-              <View style={styles.detailsCardContent}>
-                <Text style={styles.detailsCardTitle}>{appointment.title}</Text>
-                <Text style={styles.detailsCardTime}>
-                  {appointment.time}
-                  {etas[index] != null && ` · ETA ${formatTime(etas[index])}`}
-                </Text>
-                <Text style={styles.detailsCardAddress}>{appointment.location}</Text>
-                <TouchableOpacity
-                  onPress={() =>
-                    openNativeDirections(
-                      appointment.coordinates.latitude,
-                      appointment.coordinates.longitude,
-                      appointment.title
-                    )
-                  }
-                >
-                  <Text style={styles.detailsCardLink}>Open in Maps</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
-        </ScrollView>
       )}
       <MapView
         ref={mapRef}
@@ -378,7 +324,8 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
             )
         )}
         {markerPositions.map(({ index, coordinate, clusterKey, isCluster }) => {
-          const appointment = coords[index]!;
+          const appointment = coords[index];
+          if (!appointment) return null;
           const anyCompleted = appointment.status === 'completed';
           const isLate = legStress[index] === 'late';
           const bgColor = anyCompleted ? '#808080' : isLate ? '#D13438' : MS_BLUE;
@@ -449,7 +396,9 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
             </Marker>
           )}
       </MapView>
-      {selectedWaypointIndices && selectedWaypointIndices.length > 0 && (
+      {selectedWaypointIndices &&
+        selectedWaypointIndices.length > 0 &&
+        selectedWaypointIndices.every((i) => coords[i] != null) && (
         <View style={styles.bottomCardContainer} pointerEvents="box-none">
           <View style={[styles.selectedCalloutCard, styles.bottomCard]}>
             {selectedWaypointIndices.length === 1 ? (
@@ -461,12 +410,13 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
               >
                 {(() => {
                   const idx = selectedWaypointIndices[0]!;
-                  const appt = coords[idx]!;
+                  const appt = coords[idx];
+                  if (!appt) return null;
                   const eta = etas[idx];
                   const duration = meetingDurations[idx];
                   return (
                     <>
-                      <Text style={styles.calloutTitle}>{appt.title}</Text>
+                      <Text style={styles.calloutTitle}>{appt.title ?? 'Meeting'}</Text>
                       {appt.location ? (
                         <Text style={styles.calloutAddress}>{appt.location}</Text>
                       ) : null}
@@ -519,13 +469,14 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                 </Text>
                 <ScrollView style={styles.clusterSheetList} nestedScrollEnabled>
                   {selectedWaypointIndices.map((idx) => {
-                    const appt = coords[idx]!;
+                    const appt = coords[idx];
+                    if (!appt) return null;
                     const apptEta = etas[idx];
                     const duration = meetingDurations[idx];
                     return (
                       <View key={appt.id} style={styles.clusterSheetItem}>
                         <Text style={styles.calloutTitle}>
-                          {idx + 1}. {appt.title}
+                          {idx + 1}. {appt.title ?? 'Meeting'}
                         </Text>
                         {appt.location ? (
                           <Text style={styles.calloutAddress}>{appt.location}</Text>
@@ -844,93 +795,5 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e2e8f0',
-  },
-  detailsButton: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    zIndex: 10,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  detailsButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: MS_BLUE,
-  },
-  detailsOverlay: {
-    position: 'absolute',
-    bottom: 16,
-    left: 16,
-    right: 16,
-    maxHeight: '45%',
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    borderRadius: 12,
-    zIndex: 10,
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-  },
-  detailsOverlayContent: {
-    padding: 12,
-    paddingBottom: 16,
-  },
-  detailsCard: {
-    flexDirection: 'row',
-    padding: 10,
-    marginBottom: 8,
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-  },
-  detailsCardHome: {
-    backgroundColor: 'rgba(16,124,16,0.1)',
-    borderLeftWidth: 4,
-    borderLeftColor: HOME_GREEN,
-  },
-  detailsBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  detailsBadgeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  detailsCardContent: {
-    flex: 1,
-  },
-  detailsCardTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#1a1a1a',
-    marginBottom: 2,
-  },
-  detailsCardTime: {
-    fontSize: 12,
-    color: '#605E5C',
-    marginBottom: 2,
-  },
-  detailsCardAddress: {
-    fontSize: 11,
-    color: '#64748b',
-    marginBottom: 6,
-  },
-  detailsCardLink: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: MS_BLUE,
   },
 });
