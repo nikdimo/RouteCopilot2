@@ -1,4 +1,7 @@
-import "dotenv/config";
+import path from "path";
+import { config as loadEnv } from "dotenv";
+// Load .env from telegram-bot folder so it works when PM2 starts from any cwd
+loadEnv({ path: path.join(__dirname, "..", ".env") });
 import { Bot } from "grammy";
 import { createLLMClient } from "./llm";
 import { TOOL_DEFS, executeTool } from "./tools";
@@ -45,7 +48,10 @@ async function runToolLoop(
     for (const tc of response.toolCalls) {
       try {
         const out = executeTool(tc.name, tc.arguments);
-        results.push({ id: tc.id, content: out.length > 2000 ? out.slice(0, 2000) + "\n… (truncated)" : out });
+        const content = typeof out === "string" && out.length > 0
+          ? (out.length > 2000 ? out.slice(0, 2000) + "\n… (truncated)" : out)
+          : "(command completed with no output)";
+        results.push({ id: tc.id, content });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         results.push({ id: tc.id, content: `Error: ${msg}` });

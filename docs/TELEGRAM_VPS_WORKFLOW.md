@@ -40,3 +40,15 @@ This doc describes how we plan to work on the repo from the VPS using the Telegr
   - **Apple (TestFlight):** Apple ID and app-specific password are configured in EAS (e.g. `eas credentials` or in `eas.json` with `appleId` / `ascAppId`; the password can be in env **EXPO_APPLE_APP_SPECIFIC_PASSWORD**). Those values stay on the VPS (env or EAS-stored credentials), not in the repo.
 
 So in short: **secrets are stored only on the VPS** (and in EAS/Expo’s own storage where applicable): `.env` for the bot and LLM, SSH key or GitHub token for git, and EAS/Apple credentials for builds and TestFlight. Nothing secret is committed to the repo.
+
+---
+
+## VPS bot checklist (is everything good?)
+
+Run these on the VPS (SSH) when the bot misbehaves or to verify setup.
+
+1. **Bot process:** `pm2 list` — wiseplan-bot should be **online**. If not: `pm2 start ~/RouteCopilot2/telegram-bot/dist/index.js --name wiseplan-bot`
+2. **Recent logs:** `pm2 logs wiseplan-bot --lines 80` — look for missing token, LLM 429/503, or tool errors.
+3. **Env vars:** `cd ~/RouteCopilot2/telegram-bot && node -e "require('dotenv').config(); console.log('TOKEN:', !!process.env.TELEGRAM_BOT_TOKEN); console.log('LLM:', !!process.env.GEMINI_API_KEY || !!process.env.OPENAI_API_KEY || !!process.env.ANTHROPIC_API_KEY); console.log('APPLE:', !!process.env.EXPO_APPLE_APP_SPECIFIC_PASSWORD);"` — all should be true.
+4. **Repo:** `cd ~/RouteCopilot2 && git status -sb` — confirms repo and branch state.
+5. **Gemini 429/503:** Free tier often hits limits. In `telegram-bot/.env` set `LLM_PROVIDER=openai` (or `anthropic`) and the matching API key, then `pm2 restart wiseplan-bot`.
