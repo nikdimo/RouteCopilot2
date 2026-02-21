@@ -21,20 +21,24 @@ function parseNumber(s: string, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-/** 15-min slot index 0–95: 0 = 00:00, 95 = 23:45 */
+/** 5-min slot index 0–287: 0 = 00:00, 287 = 23:55 */
+const SLOTS_PER_HOUR = 12; // 60/5
+const MAX_SLOT = 24 * SLOTS_PER_HOUR - 1; // 287
+
 function timeToSlot(time: string): number {
   const m = time.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return 32; // default 08:00
+  if (!m) return 96; // default 08:00
   const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
   const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
-  const slot = h * 4 + Math.round(min / 15);
-  return Math.min(95, Math.max(0, slot));
+  const slot = h * SLOTS_PER_HOUR + Math.round(min / 5);
+  return Math.min(MAX_SLOT, Math.max(0, slot));
 }
 
 function slotToTime(slot: number): string {
-  const s = Math.min(95, Math.max(0, Math.round(slot)));
-  const h = Math.floor(s / 4);
-  const min = (s % 4) * 15;
+  const s = Math.min(MAX_SLOT, Math.max(0, Math.round(slot)));
+  const totalMin = s * 5;
+  const h = Math.floor(totalMin / 60);
+  const min = totalMin % 60;
   return `${h.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
 }
 
@@ -124,7 +128,7 @@ export default function ProfileScreen() {
     const end = slotToTime(endSlot);
     // Ensure start < end; if not, clamp end to start + 1 slot
     const startVal = startSlot;
-    const endVal = endSlot <= startVal ? Math.min(95, startVal + 1) : endSlot;
+    const endVal = endSlot <= startVal ? Math.min(MAX_SLOT, startVal + 1) : endSlot;
     updatePreferences({
       workingHours: { start: slotToTime(startVal), end: slotToTime(endVal) },
     });
@@ -351,7 +355,7 @@ export default function ProfileScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Working Hours</Text>
-        <Text style={styles.hint}>No travel or meeting can extend beyond end time. Steps in 15-minute intervals.</Text>
+        <Text style={styles.hint}>No travel or meeting can extend beyond end time. Steps in 5-minute intervals.</Text>
         <View style={styles.workingHoursSliders}>
           <View style={styles.sliderBlock}>
             <Text style={styles.sliderLabel}>Start</Text>
@@ -359,7 +363,7 @@ export default function ProfileScreen() {
             <Slider
               style={styles.slider}
               minimumValue={0}
-              maximumValue={95}
+              maximumValue={MAX_SLOT}
               step={1}
               value={workStartSlot}
               onValueChange={(v) => {
@@ -378,7 +382,7 @@ export default function ProfileScreen() {
             <Slider
               style={styles.slider}
               minimumValue={0}
-              maximumValue={95}
+              maximumValue={MAX_SLOT}
               step={1}
               value={workEndSlot}
               onValueChange={(v) => {

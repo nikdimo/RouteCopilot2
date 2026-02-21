@@ -13,6 +13,14 @@ if "%MSG%"=="" set MSG=Deploy %date% %time%
 REM --- Optional: load SSH key from Windows Credential Manager (no passphrase prompt) ---
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Load-VpsSshKey.ps1" 2>nul
 
+REM --- Check SSH key exists ---
+if not exist "%KEY%" (
+    echo SSH key not found: %KEY%
+    echo Create the key or fix the path in this script. For deploy you need this key on the VPS in ~/.ssh/authorized_keys.
+    pause
+    exit /b 1
+)
+
 REM --- 1. Git: add, commit, push ---
 where git >nul 2>nul
 if errorlevel 1 (
@@ -42,7 +50,9 @@ echo.
 echo [2/4] Pulling on VPS...
 ssh -i "%KEY%" -o BatchMode=yes -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin master"
 if errorlevel 1 (
-    echo SSH pull failed. Check key / network.
+    echo SSH pull failed. Key: %KEY%
+    echo If the key has a passphrase, store it in Credential Manager as RouteCopilot2_VPS_SSH and install CredentialManager module.
+    echo Or run Pull_2_VPS.bat alone to test SSH; ensure the key is in the VPS user's ~/.ssh/authorized_keys.
     pause
     exit /b 1
 )
