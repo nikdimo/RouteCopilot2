@@ -13,12 +13,21 @@ if errorlevel 1 (
 
 echo Uploading to VPS...
 scp -r -i "%KEY%" vps-landing\app\* %HOST%:~/app-deploy/
+if errorlevel 1 (
+  echo SCP failed.
+  pause
+  exit /b 1
+)
+
+echo Updating live site on VPS...
+ssh -i "%KEY%" %HOST% "sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ && rm -rf ~/app-deploy"
+if errorlevel 1 (
+  echo VPS copy failed. Run on VPS: sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ ^&^& rm -r ~/app-deploy
+  pause
+  exit /b 1
+)
 
 echo.
-echo === On the VPS run these commands to update the live site ===
-echo   sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/
-echo   rm -r ~/app-deploy
-echo.
-echo Or SSH in and run them:  ssh -i "%KEY%" %HOST%
+echo === Done. Live site updated. ===
 echo.
 pause
