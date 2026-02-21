@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Switch } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { useAuth } from '../context/AuthContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import LocationSearch, { type LocationSelection } from '../components/LocationSearch';
@@ -14,18 +15,27 @@ import {
 } from '../utils/geocoding';
 import { DEFAULT_WORKING_DAYS, DEFAULT_HOME_BASE, type WorkingDays } from '../types';
 
-function parseTime(s: string): string {
-  const m = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return s;
-  const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
-  const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
-  return `${h.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
-}
-
 function parseNumber(s: string, min: number, max: number): number {
   const n = parseInt(s, 10);
   if (isNaN(n)) return min;
   return Math.min(max, Math.max(min, n));
+}
+
+/** 15-min slot index 0–95: 0 = 00:00, 95 = 23:45 */
+function timeToSlot(time: string): number {
+  const m = time.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return 32; // default 08:00
+  const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+  const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+  const slot = h * 4 + Math.round(min / 15);
+  return Math.min(95, Math.max(0, slot));
+}
+
+function slotToTime(slot: number): string {
+  const s = Math.min(95, Math.max(0, Math.round(slot)));
+  const h = Math.floor(s / 4);
+  const min = (s % 4) * 15;
+  return `${h.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
 }
 
 export default function ProfileScreen() {
@@ -33,9 +43,15 @@ export default function ProfileScreen() {
   const { preferences, updatePreferences } = useUserPreferences();
   const [preBuffer, setPreBuffer] = useState((preferences.preMeetingBuffer ?? 15).toString());
   const [postBuffer, setPostBuffer] = useState((preferences.postMeetingBuffer ?? 15).toString());
-  const [distanceThreshold, setDistanceThreshold] = useState((preferences.distanceThresholdKm ?? 30).toString());
-  const [workStart, setWorkStart] = useState(preferences.workingHours?.start ?? '08:00');
-  const [workEnd, setWorkEnd] = useState(preferences.workingHours?.end ?? '17:00');
+  const [distanceThreshold, setDistanceThreshold] = useState(() =>
+    Math.round((Math.min(100, Math.max(0, preferences.distanceThresholdKm ?? 30)) / 10)) * 10
+  );
+  const [workStartSlot, setWorkStartSlot] = useState(() =>
+    timeToSlot(preferences.workingHours?.start ?? '08:00')
+  );
+  const [workEndSlot, setWorkEndSlot] = useState(() =>
+    timeToSlot(preferences.workingHours?.end ?? '17:00')
+  );
   const [googleApiKeyInput, setGoogleApiKeyInput] = useState(preferences.googleMapsApiKey ?? '');
   const workingDays = preferences.workingDays ?? DEFAULT_WORKING_DAYS;
   const useGoogle = preferences.useGoogleGeocoding === true;
@@ -73,41 +89,47 @@ export default function ProfileScreen() {
   };
 
   useEffect(() => {
-    setPreBuffer((preferences.preMeetingBuffer ?? 15).toString());
-    setPostBuffer((preferences.postMeetingBuffer ?? 15).toString());
-    setDistanceThreshold((preferences.distanceThresholdKm ?? 30).toString());
-    setWorkStart(preferences.workingHours.start);
-    setWorkEnd(preferences.workingHours.end);
+    const pre = Math.round((preferences.preMeetingBuffer ?? 15) / 5) * 5;
+    const post = Math.round((preferences.postMeetingBuffer ?? 15) / 5) * 5;
+    setPreBuffer(pre.toString());
+    setPostBuffer(post.toString());
+    setDistanceThreshold(
+      Math.round((Math.min(100, Math.max(0, preferences.distanceThresholdKm ?? 30)) / 10)) * 10
+    );
+    setWorkStartSlot(timeToSlot(preferences.workingHours?.start ?? '08:00'));
+    setWorkEndSlot(timeToSlot(preferences.workingHours?.end ?? '17:00'));
     setGoogleApiKeyInput(preferences.googleMapsApiKey ?? '');
   }, [preferences]);
 
   const savePreBuffer = () => {
-    const n = parseNumber(preBuffer, 0, 60);
+    const n = Math.round(parseNumber(preBuffer, 0, 60) / 5) * 5;
     updatePreferences({ preMeetingBuffer: n });
     setPreBuffer(n.toString());
   };
 
   const savePostBuffer = () => {
-    const n = parseNumber(postBuffer, 0, 60);
+    const n = Math.round(parseNumber(postBuffer, 0, 60) / 5) * 5;
     updatePreferences({ postMeetingBuffer: n });
     setPostBuffer(n.toString());
   };
 
-  const saveDistanceThreshold = () => {
-    const n = parseNumber(distanceThreshold, 5, 300);
+  const saveDistanceThreshold = (value: number) => {
+    const n = Math.round(Math.min(100, Math.max(0, value)) / 10) * 10;
     updatePreferences({ distanceThresholdKm: n });
-    setDistanceThreshold(n.toString());
+    setDistanceThreshold(n);
   };
 
-  const saveWorkingHours = () => {
+  const saveWorkingHours = (startSlot: number, endSlot: number) => {
+    const start = slotToTime(startSlot);
+    const end = slotToTime(endSlot);
+    // Ensure start < end; if not, clamp end to start + 1 slot
+    const startVal = startSlot;
+    const endVal = endSlot <= startVal ? Math.min(95, startVal + 1) : endSlot;
     updatePreferences({
-      workingHours: {
-        start: parseTime(workStart),
-        end: parseTime(workEnd),
-      },
+      workingHours: { start: slotToTime(startVal), end: slotToTime(endVal) },
     });
-    setWorkStart(parseTime(workStart));
-    setWorkEnd(parseTime(workEnd));
+    setWorkStartSlot(startVal);
+    setWorkEndSlot(endVal);
   };
 
   const toggleWorkingDay = (dayIndex: number) => {
@@ -250,51 +272,63 @@ export default function ProfileScreen() {
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Pre-Meeting Buffer</Text>
         <Text style={styles.hint}>Minutes reserved before a meeting start (parking, check-in).</Text>
-        <View style={styles.row}>
-          <TextInput
-            style={styles.input}
-            value={preBuffer}
-            onChangeText={setPreBuffer}
-            onBlur={savePreBuffer}
-            keyboardType="number-pad"
-            placeholder="15"
-            placeholderTextColor="#94a3b8"
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderValue}>{parseInt(preBuffer, 10) || 0} min</Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={60}
+            step={5}
+            value={Math.round((parseInt(preBuffer, 10) || 0) / 5) * 5}
+            onValueChange={(v) => setPreBuffer(String(Math.round(v / 5) * 5))}
+            onSlidingComplete={() => savePreBuffer()}
+            minimumTrackTintColor="#0078D4"
+            maximumTrackTintColor="#E1DFDD"
+            thumbTintColor="#0078D4"
           />
-          <Text style={styles.unit}>min</Text>
         </View>
       </View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Post-Meeting Buffer</Text>
         <Text style={styles.hint}>Minutes reserved after a meeting end (overrun, wrap-up).</Text>
-        <View style={styles.row}>
-          <TextInput
-            style={styles.input}
-            value={postBuffer}
-            onChangeText={setPostBuffer}
-            onBlur={savePostBuffer}
-            keyboardType="number-pad"
-            placeholder="15"
-            placeholderTextColor="#94a3b8"
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderValue}>{parseInt(postBuffer, 10) || 0} min</Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={60}
+            step={5}
+            value={Math.round((parseInt(postBuffer, 10) || 0) / 5) * 5}
+            onValueChange={(v) => setPostBuffer(String(Math.round(v / 5) * 5))}
+            onSlidingComplete={() => savePostBuffer()}
+            minimumTrackTintColor="#0078D4"
+            maximumTrackTintColor="#E1DFDD"
+            thumbTintColor="#0078D4"
           />
-          <Text style={styles.unit}>min</Text>
         </View>
       </View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Max Detour Distance</Text>
         <Text style={styles.hint}>Same-day slot skipped when detour &gt; threshold km; empty day suggested instead.</Text>
-        <View style={styles.row}>
-          <TextInput
-            style={styles.input}
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderValue}>{distanceThreshold} km</Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={100}
+            step={10}
             value={distanceThreshold}
-            onChangeText={setDistanceThreshold}
-            onBlur={saveDistanceThreshold}
-            keyboardType="number-pad"
-            placeholder="30"
-            placeholderTextColor="#94a3b8"
+            onValueChange={(v) => {
+              const n = Math.round(v / 10) * 10;
+              setDistanceThreshold(n);
+              saveDistanceThreshold(n);
+            }}
+            minimumTrackTintColor="#0078D4"
+            maximumTrackTintColor="#E1DFDD"
+            thumbTintColor="#0078D4"
           />
-          <Text style={styles.unit}>km</Text>
         </View>
       </View>
 
@@ -317,25 +351,46 @@ export default function ProfileScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Working Hours</Text>
-        <Text style={styles.hint}>No travel or meeting can extend beyond end time.</Text>
-        <View style={styles.row}>
-          <TextInput
-            style={[styles.input, styles.timeInput]}
-            value={workStart}
-            onChangeText={setWorkStart}
-            onBlur={saveWorkingHours}
-            placeholder="08:00"
-            placeholderTextColor="#94a3b8"
-          />
-          <Text style={styles.dash}>–</Text>
-          <TextInput
-            style={[styles.input, styles.timeInput]}
-            value={workEnd}
-            onChangeText={setWorkEnd}
-            onBlur={saveWorkingHours}
-            placeholder="17:00"
-            placeholderTextColor="#94a3b8"
-          />
+        <Text style={styles.hint}>No travel or meeting can extend beyond end time. Steps in 15-minute intervals.</Text>
+        <View style={styles.workingHoursSliders}>
+          <View style={styles.sliderBlock}>
+            <Text style={styles.sliderLabel}>Start</Text>
+            <Text style={styles.sliderValue}>{slotToTime(workStartSlot)}</Text>
+            <Slider
+              style={styles.slider}
+              minimumValue={0}
+              maximumValue={95}
+              step={1}
+              value={workStartSlot}
+              onValueChange={(v) => {
+                const s = Math.round(v);
+                setWorkStartSlot(s);
+                saveWorkingHours(s, workEndSlot);
+              }}
+              minimumTrackTintColor="#0078D4"
+              maximumTrackTintColor="#E1DFDD"
+              thumbTintColor="#0078D4"
+            />
+          </View>
+          <View style={styles.sliderBlock}>
+            <Text style={styles.sliderLabel}>End</Text>
+            <Text style={styles.sliderValue}>{slotToTime(workEndSlot)}</Text>
+            <Slider
+              style={styles.slider}
+              minimumValue={0}
+              maximumValue={95}
+              step={1}
+              value={workEndSlot}
+              onValueChange={(v) => {
+                const s = Math.round(v);
+                setWorkEndSlot(s);
+                saveWorkingHours(workStartSlot, s);
+              }}
+              minimumTrackTintColor="#0078D4"
+              maximumTrackTintColor="#E1DFDD"
+              thumbTintColor="#0078D4"
+            />
+          </View>
         </View>
       </View>
 
@@ -402,6 +457,31 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  sliderRow: {
+    marginTop: 4,
+  },
+  sliderValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 4,
+  },
+  slider: {
+    width: '100%',
+    height: 32,
+  },
+  workingHoursSliders: {
+    marginTop: 8,
+    gap: 16,
+  },
+  sliderBlock: {
+    marginBottom: 8,
+  },
+  sliderLabel: {
+    fontSize: 13,
+    color: '#605E5C',
+    marginBottom: 2,
   },
   rowMargin: {
     marginTop: 8,

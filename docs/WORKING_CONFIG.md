@@ -148,6 +148,17 @@ git pull origin master
 ```
 **Note:** Pulling only updates the source. The live site is served from `/var/www/wiseplan-test/app/`. To update the live web app you must **build on PC** and **deploy** (steps 1–2 above), or use `Deploy_Web_2_VPS.bat` (see below).
 
+### One-click deploy: `Deploy_All.bat`
+
+Runs in order: push to Git (with default or custom commit message) → pull on VPS → build web app → upload to VPS → copy to live site. No manual steps if set up once:
+
+1. **SSH key** – Use a key without passphrase, or store the passphrase in Windows Credential Manager so the script can load it:
+   - PowerShell once: `Install-Module CredentialManager -Scope CurrentUser`
+   - Control Panel → Credential Manager → Windows Credentials → Add generic credential: address **RouteCopilot2_VPS_SSH**, user (any), password = your SSH key passphrase.
+2. **VPS sudo** – The script runs `sudo cp ...` on the VPS over SSH. For no password prompt, configure passwordless sudo for that copy (e.g. a small deploy script on the VPS with NOPASSWD in sudoers).
+
+Usage: `Deploy_All.bat` (commit message = "Deploy date time") or `Deploy_All.bat "Your message"`.
+
 ---
 
 ## Troubleshooting
