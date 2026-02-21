@@ -394,11 +394,17 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   const onSelectDate = useCallback(
     (date: Date) => {
+      clearSelection();
       setSelectedDate(date);
       ensureMeetingCountsForDate(date);
     },
-    [setSelectedDate, ensureMeetingCountsForDate]
+    [clearSelection, setSelectedDate, ensureMeetingCountsForDate]
   );
+
+  // Clear selection whenever the displayed date changes (e.g. from DaySlider or from another tab)
+  useEffect(() => {
+    clearSelection();
+  }, [ctxSelectedDate, clearSelection]);
 
   useLayoutEffect(() => {
     if (embeddedInSchedule) return;
@@ -652,17 +658,20 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           )}
         </MapContainer>
       </div>
-      {selectedWaypointIndices && selectedWaypointIndices.length > 0 && (
+      {selectedWaypointIndices &&
+        selectedWaypointIndices.length > 0 &&
+        selectedWaypointIndices.every((i) => coords[i] != null) && (
         <View style={styles.bottomCardContainer} pointerEvents="box-none">
           <View style={[styles.bottomCard]}>
             {selectedWaypointIndices.length === 1 ? (
               (() => {
                 const idx = selectedWaypointIndices[0]!;
-                const appt = coords[idx]!;
+                const appt = coords[idx];
+                if (!appt) return null;
                 const eta = etas[idx];
                 return (
                   <>
-                    <Text style={styles.bottomCardTitle}>{appt.title}</Text>
+                    <Text style={styles.bottomCardTitle}>{appt.title ?? 'Meeting'}</Text>
                     {appt.location ? (
                       <Text style={styles.bottomCardAddress}>{appt.location}</Text>
                     ) : null}
@@ -706,11 +715,12 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                 </Text>
                 <ScrollView style={styles.bottomCardScroll}>
                   {selectedWaypointIndices.map((idx) => {
-                    const appt = coords[idx]!;
+                    const appt = coords[idx];
+                    if (!appt) return null;
                     const apptEta = etas[idx];
                     return (
                       <View key={appt.id} style={styles.bottomCardItem}>
-                        <Text style={styles.bottomCardTitle}>{idx + 1}. {appt.title}</Text>
+                        <Text style={styles.bottomCardTitle}>{idx + 1}. {appt.title ?? 'Meeting'}</Text>
                         {appt.location ? (
                           <Text style={styles.bottomCardAddress}>{appt.location}</Text>
                         ) : null}

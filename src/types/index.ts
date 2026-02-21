@@ -26,6 +26,10 @@ export type UserPreferences = {
   workingDays?: WorkingDays;
   /** Max same-day detour km (default 30). Same-day slots with detour > threshold are excluded; empty day suggested instead. */
   distanceThresholdKm?: number;
+  /** Use Google Places/Geocoding API for address search instead of free OpenStreetMap (Nominatim). Requires googleMapsApiKey. */
+  useGoogleGeocoding?: boolean;
+  /** Google Cloud API key with Places API and Geocoding API enabled. Only used when useGoogleGeocoding is true. */
+  googleMapsApiKey?: string;
 };
 
 /** Default Mon–Fri enabled, Sat–Sun disabled (matches Date.getDay() 0=Sun..6=Sat) */

@@ -12,8 +12,10 @@ export type GeocodeResult =
 
 export type AddressSuggestion = {
   displayName: string;
-  lat: number;
-  lon: number;
+  /** When using Google Places, suggestions may have placeId and no coords; resolve via getCoordsForPlaceId on select. */
+  lat?: number;
+  lon?: number;
+  placeId?: string;
 };
 
 export type PhysicalAddressParts = {
@@ -248,9 +250,194 @@ export async function getAddressSuggestions(query: string): Promise<AddressSugge
         lat: parseFloat(item.lat!),
         lon: parseFloat(item.lon!),
       }))
-      .filter((s) => !Number.isNaN(s.lat) && !Number.isNaN(s.lon));
+      .filter((s) => s.lat != null && s.lon != null && !Number.isNaN(s.lat) && !Number.isNaN(s.lon));
 
     return { success: true, suggestions };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+// --- Google Places & Geocoding API (optional, requires API key) ---
+
+const PLACES_AUTOCOMPLETE_URL = 'https://places.googleapis.com/v1/places:autocomplete';
+const PLACES_DETAILS_URL = 'https://places.googleapis.com/v1/places';
+const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
+
+// Default bias: Copenhagen area (API allows max 50,000 m radius)
+const DEFAULT_LOCATION_BIAS = {
+  circle: {
+    center: { latitude: 55.6761, longitude: 12.5683 },
+    radius: 50_000, // 50 km max per API; biases results toward Copenhagen
+  },
+};
+
+/**
+ * Get address suggestions from Google Places Autocomplete (New).
+ * Returns suggestions with placeId and displayName; use getCoordsForPlaceId when user selects.
+ */
+export async function getAddressSuggestionsGoogle(
+  query: string,
+  apiKey: string
+): Promise<AddressSuggestResult> {
+  const trimmed = query.trim();
+  if (trimmed.length < 2) {
+    return { success: true, suggestions: [] };
+  }
+
+  try {
+    const body = {
+      input: trimmed,
+      locationBias: DEFAULT_LOCATION_BIAS,
+      regionCode: 'dk', // Prefer Denmark for formatting and relevance
+    };
+
+    const res = await fetch(PLACES_AUTOCOMPLETE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const errText = await res.text();
+    if (!res.ok) {
+      const short = errText.slice(0, 200);
+      if (res.status === 403) {
+        return {
+          success: false,
+          error: `Access denied (403). Enable "Places API (New)" in Google Cloud and ensure billing is on. ${short}`,
+        };
+      }
+      return { success: false, error: `Places API: ${res.status} ${short}` };
+    }
+
+    let data: { suggestions?: Array<{ placePrediction?: { placeId?: string; text?: { text?: string } } }> };
+    try {
+      data = JSON.parse(errText);
+    } catch {
+      return { success: false, error: 'Invalid response from Places API' };
+    }
+
+    const suggestions: AddressSuggestion[] = (data.suggestions ?? [])
+      .map((s) => {
+        const pred = s.placePrediction;
+        if (!pred?.placeId) return null;
+        return {
+          displayName: pred.text?.text ?? '',
+          placeId: pred.placeId,
+        };
+      })
+      .filter((s): s is AddressSuggestion => s !== null && !!s.displayName)
+      .slice(0, 5);
+
+    return { success: true, suggestions };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+/**
+ * Get latitude/longitude for a Google Place ID (Place Details with location field).
+ */
+export async function getCoordsForPlaceId(
+  placeId: string,
+  apiKey: string
+): Promise<{ success: true; lat: number; lon: number } | { success: false; error: string }> {
+  try {
+    const url = `${PLACES_DETAILS_URL}/${encodeURIComponent(placeId)}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'location',
+      },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `Place Details: ${res.status} ${errText.slice(0, 200)}` };
+    }
+
+    const data = (await res.json()) as {
+      location?: { latitude?: number; longitude?: number };
+    };
+
+    const lat = data.location?.latitude;
+    const lon = data.location?.longitude;
+    if (typeof lat !== 'number' || typeof lon !== 'number') {
+      return { success: false, error: 'Place has no location' };
+    }
+
+    return { success: true, lat, lon };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+/**
+ * Geocode an address using Google Geocoding API.
+ */
+export async function geocodeAddressGoogle(
+  address: string,
+  apiKey: string
+): Promise<GeocodeResult> {
+  const trimmed = normalizeForGeocode(address);
+  if (!trimmed) {
+    return { success: false, error: 'Address is empty' };
+  }
+
+  const cached = await getCached(trimmed);
+  if (cached) {
+    return { success: true, lat: cached.lat, lon: cached.lon, fromCache: true };
+  }
+
+  try {
+    const params = new URLSearchParams({ address: trimmed, key: apiKey });
+    const res = await fetch(`${GEOCODE_URL}?${params.toString()}`);
+
+    if (!res.ok) {
+      return { success: false, error: `Geocoding failed: ${res.status}` };
+    }
+
+    const data = (await res.json()) as {
+      status?: string;
+      results?: Array<{
+        geometry?: { location?: { lat?: number; lng?: number } };
+        formatted_address?: string;
+      }>;
+    };
+
+    if (data.status !== 'OK' || !Array.isArray(data.results) || data.results.length === 0) {
+      return { success: false, error: data.status === 'ZERO_RESULTS' ? 'Address not found' : (data.status ?? 'Unknown error') };
+    }
+
+    const loc = data.results[0]?.geometry?.location;
+    const lat = typeof loc?.lat === 'number' ? loc.lat : undefined;
+    const lon = typeof loc?.lng === 'number' ? loc.lng : undefined;
+
+    if (lat == null || lon == null) {
+      return { success: false, error: 'Invalid geocode result' };
+    }
+
+    await setCached(trimmed, lat, lon);
+    return {
+      success: true,
+      lat,
+      lon,
+      displayName: data.results[0]?.formatted_address,
+      fromCache: false,
+    };
   } catch (err) {
     return {
       success: false,

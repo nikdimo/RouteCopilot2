@@ -1,10 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Switch } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import LocationSearch, { type LocationSelection } from '../components/LocationSearch';
 import { searchContacts } from '../services/graph';
-import { geocodeAddress, geocodeContactAddress, getAddressSuggestions } from '../utils/geocoding';
+import {
+  geocodeAddress,
+  geocodeContactAddress,
+  getAddressSuggestions,
+  getAddressSuggestionsGoogle,
+  getCoordsForPlaceId,
+  geocodeAddressGoogle,
+} from '../utils/geocoding';
 import { DEFAULT_WORKING_DAYS, DEFAULT_HOME_BASE, type WorkingDays } from '../types';
 
 function parseTime(s: string): string {
@@ -29,7 +36,11 @@ export default function ProfileScreen() {
   const [distanceThreshold, setDistanceThreshold] = useState((preferences.distanceThresholdKm ?? 30).toString());
   const [workStart, setWorkStart] = useState(preferences.workingHours?.start ?? '08:00');
   const [workEnd, setWorkEnd] = useState(preferences.workingHours?.end ?? '17:00');
+  const [googleApiKeyInput, setGoogleApiKeyInput] = useState(preferences.googleMapsApiKey ?? '');
   const workingDays = preferences.workingDays ?? DEFAULT_WORKING_DAYS;
+  const useGoogle = preferences.useGoogleGeocoding === true;
+  const googleApiKey = (preferences.googleMapsApiKey ?? '').trim();
+  const useGoogleWithKey = useGoogle && googleApiKey.length > 0;
 
   const token = userToken ?? null;
 
@@ -67,6 +78,7 @@ export default function ProfileScreen() {
     setDistanceThreshold((preferences.distanceThresholdKm ?? 30).toString());
     setWorkStart(preferences.workingHours.start);
     setWorkEnd(preferences.workingHours.end);
+    setGoogleApiKeyInput(preferences.googleMapsApiKey ?? '');
   }, [preferences]);
 
   const savePreBuffer = () => {
@@ -130,6 +142,14 @@ export default function ProfileScreen() {
             };
           }}
           getAddressSuggestions={async (q) => {
+            if (useGoogleWithKey) {
+              const r = await getAddressSuggestionsGoogle(q, googleApiKey);
+              return {
+                success: r.success,
+                suggestions: r.success ? r.suggestions : undefined,
+                error: !r.success ? r.error : undefined,
+              };
+            }
             const r = await getAddressSuggestions(q);
             return {
               success: r.success,
@@ -138,6 +158,16 @@ export default function ProfileScreen() {
             };
           }}
           geocodeAddress={async (addr) => {
+            if (useGoogleWithKey) {
+              const r = await geocodeAddressGoogle(addr, googleApiKey);
+              return {
+                success: r.success,
+                lat: r.success ? r.lat : undefined,
+                lon: r.success ? r.lon : undefined,
+                fromCache: r.success ? r.fromCache : undefined,
+                error: !r.success ? r.error : undefined,
+              };
+            }
             const r = await geocodeAddress(addr);
             return {
               success: r.success,
@@ -147,7 +177,25 @@ export default function ProfileScreen() {
               error: !r.success ? r.error : undefined,
             };
           }}
+          getCoordsForPlaceId={
+            useGoogleWithKey
+              ? async (placeId) => {
+                  const r = await getCoordsForPlaceId(placeId, googleApiKey);
+                  return r.success ? { lat: r.lat, lon: r.lon } : { error: r.error };
+                }
+              : undefined
+          }
           geocodeContactAddress={async (addr, parts) => {
+            if (useGoogleWithKey) {
+              const r = await geocodeAddressGoogle(addr, googleApiKey);
+              return {
+                success: r.success,
+                lat: r.success ? r.lat : undefined,
+                lon: r.success ? r.lon : undefined,
+                fromCache: r.success ? r.fromCache : undefined,
+                error: !r.success ? r.error : undefined,
+              };
+            }
             const r = await geocodeContactAddress(addr, parts);
             return {
               success: r.success,
@@ -161,6 +209,42 @@ export default function ProfileScreen() {
           onSelectionChange={handleHomeBaseChange}
           placeholder="Search contacts or address (e.g. Copenhagen, Office)"
         />
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Use Google for address search</Text>
+        <Text style={styles.hint}>
+          {useGoogle
+            ? 'When on, address search (above and when adding meetings) uses Google Places and Geocoding APIs. You need a Google Cloud API key with Places API (New) and Geocoding API enabled. Google gives more accurate suggestions and geocoding; the free option uses OpenStreetMap (Nominatim) and requires no key.'
+            : 'When off, address search uses the free OpenStreetMap (Nominatim) service—no API key needed. Turn on to use Google instead for more accurate suggestions and geocoding (requires a Google API key below).'}
+        </Text>
+        <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>{useGoogle ? 'On (Google)' : 'Off (free OSM)'}</Text>
+          <Switch
+            value={useGoogle}
+            onValueChange={(value) => updatePreferences({ useGoogleGeocoding: value })}
+            trackColor={{ false: '#E1DFDD', true: '#0078D4' }}
+            thumbColor="#fff"
+          />
+        </View>
+        {useGoogle && (
+          <>
+            <Text style={[styles.hint, styles.apiKeyHint]}>
+              Create a key in Google Cloud Console: APIs & Services → Credentials → Create credentials → API key. Enable “Places API (New)” and “Geocoding API” for the key Billing must be enabled on the project (free tier available). If suggestions don't appear, check the error under the search field.
+            </Text>
+            <TextInput
+              style={[styles.input, styles.fullInput]}
+              value={googleApiKeyInput}
+              onChangeText={setGoogleApiKeyInput}
+              onBlur={() => updatePreferences({ googleMapsApiKey: googleApiKeyInput.trim() })}
+              placeholder="Paste your Google API key here"
+              placeholderTextColor="#94a3b8"
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry={false}
+            />
+          </>
+        )}
       </View>
 
       <View style={styles.card}>
@@ -346,6 +430,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#605E5C',
     marginHorizontal: 10,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginVertical: 8,
+  },
+  toggleLabel: {
+    fontSize: 15,
+    color: '#1a1a1a',
+    fontWeight: '500',
+  },
+  apiKeyHint: {
+    marginTop: 4,
+    marginBottom: 8,
   },
   workingDaysRow: {
     flexDirection: 'row',

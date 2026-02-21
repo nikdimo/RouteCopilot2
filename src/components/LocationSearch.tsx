@@ -43,6 +43,8 @@ export type LocationSearchProps = {
     fromCache?: boolean;
     error?: string;
   }>;
+  /** When using Google Places, resolve placeId to lat/lon when user selects a suggestion that has placeId but no coords. */
+  getCoordsForPlaceId?: (placeId: string) => Promise<{ lat: number; lon: number } | { error: string }>;
   /** Optional: geocode contact address with fallback (uses address parts for progressive tries) */
   geocodeContactAddress?: (
     formattedAddress: string,
@@ -68,6 +70,7 @@ export default function LocationSearch({
   getAddressSuggestions,
   geocodeAddress,
   geocodeContactAddress,
+  getCoordsForPlaceId,
   selection,
   onSelectionChange,
   onGraphError,
@@ -79,12 +82,14 @@ export default function LocationSearch({
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
+  const [addressError, setAddressError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestIdRef = useRef(0);
   const selectingRef = useRef(false);
   const geocodeCacheRef = useRef<Map<string, { lat: number; lon: number }>>(new Map());
   const cancelSelectRef = useRef(false);
   const [resolvingContact, setResolvingContact] = useState<ContactSearchResult | null>(null);
+  const [resolvingPlaceId, setResolvingPlaceId] = useState(false);
 
   const propsRef = useRef({
     token,
@@ -92,6 +97,7 @@ export default function LocationSearch({
     getAddressSuggestions,
     geocodeAddress,
     geocodeContactAddress,
+    getCoordsForPlaceId,
     onGraphError,
     onDebug,
     onSelectionChange,
@@ -102,6 +108,7 @@ export default function LocationSearch({
     getAddressSuggestions,
     geocodeAddress,
     geocodeContactAddress,
+    getCoordsForPlaceId,
     onGraphError,
     onDebug,
     onSelectionChange,
@@ -113,6 +120,7 @@ export default function LocationSearch({
     const id = ++requestIdRef.current;
     setLoading(true);
     setGraphError(null);
+    setAddressError(null);
 
     const [contactsResult, addrResult] = await Promise.all([
       t ? sc(t, trimmed) : Promise.resolve({ success: false, contacts: [], error: 'Not signed in' }),
@@ -131,6 +139,7 @@ export default function LocationSearch({
     const contactList = contactsResult.success ? contactsResult.contacts ?? [] : [];
     setContacts(contactList);
     setAddressSuggestions(addrResult.success ? addrResult.suggestions ?? [] : []);
+    setAddressError(addrResult.success ? null : addrResult.error ?? null);
     setLoading(false);
 
     if (contactList.length > 0 && propsRef.current.geocodeContactAddress) {
@@ -159,6 +168,7 @@ export default function LocationSearch({
       setAddressSuggestions([]);
       setLoading(false);
       setGraphError(null);
+      setAddressError(null);
       return;
     }
     debounceRef.current = setTimeout(() => runSearch(query), DEBOUNCE_MS);
@@ -225,23 +235,51 @@ export default function LocationSearch({
     }
   }, []);
 
-  const handleSelectAddress = useCallback((suggestion: AddressSuggestion) => {
+  const handleSelectAddress = useCallback(async (suggestion: AddressSuggestion) => {
     if (selectingRef.current) return;
     selectingRef.current = true;
-    propsRef.current.onSelectionChange({
-      type: 'address',
-      address: suggestion.displayName,
-      coords: { lat: suggestion.lat, lon: suggestion.lon },
-    });
     setContacts([]);
     setAddressSuggestions([]);
     setQuery('');
     Keyboard.dismiss();
 
+    let lat = suggestion.lat;
+    let lon = suggestion.lon;
+
+    if ((lat == null || lon == null) && suggestion.placeId && propsRef.current.getCoordsForPlaceId) {
+      setResolvingPlaceId(true);
+      try {
+        const result = await propsRef.current.getCoordsForPlaceId(suggestion.placeId);
+        if (result && 'lat' in result && 'lon' in result) {
+          lat = result.lat;
+          lon = result.lon;
+        } else {
+          propsRef.current.onGraphError?.((result as { error: string }).error ?? 'Could not get location');
+          selectingRef.current = false;
+          setResolvingPlaceId(false);
+          return;
+        }
+      } finally {
+        setResolvingPlaceId(false);
+      }
+    }
+
+    if (lat == null || lon == null) {
+      propsRef.current.onGraphError?.('Missing coordinates for this suggestion');
+      selectingRef.current = false;
+      return;
+    }
+
+    propsRef.current.onSelectionChange({
+      type: 'address',
+      address: suggestion.displayName,
+      coords: { lat, lon },
+    });
+
     propsRef.current.onDebug?.({
       selectedAddress: suggestion.displayName,
-      geocodeResult: `${suggestion.lat}, ${suggestion.lon}`,
-      geocodeSource: 'nominatim_suggestion',
+      geocodeResult: `${lat}, ${lon}`,
+      geocodeSource: suggestion.placeId ? 'google_place' : 'nominatim_suggestion',
     });
     selectingRef.current = false;
   }, []);
@@ -254,12 +292,15 @@ export default function LocationSearch({
     setContacts([]);
     setAddressSuggestions([]);
     setGraphError(null);
+    setAddressError(null);
   };
 
   const hasSelection = selection.type !== 'none';
   const displayValue = resolvingContact
     ? `${resolvingContact.displayName} · Resolving…`
-    : hasSelection
+    : resolvingPlaceId
+      ? 'Resolving location…'
+      : hasSelection
       ? selection.type === 'contact'
         ? selection.contact.displayName + (selection.contact.formattedAddress ? ` · ${selection.contact.formattedAddress}` : '')
         : selection.address
@@ -283,7 +324,7 @@ export default function LocationSearch({
           autoCorrect={false}
           editable={true}
         />
-        {(hasSelection || resolvingContact) && (
+        {(hasSelection || resolvingContact || resolvingPlaceId) && (
           <TouchableOpacity
             style={styles.clearBtn}
             onPress={handleClear}
@@ -296,6 +337,10 @@ export default function LocationSearch({
 
       {graphError && (
         <Text style={styles.errorText}>{graphError}</Text>
+      )}
+
+      {addressError && (
+        <Text style={styles.errorText}>Address search: {addressError}</Text>
       )}
 
       {loading && query.trim() && !showDropdown && (

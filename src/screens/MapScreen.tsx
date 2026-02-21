@@ -114,6 +114,14 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     [setSelectedDate, ensureMeetingCountsForDate]
   );
 
+  // Clear selection whenever the displayed date changes (e.g. from DaySlider or from another tab)
+  useEffect(() => {
+    setSelectedArrivalLegIndex(null);
+    setSelectedWaypointIndices(null);
+    setFocusedClusterKey(null);
+    setFocusedClusterCoord(null);
+  }, [ctxSelectedDate]);
+
   useLayoutEffect(() => {
     if (embeddedInSchedule) return;
     navigation.setOptions({

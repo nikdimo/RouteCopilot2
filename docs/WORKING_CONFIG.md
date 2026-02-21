@@ -146,6 +146,7 @@ sudo cp ~/index.html ~/privacy.html ~/terms.html /var/www/wiseplan-test/
 cd ~/RouteCopilot2
 git pull origin master
 ```
+**Note:** Pulling only updates the source. The live site is served from `/var/www/wiseplan-test/app/`. To update the live web app you must **build on PC** and **deploy** (steps 1–2 above), or use `Deploy_Web_2_VPS.bat` (see below).
 
 ---
 
@@ -158,6 +159,7 @@ git pull origin master
 | Login loops to sign-in screen | Redirect URI mismatch | Add exact URL to Azure; use https://wiseplan.dk/app/ |
 | "Session expired" on mobile | HTTP vs HTTPS; localStorage lost | Ensure HTTPS; no client-side http→https redirect |
 | Permission denied on scp | Cannot write to /var/www | Use ~/app-deploy then sudo cp |
+| No Sign out / old version on wiseplan.dk | Opening root instead of app, or cached build | Use **https://wiseplan.dk/app/** (the app). After deploy: hard refresh (Ctrl+Shift+R) or incognito; if using Cloudflare, purge cache for wiseplan.dk |
 
 ---
 

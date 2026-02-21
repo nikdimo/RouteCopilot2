@@ -49,3 +49,6 @@ connect-vps.bat
 
 # Google Play service account key
 google-service-account.json
+
+# Temporary upload/cache folders (e.g. Drive upload)
+.tmp.driveupload/

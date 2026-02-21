@@ -22,7 +22,14 @@ import {
 } from '../utils/scheduler';
 import { useQALog } from '../context/QALogContext';
 import { toLocalDayKey } from '../utils/dateUtils';
-import { geocodeAddress, geocodeContactAddress, getAddressSuggestions } from '../utils/geocoding';
+import {
+  geocodeAddress,
+  geocodeContactAddress,
+  getAddressSuggestions,
+  getAddressSuggestionsGoogle,
+  getCoordsForPlaceId,
+  geocodeAddressGoogle,
+} from '../utils/geocoding';
 import { searchContacts } from '../services/graph';
 import TimeframeSelector, {
   getSearchWindow,
@@ -175,6 +182,10 @@ export default function AddMeetingScreen() {
   const { userToken, getValidToken, signOut } = useAuth();
   const { appointments, addAppointment } = useRoute();
   const { preferences } = useUserPreferences();
+  const useGoogleWithKey =
+    preferences.useGoogleGeocoding === true &&
+    (preferences.googleMapsApiKey ?? '').trim().length > 0;
+  const googleApiKey = (preferences.googleMapsApiKey ?? '').trim();
 
   const [locationSelection, setLocationSelection] = useState<LocationSelection>({ type: 'none' });
   const [durationMinutes, setDurationMinutes] = useState(60);
@@ -510,6 +521,14 @@ export default function AddMeetingScreen() {
           };
         }}
         getAddressSuggestions={async (q) => {
+          if (useGoogleWithKey) {
+            const r = await getAddressSuggestionsGoogle(q, googleApiKey);
+            return {
+              success: r.success,
+              suggestions: r.success ? r.suggestions : undefined,
+              error: !r.success ? r.error : undefined,
+            };
+          }
           const r = await getAddressSuggestions(q);
           return {
             success: r.success,
@@ -518,6 +537,16 @@ export default function AddMeetingScreen() {
           };
         }}
         geocodeAddress={async (addr) => {
+          if (useGoogleWithKey) {
+            const r = await geocodeAddressGoogle(addr, googleApiKey);
+            return {
+              success: r.success,
+              lat: r.success ? r.lat : undefined,
+              lon: r.success ? r.lon : undefined,
+              fromCache: r.success ? r.fromCache : undefined,
+              error: !r.success ? r.error : undefined,
+            };
+          }
           const r = await geocodeAddress(addr);
           return {
             success: r.success,
@@ -527,7 +556,25 @@ export default function AddMeetingScreen() {
             error: !r.success ? r.error : undefined,
           };
         }}
+        getCoordsForPlaceId={
+          useGoogleWithKey
+            ? async (placeId) => {
+                const r = await getCoordsForPlaceId(placeId, googleApiKey);
+                return r.success ? { lat: r.lat, lon: r.lon } : { error: r.error };
+              }
+            : undefined
+        }
         geocodeContactAddress={async (addr, parts) => {
+          if (useGoogleWithKey) {
+            const r = await geocodeAddressGoogle(addr, googleApiKey);
+            return {
+              success: r.success,
+              lat: r.success ? r.lat : undefined,
+              lon: r.success ? r.lon : undefined,
+              fromCache: r.success ? r.fromCache : undefined,
+              error: !r.success ? r.error : undefined,
+            };
+          }
           const r = await geocodeContactAddress(addr, parts);
           return {
             success: r.success,
