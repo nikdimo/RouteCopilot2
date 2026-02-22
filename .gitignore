@@ -6,6 +6,7 @@ node_modules/
 # Expo
 .expo/*
 !.expo/web/
+.expo/web/cache/
 dist/
 web-build/
 expo-env.d.ts
@@ -53,3 +54,7 @@ google-service-account.json
 
 # Temporary upload/cache folders (e.g. Drive upload)
 .tmp.driveupload/
+
+# EAS workaround scripts (not needed in build)
+scripts/eas-build-pre-install.sh
+scripts/ensure-expo-web-dir.js
