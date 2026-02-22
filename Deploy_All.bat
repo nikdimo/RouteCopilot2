@@ -71,7 +71,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/5] Build web app - local
+echo [3/5] Build web app - local
 call npm run prepare:vps
 if errorlevel 1 (
     echo Build failed.
@@ -80,7 +80,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [5/5] Upload and update live site on VPS - you may be prompted for SSH passphrase
+echo [4/5] Upload and update live site on VPS - you may be prompted for SSH passphrase
 scp -i "%KEY%" -o ConnectTimeout=15 -r vps-landing\app\* %HOST%:~/app-deploy/
 if errorlevel 1 (
     echo SCP upload failed.
