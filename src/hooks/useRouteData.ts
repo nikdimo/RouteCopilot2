@@ -86,26 +86,37 @@ export function useRouteData(): UseRouteDataResult {
     [waypoints]
   );
 
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     if (waypoints.length < 2) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
       setOsrmRoute(null);
       setRouteLoading(false);
       return;
     }
-    let cancelled = false;
+
+    // Show loading immediately but debounce the actual fetch (avoids rapid re-fetches during drag/reorder)
     setRouteLoading(true);
-    fetchRoute(waypoints)
-      .then((route) => {
-        if (!cancelled) setOsrmRoute(route);
-      })
-      .catch(() => {
-        if (!cancelled) setOsrmRoute(null);
-      })
-      .finally(() => {
-        if (!cancelled) setRouteLoading(false);
-      });
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    let cancelled = false;
+    debounceRef.current = setTimeout(() => {
+      fetchRoute(waypoints)
+        .then((route) => {
+          if (!cancelled) setOsrmRoute(route);
+        })
+        .catch(() => {
+          if (!cancelled) setOsrmRoute(null);
+        })
+        .finally(() => {
+          if (!cancelled) setRouteLoading(false);
+        });
+    }, 350);
+
     return () => {
       cancelled = true;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [waypointsKey]);
 

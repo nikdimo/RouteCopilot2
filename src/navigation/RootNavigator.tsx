@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { Platform, View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { useAuth } from '../context/AuthContext';
@@ -10,7 +10,6 @@ import SelectedDateSync from '../components/SelectedDateSync';
 export default function RootNavigator() {
   const { userToken, isRestoringSession } = useAuth();
   const { load } = useLoadAppointmentsForDate(undefined);
-  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -18,19 +17,11 @@ export default function RootNavigator() {
     }
   }, []);
 
-  // When we get a token, run initial appointments load once; don't show app until done.
+  // Kick off today's appointments load as soon as we have a token — non-blocking.
+  // ScheduleScreen shows its own inline spinner via appointmentsLoading from RouteContext.
   useEffect(() => {
-    if (!userToken) {
-      setInitialLoadComplete(false);
-      return;
-    }
-    let cancelled = false;
-    load().finally(() => {
-      if (!cancelled) setInitialLoadComplete(true);
-    });
-    return () => {
-      cancelled = true;
-    };
+    if (!userToken) return;
+    load();
   }, [userToken, load]);
 
   if (isRestoringSession) {
@@ -44,16 +35,6 @@ export default function RootNavigator() {
 
   if (!userToken) {
     return <LoginScreen />;
-  }
-
-  // One loader: show Loading until initial schedule is loaded, then show app.
-  if (!initialLoadComplete) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#0078D4" />
-        <Text style={styles.loadingText}>Loading…</Text>
-      </View>
-    );
   }
 
   return (

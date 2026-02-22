@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, memo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { Trash2, Check } from 'lucide-react-native';
@@ -14,7 +14,7 @@ export type SwipeableMeetingRowProps = MeetingCardProps & {
   onToggleDone?: () => void;
 };
 
-export default function SwipeableMeetingRow({
+function SwipeableMeetingRow({
   onDelete,
   onToggleDone,
   onPress,
@@ -96,6 +96,8 @@ export default function SwipeableMeetingRow({
     </Swipeable>
   );
 }
+
+export default memo(SwipeableMeetingRow);
 
 const styles = StyleSheet.create({
   deleteAction: {

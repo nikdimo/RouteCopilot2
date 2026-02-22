@@ -255,10 +255,16 @@ function formatTimeRangeMs(startMs: number, endMs: number): string {
   return `${fmt(startMs)}–${fmt(endMs)}`;
 }
 
-/** Round UP to next 15-min boundary (configurable via SNAP_MINUTES). Ensures we never propose "leave earlier than possible". */
+/** Round UP to next 15-min boundary. Ensures we never propose "leave earlier than possible". */
 function snapStartMsUp(rawMs: number): number {
   const gridMs = SNAP_MINUTES * MS_PER_MIN;
   return Math.ceil(rawMs / gridMs) * gridMs;
+}
+
+/** Round DOWN to previous 15-min boundary. Used to find the latest feasible start time. */
+function snapStartMsDown(rawMs: number): number {
+  const gridMs = SNAP_MINUTES * MS_PER_MIN;
+  return Math.floor(rawMs / gridMs) * gridMs;
 }
 
 /** True if [aStart, aEnd] overlaps [bStart, bEnd]. */
@@ -413,6 +419,12 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
   const workingDays = prefs.workingDays ?? DEFAULT_WORKING_DAYS;
   /** v2: Detour km threshold. Same-day slots with detourKm > threshold are excluded; empty days suggested instead. */
   const distanceThresholdKm = prefs.distanceThresholdKm ?? 30;
+  /**
+   * When true (default): first meeting accounts for travel FROM home, last meeting accounts
+   * for travel back TO home. When false (field/overnight mode): no home travel counted —
+   * first meeting can start at work start, last can end at work end.
+   */
+  const startFromHomeBase = prefs.alwaysStartFromHomeBase !== false;
 
   const newLoc: Coordinate =
     'lat' in newLocation
@@ -472,45 +484,83 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
     const dayEvents = eventsForDay(scheduleInWindow, dayStart, effectiveStartMs, effectiveEndMs);
     const timeline = buildTimeline(dayStart, dayEvents, prefs, effectiveStartMs, effectiveEndMs);
 
-    // Empty-week shortcut: one slot per working day at workStart (or "as soon as possible" today)
-    // Non-empty-week: treat empty days like normal Start→End gap (run candidate loop)
+    // Empty-week path: no meetings anywhere in the search window.
+    // Instead of one "earliest only" slot, offer up to three anchors:
+    //   Morning  – as early as you can leave home and arrive
+    //   Midday   – roughly the middle of the working day
+    //   Afternoon – as late as possible while still driving home before end of day
     if (dayEvents.length === 0 && !hasRealMeetingsInWindow) {
-      const isToday = dayStart === todayStartMs;
-      const earliestStart = (() => {
-        const home = { lat: prefs.homeBase?.lat ?? DEFAULT_HOME.lat, lon: prefs.homeBase?.lon ?? DEFAULT_HOME.lon };
-        const travelFromStart = getTravelMinutes(home, newLoc, effectiveStartMs);
-        const minFromWorkStart = effectiveStartMs + travelFromStart * MS_PER_MIN;
-        if (isToday) {
-          const travelToNow = getTravelMinutes(home, newLoc, nowMs);
-          const minFromNow = nowMs + travelToNow * MS_PER_MIN;
-          return snapStartMsUp(Math.max(effectiveStartMs, minFromWorkStart, minFromNow));
+      const home = { lat: prefs.homeBase?.lat ?? DEFAULT_HOME.lat, lon: prefs.homeBase?.lon ?? DEFAULT_HOME.lon };
+
+      // ── Morning anchor: earliest feasible ──────────────────────────────────
+      // Field mode: no home travel needed, first meeting can start at work start.
+      // Home mode: must account for travel from home to client.
+      const travelFromHomeMs = startFromHomeBase
+        ? getTravelMinutes(home, newLoc, effectiveStartMs) * MS_PER_MIN
+        : 0;
+      const minFromWorkStart = effectiveStartMs + travelFromHomeMs;
+      const morningStart = isToday
+        ? snapStartMsUp(Math.max(effectiveStartMs, minFromWorkStart, nowMs + getTravelMinutes(home, newLoc, nowMs) * MS_PER_MIN))
+        : snapStartMsUp(Math.max(effectiveStartMs, minFromWorkStart));
+
+      // ── Afternoon anchor: latest start that still gets you home before day ends ──
+      // Field mode: no return drive, so last meeting can end exactly at work end time.
+      // Home mode: must leave enough time to drive home before work end.
+      const travelHomeFromAfternoon = startFromHomeBase
+        ? getTravelMinutes(newLoc, home, effectiveEndMs - durationMinutes * MS_PER_MIN - postBuffer * MS_PER_MIN) * MS_PER_MIN
+        : 0;
+      const afternoonStart = snapStartMsDown(
+        effectiveEndMs - durationMinutes * MS_PER_MIN - postBuffer * MS_PER_MIN - travelHomeFromAfternoon
+      );
+
+      // ── Midday anchor: halfway between morning and afternoon ───────────────
+      const midDayStart = snapStartMsUp((morningStart + afternoonStart) / 2);
+
+      // Collect anchors that are at least 30 min apart (avoids duplicates on short days)
+      const MIN_ANCHOR_GAP_MS = 30 * MS_PER_MIN;
+      const rawAnchors: { startMs: number; label: string }[] = [
+        { startMs: morningStart,  label: 'Morning visit' },
+        { startMs: midDayStart,   label: 'Midday visit' },
+        { startMs: afternoonStart, label: 'Afternoon visit' },
+      ];
+      const anchors: { startMs: number; label: string }[] = [];
+      for (const anchor of rawAnchors) {
+        if (anchors.every((a) => Math.abs(a.startMs - anchor.startMs) >= MIN_ANCHOR_GAP_MS)) {
+          anchors.push(anchor);
         }
-        return snapStartMsUp(Math.max(effectiveStartMs, minFromWorkStart));
-      })();
-      const meetingStartMs = earliestStart;
-      const slotEndMs = meetingStartMs + durationMinutes * MS_PER_MIN;
-      if (meetingStartMs >= minStartMs && slotEndMs <= effectiveEndMs && meetingStartMs >= windowStartMs && slotEndMs <= windowEndMs) {
-          const home = { lat: prefs.homeBase?.lat ?? DEFAULT_HOME.lat, lon: prefs.homeBase?.lon ?? DEFAULT_HOME.lon };
+      }
+
+      const dayIsoEmpty = toLocalDayKey(dayStart);
+      const detourKmEmpty = 2 * haversineKm(home, newLoc);
+
+      for (const { startMs: meetingStartMs, label: emptyDayLabel } of anchors) {
+        if (slots.length >= MAX_SLOTS) break;
+        const slotEndMs = meetingStartMs + durationMinutes * MS_PER_MIN;
+        if (
+          meetingStartMs >= minStartMs &&
+          meetingStartMs >= windowStartMs &&
+          slotEndMs <= effectiveEndMs &&
+          slotEndMs <= windowEndMs
+        ) {
           const travelToMinutes = getTravelMinutes(home, newLoc, effectiveStartMs);
           const departAtMs = slotEndMs + postBuffer * MS_PER_MIN;
           const travelFromMinutes = getTravelMinutes(newLoc, home, departAtMs);
           const detourMinutes = travelToMinutes + travelFromMinutes;
-          const detourKm = 2 * haversineKm(home, newLoc);
           const slackMinutes = 0;
-          const score = detourKm * 10;
+          const score = detourKmEmpty * 10;
           const slot: ScoredSlot = {
-            dayIso: toLocalDayKey(dayStart),
+            dayIso: dayIsoEmpty,
             startMs: meetingStartMs,
             endMs: slotEndMs,
             score,
             tier: 4,
-            metrics: { detourKm, detourMinutes, slackMinutes, travelToMinutes, travelFromMinutes },
-            label: 'At start of day',
+            metrics: { detourKm: detourKmEmpty, detourMinutes, slackMinutes, travelToMinutes, travelFromMinutes },
+            label: emptyDayLabel,
           };
           if (includeExplain) {
             const arrBy = meetingStartMs - preBuffer * MS_PER_MIN;
             slot.explain = {
-              dayKey: toLocalDayKey(dayStart),
+              dayKey: dayIsoEmpty,
               prev: { id: '_start', title: 'Start', type: 'start', startMs: effectiveStartMs, endMs: effectiveStartMs, hasCoord: true },
               next: { id: '_end', title: 'End', type: 'end', startMs: effectiveEndMs, endMs: effectiveEndMs, hasCoord: true },
               prevDepartMs: effectiveStartMs,
@@ -529,7 +579,7 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               baselineMinutes: 0,
               newPathMinutes: travelToMinutes + travelFromMinutes,
               detourMinutes,
-              detourKm,
+              detourKm: detourKmEmpty,
               slackMinutes,
               score,
               tier: 4,
@@ -541,35 +591,38 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               travelFeasible: true,
               bufferWaivedAtStart: true,
               bufferWaivedAtEnd: true,
-              travelFeasibleFromNow: true,
+              travelFeasibleFromNow: isToday
+                ? nowMs + getTravelMinutes(home, newLoc, nowMs) * MS_PER_MIN <= meetingStartMs
+                : undefined,
               reachableFromWorkStart: true,
               arrivalMarginMinutes: (meetingStartMs - (effectiveStartMs + travelToMinutes * MS_PER_MIN)) / MS_PER_MIN,
-              arriveEarlyPreferred: (meetingStartMs - (effectiveStartMs + travelToMinutes * MS_PER_MIN)) / MS_PER_MIN >= preBuffer,
+              arriveEarlyPreferred:
+                (meetingStartMs - (effectiveStartMs + travelToMinutes * MS_PER_MIN)) / MS_PER_MIN >= preBuffer,
               eventsWithMissingCoordsUsed: [],
             };
           }
           slots.push(slot);
-          const dayIsoEmpty = toLocalDayKey(dayStart);
           if (onSlotConsidered) {
-            const detourKm = 2 * (haversineKm(home, newLoc));
             onSlotConsidered({
               dayIso: dayIsoEmpty,
               dayLabel: formatDayLabel(dayIsoEmpty),
               timeRange: formatTimeRangeMs(meetingStartMs, slotEndMs),
               status: 'accepted',
-              detourKm: Math.round(detourKm * 10) / 10,
+              detourKm: Math.round(detourKmEmpty * 10) / 10,
               addToRouteMin: detourMinutes,
               baselineMin: 0,
               newPathMin: travelToMinutes + travelFromMinutes,
               slackMin: 0,
               score,
-              label: 'At start of day',
+              label: emptyDayLabel,
               prev: 'Start',
               next: 'End',
-              summary: `Empty day. +${detourMinutes} min drive (${detourKm.toFixed(1)} km round trip). Score ${score}.`,
+              summary: `Empty day (${emptyDayLabel}). +${detourMinutes} min drive (${detourKmEmpty.toFixed(1)} km round trip). Score ${score}.`,
             });
           }
+        }
       }
+
       currentMs = addDays(new Date(currentMs), 1).getTime();
       continue;
     }
@@ -597,7 +650,13 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       const bufferWaivedAtStart = prev.type === 'start';
       const bufferWaivedAtEnd = next.type === 'end';
 
-      const minStartFromWorkStartMs = prevDepartMs + travelToMinutes * MS_PER_MIN;
+      // In field mode (alwaysStartFromHomeBase=false), no home travel is needed for the
+      // first gap — the worker is already in the field, so the first meeting can start at
+      // exactly work start time. For all other gaps (prev=event), travel from prev event
+      // to the new meeting is still required regardless of mode.
+      const effectiveTravelToStart = !startFromHomeBase && bufferWaivedAtStart ? 0 : travelToMinutes;
+
+      const minStartFromWorkStartMs = prevDepartMs + effectiveTravelToStart * MS_PER_MIN;
       const rawMeetingStartMs = bufferWaivedAtStart
         ? minStartFromWorkStartMs
         : prevDepartMs + (travelToMinutes + preBuffer) * MS_PER_MIN;
@@ -619,9 +678,39 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
             ? travelToMinutes + preBuffer + durationMinutes
             : travelToMinutes + preBuffer + durationMinutes + postBuffer;
 
-      for (let c = 0; c < MAX_CANDIDATES_PER_GAP && slots.length < MAX_SLOTS; c++) {
-        const offsetMin = c * SNAP_MINUTES;
-        const meetingStartMs = candidateStart0 + offsetMin * MS_PER_MIN;
+      // Build candidate start times: earliest 3 positions PLUS the midpoint of the gap.
+      // The midpoint gives a balanced placement — breathing room on both sides — which is
+      // often more comfortable than always packing the new meeting against the previous one.
+      const approxTravelFrom = bufferWaivedAtEnd
+        ? 0
+        : getTravelMinutes(newLoc, next.coord, nextArriveByMs);
+      const latestFeasibleStart = bufferWaivedAtEnd
+        ? snapStartMsDown(effectiveEndMs - durationMinutes * MS_PER_MIN)
+        : snapStartMsDown(
+            nextArriveByMs -
+              approxTravelFrom * MS_PER_MIN -
+              postBuffer * MS_PER_MIN -
+              durationMinutes * MS_PER_MIN
+          );
+      const midCandidateStart = snapStartMsUp((candidateStart0 + latestFeasibleStart) / 2);
+
+      const rawCandidates = [
+        candidateStart0,
+        candidateStart0 + SNAP_MINUTES * MS_PER_MIN,
+        candidateStart0 + 2 * SNAP_MINUTES * MS_PER_MIN,
+        midCandidateStart,
+      ];
+      const candidateStarts = [
+        ...new Set(
+          rawCandidates.filter(
+            (t) => t >= candidateStart0 && t <= latestFeasibleStart + durationMinutes * MS_PER_MIN
+          )
+        ),
+      ]
+        .sort((a, b) => a - b)
+        .slice(0, MAX_CANDIDATES_PER_GAP + 1);
+
+      for (const meetingStartMs of candidateStarts) {
         if (slots.length >= MAX_SLOTS) break;
         const slotEndMs = meetingStartMs + durationMinutes * MS_PER_MIN;
         const departAtMs = slotEndMs + postBuffer * MS_PER_MIN;
@@ -641,7 +730,7 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         if (meetingStartMs < windowStartMs) { qaReject('Before window'); continue; }
         if (!bufferWaivedAtEnd && departAtMs + travelFromMinutes * MS_PER_MIN > nextArriveByMs) { qaReject("Can't reach next meeting in time"); continue; }
         if (meetingStartMs < minStartMs) { qaReject('In the past'); continue; }
-        if (bufferWaivedAtStart && prevDepartMs + travelToMinutes * MS_PER_MIN > meetingStartMs) { qaReject('Arrive late'); continue; }
+        if (bufferWaivedAtStart && prevDepartMs + effectiveTravelToStart * MS_PER_MIN > meetingStartMs) { qaReject('Arrive late'); continue; }
         if (bufferWaivedAtStart && isToday && nowMs + travelToNowMinutes * MS_PER_MIN > meetingStartMs) { qaReject("Can't leave now in time"); continue; }
 
         const noOverlap = !dayEvents.some((e) => intervalsOverlap(meetingStartMs, slotEndMs, e.startMs, e.endMs));
@@ -665,20 +754,34 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         const detourMinutes = newPathMinutes - baselineMinutes;
         const detourKm = Math.round(detourKmVal * 10) / 10;
         let score = detourKm * 10;
+
+        // Smooth slack penalty — replaces the old hard cliff at 10 min.
+        // < 2 min: still a hard veto (truly impossible, no margin at all)
+        // 2–20 min: smooth curve 200/slack (~100 at 2min → ~10 at 20min)
+        // > 60 min: gentle penalty for long waits between meetings
         if (!bufferWaivedAtEnd) {
-          if (slackMinutes < 10) score += 5000;
-          else if (slackMinutes > 90) score += (slackMinutes - 90) * 2;
+          if (slackMinutes < 2) {
+            score += 5000;
+          } else if (slackMinutes < 20) {
+            score += 200 / slackMinutes;
+          } else if (slackMinutes > 60) {
+            score += (slackMinutes - 60) * 1.5;
+          }
         }
+
+        // Busy day penalty: lightly prefer adding to a day that already has fewer meetings.
+        // Days with 1–3 meetings: no penalty. Each extra meeting beyond 3 adds 15 points.
+        score += Math.max(0, dayEvents.length - 3) * 15;
 
         const arriveByMs = meetingStartMs - preBuffer * MS_PER_MIN;
         const travelFeasibleFromNow = bufferWaivedAtStart && isToday
           ? nowMs + travelToNowMinutes * MS_PER_MIN <= meetingStartMs
           : undefined;
         const reachableFromWorkStart = bufferWaivedAtStart
-          ? prevDepartMs + travelToMinutes * MS_PER_MIN <= meetingStartMs
+          ? prevDepartMs + effectiveTravelToStart * MS_PER_MIN <= meetingStartMs
           : undefined;
         const arrivalMarginMinutes = bufferWaivedAtStart
-          ? (meetingStartMs - (prevDepartMs + travelToMinutes * MS_PER_MIN)) / MS_PER_MIN
+          ? (meetingStartMs - (prevDepartMs + effectiveTravelToStart * MS_PER_MIN)) / MS_PER_MIN
           : undefined;
         const arriveEarlyPreferred = arrivalMarginMinutes != null && arrivalMarginMinutes >= preBuffer;
         const label = isEmptyDay
@@ -776,6 +879,40 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
 
     currentMs = addDays(new Date(currentMs), 1).getTime();
   }
+
+  // ── Cross-day adjacency bonus ─────────────────────────────────────────────
+  // Only active in field/overnight mode (alwaysStartFromHomeBase = false).
+  // In that mode, ending a day near where tomorrow's first meeting is genuinely saves
+  // a morning drive. In home-base mode you drive home every night, so this doesn't apply.
+  if (!startFromHomeBase) { for (const slot of slots) {
+    // Find next working day after this slot's day
+    const slotDate = new Date(slot.dayIso + 'T12:00:00'); // noon avoids DST edge cases
+    let nextDay = addDays(slotDate, 1);
+    for (let guard = 0; guard < 7 && !workingDays[nextDay.getDay()]; guard++) {
+      nextDay = addDays(nextDay, 1);
+    }
+    const nextDayKey = toLocalDayKey(nextDay);
+    // Find first geocoded event on that next working day
+    const nextDayFirst = scheduleInWindow
+      .filter(
+        (ev) =>
+          ev.startIso &&
+          ev.coordinates != null &&
+          typeof ev.coordinates.latitude === 'number' &&
+          toLocalDayKey(new Date(ev.startIso)) === nextDayKey
+      )
+      .sort((a, b) => new Date(a.startIso!).getTime() - new Date(b.startIso!).getTime())[0];
+    if (nextDayFirst?.coordinates) {
+      const distKm = haversineKm(newLoc, {
+        lat: nextDayFirst.coordinates.latitude,
+        lon: nextDayFirst.coordinates.longitude,
+      });
+      // Within 15 km = "in the same area as tomorrow's first stop" → small bonus
+      if (distKm <= 15) {
+        slot.score = Math.max(0, slot.score - 20);
+      }
+    }
+  } } // end cross-day bonus loop + if (!startFromHomeBase)
 
   slots.sort((a, b) => {
     if (!hasRealMeetingsInWindow) {

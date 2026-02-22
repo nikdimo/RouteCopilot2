@@ -121,38 +121,35 @@ function filterAppointmentsByWindow(
   });
 }
 
-/** Pick top 3 with variety: lowest detour, safest slack, best score (day with meetings) */
+/**
+ * Pick the 3 best options with day-level diversity.
+ * Rule: at most one slot per calendar day, so the user sees genuinely different choices
+ * (e.g. Tuesday morning, Thursday afternoon, Friday) rather than three variants of the
+ * same Tuesday gap. Within each day, the slot with the lowest score is chosen.
+ * Falls back to same-day slots if fewer than 3 distinct days are available.
+ */
 function pickBestOptions(slots: ScoredSlot[]): ScoredSlot[] {
   if (slots.length === 0) return [];
   if (slots.length <= 3) return [...slots];
 
   const byScore = [...slots].sort((a, b) => a.score - b.score);
-  const byDetour = [...slots].sort((a, b) => a.metrics.detourMinutes - b.metrics.detourMinutes);
-  const bySlack = [...slots].sort((a, b) => b.metrics.slackMinutes - a.metrics.slackMinutes);
 
-  const seen = new Set<string>();
+  // Phase 1: one best slot per unique day, up to 3 days
   const result: ScoredSlot[] = [];
-
+  const seenDays = new Set<string>();
   for (const slot of byScore) {
-    const id = slotId(slot);
-    if (!seen.has(id)) {
-      seen.add(id);
+    if (!seenDays.has(slot.dayIso)) {
+      seenDays.add(slot.dayIso);
       result.push(slot);
       if (result.length >= 3) return result;
     }
   }
-  for (const slot of byDetour) {
-    const id = slotId(slot);
-    if (!seen.has(id)) {
-      seen.add(id);
-      result.push(slot);
-      if (result.length >= 3) return result;
-    }
-  }
-  for (const slot of bySlack) {
-    const id = slotId(slot);
-    if (!seen.has(id)) {
-      seen.add(id);
+
+  // Phase 2: fewer than 3 unique days — fill remaining slots by score (any day)
+  const seenIds = new Set(result.map((s) => slotId(s)));
+  for (const slot of byScore) {
+    if (!seenIds.has(slotId(slot))) {
+      seenIds.add(slotId(slot));
       result.push(slot);
       if (result.length >= 3) return result;
     }

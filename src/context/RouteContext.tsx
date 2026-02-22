@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { startOfDay } from 'date-fns';
 import type { CalendarEvent } from '../services/graph';
@@ -8,6 +9,28 @@ export type UserLocation = { latitude: number; longitude: number };
 
 const COMPLETED_IDS_KEY = 'routeCopilot_completedEventIds';
 const DAY_ORDER_PREFIX = 'routeCopilot_dayOrder_';
+
+// ─── Meeting counts cache ─────────────────────────────────────────────────────
+// Persists meetingCountByDay so DaySlider dots appear instantly on every launch
+// instead of waiting for the ±30 day Graph API fetch to complete.
+const COUNTS_CACHE_KEY = 'routeCopilot_meetingCounts';
+const COUNTS_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+type CountsCache = { counts: Record<string, number>; savedAt: number };
+
+/** Synchronous read from localStorage — web only. Used in useState initialiser for zero-flash display. */
+function loadCountsCacheSync(): Record<string, number> {
+  if (Platform.OS !== 'web' || typeof window === 'undefined' || !window.localStorage) return {};
+  try {
+    const raw = window.localStorage.getItem(COUNTS_CACHE_KEY);
+    if (!raw) return {};
+    const { counts, savedAt } = JSON.parse(raw) as CountsCache;
+    if (Date.now() - savedAt > COUNTS_CACHE_TTL_MS) return {};
+    return counts;
+  } catch {
+    return {};
+  }
+}
 
 type RouteContextValue = {
   selectedDate: Date;
@@ -47,7 +70,9 @@ const RouteContext = createContext<RouteContextValue | null>(null);
 
 export function RouteProvider({ children }: { children: React.ReactNode }) {
   const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
-  const [meetingCountByDay, setMeetingCountByDay] = useState<Record<string, number>>({});
+  // Initialised from localStorage synchronously on web → dots appear on first paint with no flash.
+  // On native, AsyncStorage read happens in the effect below (fast, but async).
+  const [meetingCountByDay, setMeetingCountByDay] = useState<Record<string, number>>(loadCountsCacheSync);
   const [loadedRange, setLoadedRange] = useState<{ start: string; end: string } | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const triggerRefresh = useCallback(() => setRefreshTrigger((n) => n + 1), []);
@@ -73,6 +98,32 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(() => {});
   }, []);
+
+  // ── Meeting counts cache: load on native (web already loaded synchronously above) ──
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    AsyncStorage.getItem(COUNTS_CACHE_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const { counts, savedAt } = JSON.parse(raw) as CountsCache;
+        if (Date.now() - savedAt > COUNTS_CACHE_TTL_MS) return;
+        setMeetingCountByDay((prev) =>
+          Object.keys(prev).length > 0 ? prev : counts
+        );
+      })
+      .catch(() => {});
+  }, []);
+
+  // ── Meeting counts cache: persist whenever counts update ──
+  useEffect(() => {
+    if (Object.keys(meetingCountByDay).length === 0) return;
+    const payload: CountsCache = { counts: meetingCountByDay, savedAt: Date.now() };
+    const serialized = JSON.stringify(payload);
+    AsyncStorage.setItem(COUNTS_CACHE_KEY, serialized).catch(() => {});
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+      try { window.localStorage.setItem(COUNTS_CACHE_KEY, serialized); } catch { /* ignore */ }
+    }
+  }, [meetingCountByDay]);
 
   const setAppointments = useCallback((events: CalendarEvent[]) => {
     const completedSet = new Set(completedIdsRef.current);

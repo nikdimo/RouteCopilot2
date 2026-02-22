@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { addDays, endOfDay, startOfDay } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
-import { getCalendarEvents } from '../services/graph';
+import { getCalendarEventsRaw } from '../services/graph';
 import { toLocalDayKey } from '../utils/dateUtils';
 
 export function useEnsureMeetingCountsForDate() {
@@ -18,7 +18,7 @@ export function useEnsureMeetingCountsForDate() {
       const startKey = toLocalDayKey(windowStart);
       const endKey = toLocalDayKey(windowEnd);
       if (loadedRange && loadedRange.start <= startKey && loadedRange.end >= endKey) return;
-      getCalendarEvents(token, windowStart, windowEnd)
+      getCalendarEventsRaw(token, windowStart, windowEnd)
         .then((events) => {
           const counts: Record<string, number> = {};
           for (const ev of events) {

@@ -4,7 +4,45 @@
  * No API key required.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 const OSRM_BASE = 'https://router.project-osrm.org';
+const OSRM_CACHE_PREFIX = 'routecopilot_osrm_';
+const OSRM_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// In-memory cache for the current session (avoids AsyncStorage reads on repeated calls)
+const _osrmMemCache = new Map<string, OSRMRoute>();
+
+function _waypointsKey(waypoints: Array<{ latitude: number; longitude: number }>): string {
+  return waypoints.map((p) => `${p.latitude.toFixed(5)},${p.longitude.toFixed(5)}`).join('|');
+}
+
+async function _getCachedRoute(key: string): Promise<OSRMRoute | null> {
+  const mem = _osrmMemCache.get(key);
+  if (mem) return mem;
+  try {
+    const raw = await AsyncStorage.getItem(OSRM_CACHE_PREFIX + key);
+    if (!raw) return null;
+    const entry = JSON.parse(raw) as { route: OSRMRoute; cachedAt: number };
+    if (Date.now() - entry.cachedAt > OSRM_CACHE_TTL_MS) return null;
+    _osrmMemCache.set(key, entry.route);
+    return entry.route;
+  } catch {
+    return null;
+  }
+}
+
+async function _setCachedRoute(key: string, route: OSRMRoute): Promise<void> {
+  _osrmMemCache.set(key, route);
+  try {
+    await AsyncStorage.setItem(
+      OSRM_CACHE_PREFIX + key,
+      JSON.stringify({ route, cachedAt: Date.now() })
+    );
+  } catch {
+    // cache write failure is non-fatal
+  }
+}
 
 export type OSRMLeg = {
   distance: number; // meters
@@ -29,11 +67,16 @@ function toCoordsString(points: Array<{ latitude: number; longitude: number }>):
 
 /**
  * Fetch driving route from OSRM. Returns geometry following streets + per-leg distance/duration.
+ * Results are cached in AsyncStorage (24h TTL) and in-memory for the session.
  */
 export async function fetchRoute(
   waypoints: Array<{ latitude: number; longitude: number }>
 ): Promise<OSRMRoute | null> {
   if (waypoints.length < 2) return null;
+
+  const cacheKey = _waypointsKey(waypoints);
+  const cached = await _getCachedRoute(cacheKey);
+  if (cached) return cached;
 
   const coords = toCoordsString(waypoints);
   const url = `${OSRM_BASE}/route/v1/driving/${coords}?overview=full&geometries=geojson`;
@@ -161,12 +204,15 @@ export async function fetchRoute(
       longitude: lon,
     }));
 
-    return {
+    const result: OSRMRoute = {
       coordinates,
       legs,
       totalDistance: route.distance ?? 0,
       totalDuration: route.duration ?? 0,
     };
+
+    _setCachedRoute(cacheKey, result).catch(() => {});
+    return result;
   } catch {
     return null;
   }

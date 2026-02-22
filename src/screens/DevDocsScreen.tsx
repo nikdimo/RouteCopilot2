@@ -133,23 +133,42 @@ function RoadmapSection() {
         regions or rules. Support for multiple reps and optional reporting.
       </Text>
 
-      <Text style={styles.h2}>Phase 7: Smart Scheduling (Current)</Text>
+      <Text style={styles.h2}>Phase 7: Smart Scheduling ✓</Text>
       <Text style={styles.body}>
-        Pre- and post-meeting buffers: preBuffer reserves minutes before a meeting
-        (parking, check-in); postBuffer reserves minutes after (overrun, wrap-up).
-        Both are configurable in Profile.
+        Pre- and post-meeting buffers, Plan Visit gated flow (location, duration,
+        timeframe, "Find best time"), Best Options + By Day timeline, tier-based
+        slot ranking (On Route / Nearby / New Day), working hours/days filter,
+        15-min grid snap, no-past constraint, OSRM route display with leg stats.
       </Text>
+
+      <Text style={styles.h2}>Phase 7B: Scheduler Intelligence (Current) ✓</Text>
       <Text style={styles.body}>
-        Plan Visit uses a gated setup→results flow: location, duration (30/60/90),
-        timeframe (Best Match / Pick Week), CTA "Find best time". Results only after
-        CTA: Best Options + By Day merged timeline. Best Match = 14 days; Pick Week =
-        any week (This week, Next week, date picker). Strict searchWindow filtering.
-        Scheduler: no past slots, 15-min grid, empty week = earliest days first.
+        Improved slot quality and relevance. Changes shipped:
       </Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>Smooth slack penalty — replaced hard cliff at 10 min with curve; tight-but-possible slots no longer unfairly ranked below high-detour ones</Text>
+        <Text style={styles.stackItem}>Busy day penalty — days with more than 3 meetings get a light score penalty; app prefers lighter days when detour is similar</Text>
+        <Text style={styles.stackItem}>Midpoint gap candidate — each gap now also proposes the middle position, not just the earliest 3; reduces tight-against-previous-meeting slots</Text>
+        <Text style={styles.stackItem}>Empty-day time variety — free days suggest Morning / Midday / Afternoon options instead of only the earliest possible time</Text>
+        <Text style={styles.stackItem}>Best Options diversity — top 3 cards guaranteed from 3 different calendar days; never 3 variants of the same gap</Text>
+        <Text style={styles.stackItem}>Field/overnight mode — "Start and end from home base" profile toggle; when off, first meeting starts at workStart and last ends at workEnd (no home commute counted); cross-day adjacency bonus activates</Text>
+        <Text style={styles.stackItem}>Cross-day adjacency bonus — field mode only: −20 score if slot ends within 15 km of next working day's first meeting</Text>
+      </View>
+
+      <Text style={styles.h2}>Phase 8: Performance ✓</Text>
       <Text style={styles.body}>
-        ETA is heuristic for now: haversine distance, road factor by distance,
-        and speed buckets by time-of-day (rush vs non-rush). No traffic API yet.
+        App startup and data loading optimised for perceived speed:
       </Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>JWT local validation — token expiry parsed from claims on device; /me network call skipped on every launch when token is still valid (saves ~500 ms)</Text>
+        <Text style={styles.stackItem}>Instant app shell — AppNavigator shows immediately after token restore; ScheduleScreen spinner replaces the old full-screen blocker</Text>
+        <Text style={styles.stackItem}>Two-phase calendar loading — raw event list shown instantly; geocoding + contact enrichment runs in background and patches data progressively</Text>
+        <Text style={styles.stackItem}>Parallel enrichment — contact address + contact info lookups use Promise.all instead of sequential loops</Text>
+        <Text style={styles.stackItem}>Contact request deduplication — session cache + in-flight Map; same query never fetches twice; $search fast-path before 500-item fallback</Text>
+        <Text style={styles.stackItem}>OSRM route caching — routes cached in AsyncStorage (24h TTL) + memory; same waypoints never re-fetched</Text>
+        <Text style={styles.stackItem}>Debounced route recalculation — 350 ms debounce prevents cascade OSRM calls during drag-reorder</Text>
+        <Text style={styles.stackItem}>DaySlider counts use raw fetch — ±30 day meeting counts skip geocoding entirely</Text>
+      </View>
 
       <Text style={styles.h2}>Phase 7C: Real ETA (Later)</Text>
       <Text style={styles.body}>
@@ -183,105 +202,177 @@ function ArchitectureSection() {
 function LogicSpecsSection() {
   return (
     <View style={styles.section}>
-      <Text style={styles.h1}>Logic Specs v2</Text>
+      <Text style={styles.h1}>Logic Specs v3</Text>
 
       <Text style={styles.h2}>Goal</Text>
       <Text style={styles.body}>
-        Minimize total driving distance when inserting a new meeting. Preserve admin days —
-        avoid creating single-meeting days when a geographically compatible slot exists on a day
-        with other meetings. Home to first meeting and last meeting to home are both included.
+        Minimize total driving distance when inserting a new meeting. Prefer days that
+        already have meetings in the same geographic area. Preserve admin days — avoid
+        creating single-meeting days when a compatible slot exists alongside other meetings.
+        Home-to-first and last-to-home travel is included by default; field mode removes
+        this assumption for workers who stay overnight.
       </Text>
 
       <Text style={styles.h2}>Tier System</Text>
       <View style={styles.ruleList}>
         <Text style={styles.ruleItem}>• Tier 1 – On Route: same day as meetings, detourKm ≤ 5 km</Text>
         <Text style={styles.ruleItem}>• Tier 2 – Nearby: same day, 5 km &lt; detourKm ≤ distanceThresholdKm</Text>
-        <Text style={styles.ruleItem}>• Tier 3 – Over threshold: detourKm &gt; threshold → excluded; empty day suggested instead</Text>
-        <Text style={styles.ruleItem}>• Tier 4 – New Day: empty day, round-trip from home. Only shown when no Tier 1/2 exist (admin-day protection).</Text>
+        <Text style={styles.ruleItem}>• Tier 3 – Over threshold: excluded; empty-day slot suggested instead</Text>
+        <Text style={styles.ruleItem}>• Tier 4 – New Day: no other meetings that day. Only shown when no Tier 1/2 exist (admin-day protection).</Text>
       </View>
-
-      <Text style={styles.h2}>Distance Threshold (Profile)</Text>
-      <Text style={styles.body}>
-        distanceThresholdKm (default 30 km, Profile → Max Detour Distance). Same-day slots with
-        detour &gt; threshold are skipped; empty day suggested instead.
-      </Text>
 
       <Text style={styles.h2}>Detour km (Primary Metric)</Text>
       <Text style={styles.body}>
-        detourKm = haversineKm(prev, newLoc) + haversineKm(newLoc, next) - haversineKm(prev, next).
-        Empty day: 2 × haversineKm(home, newLoc).
+        detourKm = d(prev→new) + d(new→next) − d(prev→next) using straight-line haversine.
+        Empty day: 2 × d(home, newLoc). Rounds to 1 decimal.
       </Text>
 
-      <Text style={styles.h2}>Score &amp; Ranking (within tier)</Text>
+      <Text style={styles.h2}>Score Formula (v3)</Text>
       <View style={styles.ruleList}>
-        <Text style={styles.ruleItem}>• score = detourKm × 10 + slackPenalty</Text>
-        <Text style={styles.ruleItem}>• slack &lt;10: +5000; slack 10–90: 0; slack &gt;90: +(slack−90)×2</Text>
-        <Text style={styles.ruleItem}>• Sort: tier asc, score asc, startMs asc, dayIso asc</Text>
-        <Text style={styles.ruleItem}>• Empty week: dayIso asc, startMs asc</Text>
-        <Text style={styles.ruleItem}>• "On Route" badge: detourKm ≤ 5</Text>
+        <Text style={styles.ruleItem}>• base = detourKm × 10</Text>
+        <Text style={styles.ruleItem}>• Smooth slack penalty (replaces old hard cliff at 10 min):</Text>
+        <Text style={styles.ruleItem}>    slack &lt; 2 min → +5000 (truly impossible, no margin)</Text>
+        <Text style={styles.ruleItem}>    slack 2–20 min → +200 / slack (smooth curve: ~100 at 2 min, ~10 at 20 min)</Text>
+        <Text style={styles.ruleItem}>    slack &gt; 60 min → +(slack − 60) × 1.5 (mild penalty for long waits)</Text>
+        <Text style={styles.ruleItem}>    slack 20–60 min → no penalty (ideal range)</Text>
+        <Text style={styles.ruleItem}>• Busy day penalty: +15 per meeting on that day beyond 3 (prefer lighter days)</Text>
+        <Text style={styles.ruleItem}>• Cross-day adjacency bonus: −20 if slot ends within 15 km of tomorrow's first meeting (field mode only; see below)</Text>
+        <Text style={styles.ruleItem}>• Sort: tier asc → score asc → startMs asc → dayIso asc</Text>
+        <Text style={styles.ruleItem}>• Empty week: dayIso asc → startMs asc (chronological)</Text>
       </View>
 
-      <Text style={styles.h2}>Hard Constraints (slot discarded if any fails)</Text>
+      <Text style={styles.h2}>Gap Candidates (v3)</Text>
+      <Text style={styles.body}>
+        For each gap between timeline anchors, up to 4 candidate start times are generated
+        instead of the old fixed 3 (earliest, +15, +30):
+      </Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• Earliest feasible (current behavior)</Text>
+        <Text style={styles.ruleItem}>• +15 min from earliest</Text>
+        <Text style={styles.ruleItem}>• +30 min from earliest</Text>
+        <Text style={styles.ruleItem}>• Midpoint of the gap: (earliest + latestFeasible) / 2, snapped to 15-min grid. Gives balanced breathing room on both sides.</Text>
+        <Text style={styles.ruleItem}>• Duplicates removed; all filtered to [earliest, latestFeasible]</Text>
+      </View>
+
+      <Text style={styles.h2}>Empty-Day Anchors (v3)</Text>
+      <Text style={styles.body}>
+        When the search window has no meetings at all, each working day now gets up to 3
+        time-of-day options instead of a single "earliest possible":
+      </Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• Morning — earliest feasible (home + travel time)</Text>
+        <Text style={styles.ruleItem}>• Midday — midpoint of the working day window</Text>
+        <Text style={styles.ruleItem}>• Afternoon — latest feasible (work end − duration − postBuffer − travel home)</Text>
+        <Text style={styles.ruleItem}>• Anchors within 30 min of each other are collapsed to avoid redundant suggestions</Text>
+        <Text style={styles.ruleItem}>• All three pass the same feasibility checks (not in past, within working hours)</Text>
+      </View>
+
+      <Text style={styles.h2}>Best Options Selection (v3)</Text>
+      <Text style={styles.body}>
+        The top-3 "Best Options" banner now enforces one slot per unique calendar day,
+        so the user sees genuinely different choices rather than three variants of the same gap:
+      </Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• Sort all slots by score (ascending)</Text>
+        <Text style={styles.ruleItem}>• Pick best slot from Day A, best from Day B, best from Day C</Text>
+        <Text style={styles.ruleItem}>• If fewer than 3 unique days, fill remaining slots from any day by score</Text>
+      </View>
+
+      <Text style={styles.h2}>Start and End from Home Base (Profile Toggle)</Text>
+      <Text style={styles.body}>
+        Profile → "Start and end from home base" (default: ON). Controls whether home-base
+        travel time is included in the first and last gaps of the day.
+      </Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• ON (default, commute mode): earliest first meeting = workStart + travelFromHome; latest last meeting must end early enough to drive home before workEnd.</Text>
+        <Text style={styles.ruleItem}>• OFF (field/overnight mode): first meeting can start at exactly workStart (no home travel deducted); last meeting can end at exactly workEnd (no return drive counted). For empty days: morning anchor = workStart, afternoon anchor = workEnd − duration − postBuffer.</Text>
+        <Text style={styles.ruleItem}>• OFF also activates the cross-day adjacency bonus: slots ending within 15 km of the next working day's first meeting get a −20 score bonus, rewarding efficient field positioning.</Text>
+        <Text style={styles.ruleItem}>• Today's "can you leave home now in time" safety check is preserved in both modes.</Text>
+      </View>
+
+      <Text style={styles.h2}>Hard Constraints (unchanged)</Text>
       <View style={styles.ruleList}>
         <Text style={styles.ruleItem}>• Meeting within work window: meetingStart ≥ workStart, meetingEnd ≤ workEnd</Text>
-        <Text style={styles.ruleItem}>• Day-boundary waiver: first meeting may start at workStart; last may end at workEnd</Text>
         <Text style={styles.ruleItem}>• No overlap: [meetingStart, meetingEnd] must not overlap ANY event (even without coords)</Text>
         <Text style={styles.ruleItem}>• No past: meetingStartMs ≥ now + preBuffer</Text>
         <Text style={styles.ruleItem}>• Today after working hours end → skip today entirely</Text>
         <Text style={styles.ruleItem}>• 15-min snap UP; if snapping breaks feasibility, discard</Text>
-        <Text style={styles.ruleItem}>• Travel feasible between events (waived at day boundaries)</Text>
+        <Text style={styles.ruleItem}>• Travel feasible between events; waived at day boundaries (Start/End anchors)</Text>
+        <Text style={styles.ruleItem}>• Non-working days skipped entirely</Text>
       </View>
 
       <Text style={styles.h2}>Gap Formula (Buffer-Aware)</Text>
       <Text style={styles.body}>
-        prevDepartMs = Prev.endMs + postBuffer (Start: prev.endMs). nextArriveByMs = Next.startMs − preBuffer (End: next.startMs).
-        required = travelTo + preBuffer + duration + postBuffer + travelFrom (reduced at boundaries). Events without coords block time via homeBase.
+        prevDepartMs = event.endMs + postBuffer (Start anchor: event.endMs only).
+        nextArriveByMs = event.startMs − preBuffer (End anchor: event.startMs only).
+        required = travelTo + preBuffer + duration + postBuffer + travelFrom (reduced at boundaries).
+        Events without coords block time via homeBase coordinates.
       </Text>
 
-      <Text style={styles.h2}>Gap-Based Search</Text>
+      <Text style={styles.h2}>Travel Estimation</Text>
       <Text style={styles.body}>
-        Scans gaps between timeline anchors (Start, events, End). For each gap
-        checks if required time fits, computes detourKm, assigns tier, excludes
-        Tier 3 (over threshold). Travel uses getTravelMinutes (haversine +
-        road factor + rush-hour speed).
+        getTravelMinutes: haversine distance → road factor by distance (1.45× &lt;5 km,
+        1.30× 5–20 km, 1.18× &gt;20 km) → speed by distance + rush hour (07–09, 15–18).
+        Heuristic only; no live traffic. OSRM used for map route display and leg stats.
+        OSRM results cached in AsyncStorage (24h TTL) and in-memory for the session.
       </Text>
 
       <Text style={styles.h2}>Ghost-Slot Timeline (Plan Visit)</Text>
       <Text style={styles.body}>
-        Plan Visit is a gated setup→results flow. Setup state: location, duration
-        (30/60/90), timeframe, CTA "Find best time". Results only after CTA press.
+        Gated setup → results flow. Setup: location, duration (30/60/90 min), timeframe, CTA.
+        Results only after CTA press.
       </Text>
       <View style={styles.ruleList}>
-        <Text style={styles.ruleItem}>• Setup: location search, duration pills, timeframe (Best Match / Pick Week), CTA button</Text>
-        <Text style={styles.ruleItem}>• Results (post-CTA): Best Options (top 3), By Day merged timeline (real meetings + ghost slots)</Text>
-        <Text style={styles.ruleItem}>• Best Match: next 14 days; best = minimal detour, then earlier</Text>
+        <Text style={styles.ruleItem}>• Best Options: top 3, one per unique day (v3)</Text>
+        <Text style={styles.ruleItem}>• By Day: merged timeline (real meetings + ghost slots)</Text>
+        <Text style={styles.ruleItem}>• Best Match: next 14 days, clamp to today</Text>
         <Text style={styles.ruleItem}>• Pick Week: any week (This week, Next week, date picker); searchWindow = exact Mon–Sun</Text>
-        <Text style={styles.ruleItem}>• Empty week: suggest every working day at earliest start; Best Options = earliest days first</Text>
-        <Text style={styles.ruleItem}>• Location search: contacts + address suggestions; dropdown stable (no flicker); onPressIn for reliable tap; keyboardShouldPersistTaps; requestId avoids stale results</Text>
-        <Text style={styles.ruleItem}>• Ghost slots appear between real meetings; tap opens Confirm booking; Book creates CalendarEvent</Text>
+        <Text style={styles.ruleItem}>• Ghost slots appear between real meetings; tap → Confirm booking → creates CalendarEvent</Text>
         <Text style={styles.ruleItem}>• No past slots; 15-min grid snap; working-days filter; strict searchWindow (no leakage)</Text>
-        <Text style={styles.ruleItem}>• Day keys (dayIso): always LOCAL time via toLocalDayKey; never UTC (toISOString) for grouping/filtering</Text>
-        <Text style={styles.ruleItem}>• Contact save: checkbox "Also save as Outlook contact when booking"; button shows "Book meeting + Save contact" when enabled; explicit success/failure feedback after book</Text>
-        <Text style={styles.ruleItem}>• Home Base in Profile for route preview; map includes Home → stops → Home</Text>
-        <Text style={styles.ruleItem}>• Explain (DEV): (i) on ghost card shows prev/next, arriveBy, departAt, travelFeasible, constraints; Best Options show date+time</Text>
+        <Text style={styles.ruleItem}>• dayIso always LOCAL via toLocalDayKey (never UTC)</Text>
+        <Text style={styles.ruleItem}>• Contact save: checkbox in Confirm sheet; creates Outlook contact on Book</Text>
+        <Text style={styles.ruleItem}>• Explain (DEV): (i) on ghost card shows prev/next, arriveBy, departAt, travelFeasible, constraints</Text>
       </View>
+
       <Text style={styles.h2}>Outlook Integration</Text>
       <View style={styles.ruleList}>
-        <Text style={styles.ruleItem}>• Auth: offline_access for refresh token; session persists across restarts</Text>
+        <Text style={styles.ruleItem}>• Auth: offline_access for refresh token; JWT exp parsed locally on launch (no /me call if token valid)</Text>
         <Text style={styles.ruleItem}>• Scopes: User.Read, Calendars.ReadWrite, Contacts.ReadWrite</Text>
         <Text style={styles.ruleItem}>• Booking creates real Outlook event when permissions granted; local fallback otherwise</Text>
         <Text style={styles.ruleItem}>• Meeting Details: edit/delete sync to Outlook for Graph events</Text>
-        <Text style={styles.ruleItem}>• Contact: checkbox in Confirm sheet; if checked + name/email, creates Outlook contact on Book; success/failure feedback; meeting never blocked</Text>
-        <Text style={styles.ruleItem}>• Dev: "Restore session" button (__DEV__ only) to revalidate stored token</Text>
+        <Text style={styles.ruleItem}>• Contact: checkbox in Confirm sheet; if checked + name/email, creates Outlook contact on Book</Text>
         <Text style={styles.ruleItem}>• Clear error when permissions missing (Calendars.ReadWrite, Contacts.ReadWrite)</Text>
+      </View>
+
+      <Text style={styles.h2}>Data Loading (Two-Phase)</Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• Phase 1 (fast): Graph API fetch → map events synchronously using only Graph-provided coords → show list immediately</Text>
+        <Text style={styles.ruleItem}>• Phase 2 (background): geocode addresses in parallel + enrich with contact addresses + contact info → update list in place</Text>
+        <Text style={styles.ruleItem}>• Day cache stores enriched result; subsequent switches to same day are instant</Text>
+        <Text style={styles.ruleItem}>• Next 5 days preloaded in background (raw → enrich) for instant switching</Text>
+        <Text style={styles.ruleItem}>• Meeting counts (DaySlider ±30 days) use raw fetch only — no geocoding needed for counting</Text>
+        <Text style={styles.ruleItem}>• searchContacts: session cache + in-flight dedup (same query = one HTTP request); $search fast-path then 500-item fallback</Text>
       </View>
 
       <Text style={styles.h2}>Schedule Screen UX</Text>
       <View style={styles.ruleList}>
         <Text style={styles.ruleItem}>• Tap meeting → Meeting Details → edit title, time, location, notes → Save updates schedule</Text>
-        <Text style={styles.ruleItem}>• Done/Undone: check marks completed; tap again to uncheck; persists in AsyncStorage</Text>
-        <Text style={styles.ruleItem}>• Swipe left → Delete (with confirm) → removes meeting locally</Text>
-        <Text style={styles.ruleItem}>• Arrow icon → opens native directions (Apple/Google Maps) to that meeting</Text>
+        <Text style={styles.ruleItem}>• Done/Undone: check marks completed; persists in AsyncStorage</Text>
+        <Text style={styles.ruleItem}>• Swipe left → Delete (with confirm); swipe right → Complete</Text>
+        <Text style={styles.ruleItem}>• Arrow icon → opens native directions (Apple/Google Maps)</Text>
+        <Text style={styles.ruleItem}>• Reorder mode: drag-and-drop (native) or up/down arrows (web); Save order persists; Re-optimize resets to route order</Text>
+        <Text style={styles.ruleItem}>• DaySummaryBar: total drive time, distances, tight/late counts from OSRM leg stats</Text>
+        <Text style={styles.ruleItem}>• Route recalculation debounced 350 ms to avoid cascade requests on rapid reorder</Text>
+      </View>
+
+      <Text style={styles.h2}>Profile Preferences</Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• Home Base: geocoded address used as Start/End anchor for all route and slot calculations</Text>
+        <Text style={styles.ruleItem}>• Start and end from home base (ON/OFF): see section above</Text>
+        <Text style={styles.ruleItem}>• Pre/Post meeting buffers: used in gap formula and shown in slot cards</Text>
+        <Text style={styles.ruleItem}>• Max Detour Distance: distanceThresholdKm (default 30 km)</Text>
+        <Text style={styles.ruleItem}>• Working Hours + Working Days: slots never suggested outside these</Text>
+        <Text style={styles.ruleItem}>• Google Maps API: optional; replaces Nominatim for address search and geocoding</Text>
       </View>
 
       <Text style={styles.h2}>Acceptance Checks</Text>
@@ -289,22 +380,11 @@ function LogicSpecsSection() {
         <Text style={styles.ruleItem}>• Sunday OFF → no suggestions on Sunday</Text>
         <Text style={styles.ruleItem}>• Next Week begins on next Monday</Text>
         <Text style={styles.ruleItem}>• Suggestions never in the past</Text>
-        <Text style={styles.ruleItem}>• Map preview always shows full route (Home → stops → Home) and fits reliably</Text>
+        <Text style={styles.ruleItem}>• Map preview shows full route (Home → stops → Home) and fits bounds reliably</Text>
+        <Text style={styles.ruleItem}>• Best Options always show slots from different days (never 3 variants of same gap)</Text>
+        <Text style={styles.ruleItem}>• Empty-day search shows morning, midday and afternoon options per day</Text>
+        <Text style={styles.ruleItem}>• Field mode: first meeting can start at workStart, last can end at workEnd</Text>
       </View>
-      <Text style={styles.body}>
-        Profile preferences (preMeetingBuffer, postMeetingBuffer, distanceThresholdKm)
-        are used throughout the scheduler and reflected in the UI ("arrive by",
-        "depart at", Max Detour Distance in the expandable info).
-      </Text>
-
-      <Text style={styles.h2}>Location Search (Plan Visit)</Text>
-      <Text style={styles.body}>
-        Location search combines Outlook contacts and address suggestions in one dropdown.
-        When the user types, both searchContacts (Graph) and getAddressSuggestions (geocoding)
-        run in parallel. Contacts with addresses are shown first; then address suggestions.
-        User selects a contact (geocoded to coords) or address. There is no proactive
-        suggestion of contacts based on geographic clusters or existing meetings.
-      </Text>
     </View>
   );
 }

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Car } from 'lucide-react-native';
 import { formatTime } from '../utils/dateUtils';
@@ -19,7 +19,7 @@ export type LegBetweenRowProps = {
   label?: string;
 };
 
-export default function LegBetweenRow({
+function LegBetweenRow({
   durationSec,
   distanceM,
   etaAtNextMs,
@@ -66,6 +66,8 @@ export default function LegBetweenRow({
     </View>
   );
 }
+
+export default memo(LegBetweenRow);
 
 const styles = StyleSheet.create({
   container: {

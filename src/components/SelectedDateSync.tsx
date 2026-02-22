@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { startOfDay, endOfDay, addDays } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
-import { getCalendarEvents, GraphUnauthorizedError } from '../services/graph';
+import { getCalendarEventsRaw, enrichCalendarEventsAll, GraphUnauthorizedError } from '../services/graph';
 import { sortAppointmentsByTime } from '../utils/optimization';
 import { toLocalDayKey } from '../utils/dateUtils';
 
@@ -46,6 +46,8 @@ export default function SelectedDateSync() {
   const dayCache = useRef<Map<string, Awaited<ReturnType<typeof sortAppointmentsByTime>>>>(new Map());
   const isFirstRun = useRef(true);
   const lastRefreshTrigger = useRef(0);
+  /** Track which day is currently "active" so background enrichment doesn't clobber a switched day. */
+  const activeDayKey = useRef<string>('');
 
   /** Merge pending local event into list for this day (so newly confirmed meeting shows immediately). */
   const mergePendingIfSameDay = useCallback(
@@ -68,6 +70,9 @@ export default function SelectedDateSync() {
         return;
       }
       const dayKey = toLocalDayKey(date);
+      activeDayKey.current = dayKey;
+
+      // ── Serve from cache immediately if available ──
       const cached = dayCache.current.get(dayKey);
       if (cached) {
         const merged = mergePendingIfSameDay(dayKey, cached);
@@ -75,30 +80,52 @@ export default function SelectedDateSync() {
         setAppointmentsLoading(false);
         return;
       }
+
       setAppointmentsLoading(true);
       const start = startOfDay(date);
       const end = endOfDay(date);
+
       try {
-        const [events, savedOrder] = await Promise.all([
-          getCalendarEvents(token, start, end),
+        // ── Phase 1: Fast raw fetch — show list immediately ──
+        const [rawEvents, savedOrder] = await Promise.all([
+          getCalendarEventsRaw(token, start, end),
           getDayOrder(dayKey),
         ]);
-        const sorted = sortAppointmentsByTime(events);
-        const ordered = applyOrderSync(sorted, savedOrder);
-        const merged = mergePendingIfSameDay(dayKey, ordered);
-        dayCache.current.set(dayKey, merged);
-        setAppointments(merged);
+        const rawSorted = sortAppointmentsByTime(rawEvents);
+        const rawOrdered = applyOrderSync(rawSorted, savedOrder);
+        const rawMerged = mergePendingIfSameDay(dayKey, rawOrdered);
+
+        if (activeDayKey.current === dayKey) {
+          setAppointments(rawMerged);
+          setAppointmentsLoading(false);
+        }
+
+        // ── Phase 2: Enrich in background (geocoding + contacts) ──
+        enrichCalendarEventsAll(token, rawEvents)
+          .then((enriched) => {
+            if (activeDayKey.current !== dayKey) return; // user switched day
+            const enrichedSorted = sortAppointmentsByTime(enriched);
+            const enrichedOrdered = applyOrderSync(enrichedSorted, savedOrder);
+            const enrichedMerged = mergePendingIfSameDay(dayKey, enrichedOrdered);
+            dayCache.current.set(dayKey, enrichedMerged);
+            setAppointments(enrichedMerged);
+          })
+          .catch(() => {
+            // enrichment failed — raw events already displayed, cache raw as fallback
+            dayCache.current.set(dayKey, rawMerged);
+          });
       } catch (e) {
-        setAppointments([]);
+        if (activeDayKey.current === dayKey) {
+          setAppointments([]);
+          setAppointmentsLoading(false);
+        }
         if (e instanceof GraphUnauthorizedError) signOut();
-      } finally {
-        setAppointmentsLoading(false);
       }
     },
     [userToken, getValidToken, setAppointments, setAppointmentsLoading, getDayOrder, signOut, mergePendingIfSameDay]
   );
 
-  /** Fetch a day and store only in cache (for preloading). Does not update context. */
+  /** Preload a future day fully (raw + enrich) and store in cache. Does not update context. */
   const preloadOneDay = useCallback(
     async (date: Date) => {
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
@@ -108,13 +135,23 @@ export default function SelectedDateSync() {
       const start = startOfDay(date);
       const end = endOfDay(date);
       try {
-        const [events, savedOrder] = await Promise.all([
-          getCalendarEvents(token, start, end),
+        // Raw first → cache immediately so date switches feel instant
+        const [rawEvents, savedOrder] = await Promise.all([
+          getCalendarEventsRaw(token, start, end),
           getDayOrder(dayKey),
         ]);
-        const sorted = sortAppointmentsByTime(events);
-        const ordered = applyOrderSync(sorted, savedOrder);
-        dayCache.current.set(dayKey, ordered);
+        const rawSorted = sortAppointmentsByTime(rawEvents);
+        const rawOrdered = applyOrderSync(rawSorted, savedOrder);
+        dayCache.current.set(dayKey, rawOrdered);
+
+        // Then enrich and update cache with richer data
+        enrichCalendarEventsAll(token, rawEvents)
+          .then((enriched) => {
+            const enrichedSorted = sortAppointmentsByTime(enriched);
+            const enrichedOrdered = applyOrderSync(enrichedSorted, savedOrder);
+            dayCache.current.set(dayKey, enrichedOrdered);
+          })
+          .catch(() => {});
       } catch {
         // ignore; preload is best-effort
       }

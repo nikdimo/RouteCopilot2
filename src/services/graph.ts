@@ -103,13 +103,14 @@ function getAddressForGeocode(loc: GraphEvent['location']): string | undefined {
   return undefined;
 }
 
-async function mapEventAsync(ev: GraphEvent): Promise<CalendarEvent> {
+/** Synchronous field mapping — no geocoding. Uses only Graph-provided coordinates. */
+function mapEventSync(ev: GraphEvent): CalendarEvent {
   const startIso = normalizeGraphDateTime(ev.start.dateTime, ev.start.timeZone);
   const endIso = normalizeGraphDateTime(ev.end.dateTime, ev.end.timeZone);
   const time = formatTimeRange(startIso, endIso);
   const location = getAddressString(ev.location) ?? '';
-  let coordinates: { latitude: number; longitude: number } | undefined;
 
+  let coordinates: { latitude: number; longitude: number } | undefined;
   const coords = ev.location?.coordinates;
   if (
     coords != null &&
@@ -117,34 +118,6 @@ async function mapEventAsync(ev: GraphEvent): Promise<CalendarEvent> {
     typeof coords.longitude === 'number'
   ) {
     coordinates = { latitude: coords.latitude, longitude: coords.longitude };
-  } else {
-    const addressString = getAddressForGeocode(ev.location);
-    if (addressString) {
-      if (Platform.OS === 'web') {
-        const result = await geocodeAddress(addressString);
-        if (result.success) {
-          coordinates = { latitude: result.lat, longitude: result.lon };
-        }
-      } else {
-        try {
-          const result = await Location.geocodeAsync(addressString);
-          if (result.length > 0 && result[0]) {
-            coordinates = {
-              latitude: result[0].latitude,
-              longitude: result[0].longitude,
-            };
-          }
-        } catch {
-          /* native failed */
-        }
-        if (!coordinates) {
-          const fallback = await geocodeAddress(addressString);
-          if (fallback.success) {
-            coordinates = { latitude: fallback.lat, longitude: fallback.lon };
-          }
-        }
-      }
-    }
   }
 
   return {
@@ -159,18 +132,57 @@ async function mapEventAsync(ev: GraphEvent): Promise<CalendarEvent> {
   };
 }
 
-export async function getCalendarEvents(
+/** Geocode all events in parallel that have an address but no coordinates. */
+async function geocodeEventsAsync(events: CalendarEvent[]): Promise<CalendarEvent[]> {
+  const needGeocode = events.filter((ev) => !ev.coordinates && (ev.location?.trim() ?? '') !== '');
+  if (needGeocode.length === 0) return events;
+
+  if (Platform.OS !== 'web') {
+    await Location.requestForegroundPermissionsAsync().catch(() => {});
+  }
+
+  const enriched = await Promise.all(
+    needGeocode.map(async (ev) => {
+      const addr = ev.location?.trim() || null;
+      if (!addr) return ev;
+      let coordinates: { latitude: number; longitude: number } | undefined;
+      if (Platform.OS === 'web') {
+        const result = await geocodeAddress(addr);
+        if (result.success) coordinates = { latitude: result.lat, longitude: result.lon };
+      } else {
+        try {
+          const result = await Location.geocodeAsync(addr);
+          if (result.length > 0 && result[0]) {
+            coordinates = { latitude: result[0].latitude, longitude: result[0].longitude };
+          }
+        } catch { /* native failed */ }
+        if (!coordinates) {
+          const fallback = await geocodeAddress(addr);
+          if (fallback.success) coordinates = { latitude: fallback.lat, longitude: fallback.lon };
+        }
+      }
+      return coordinates ? { ...ev, coordinates } : ev;
+    })
+  );
+
+  const byId = new Map(enriched.map((ev) => [ev.id, ev]));
+  return events.map((ev) => byId.get(ev.id) ?? ev);
+}
+
+/** Full single-event mapping with geocoding (used by create/update flows). */
+async function mapEventAsync(ev: GraphEvent): Promise<CalendarEvent> {
+  const raw = mapEventSync(ev);
+  if (raw.coordinates) return raw;
+  const [withCoords] = await geocodeEventsAsync([raw]);
+  return withCoords ?? raw;
+}
+
+/** Fetch raw Graph calendar events and map them synchronously (no geocoding, no enrichment). */
+async function fetchGraphEvents(
   token: string,
   startDate: Date,
   endDate: Date
 ): Promise<CalendarEvent[]> {
-  if (Platform.OS !== 'web') {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      // continue without native geocoding; we fall back to Nominatim
-    }
-  }
-
   const start = startDate.toISOString();
   const end = endDate.toISOString();
   const params = new URLSearchParams({
@@ -188,28 +200,57 @@ export async function getCalendarEvents(
 
   const allGraphEvents: GraphEvent[] = [];
   let nextLink: string | null = baseUrl;
-
   while (nextLink) {
     const res = await fetch(nextLink, { headers });
-    if (res.status === 401) {
-      throw new GraphUnauthorizedError();
-    }
-    if (!res.ok) {
-      throw new Error(`Calendar request failed: ${res.status}`);
-    }
+    if (res.status === 401) throw new GraphUnauthorizedError();
+    if (!res.ok) throw new Error(`Calendar request failed: ${res.status}`);
     const data = await res.json();
     const page: GraphEvent[] = data.value ?? [];
     allGraphEvents.push(...page);
     nextLink = data['@odata.nextLink'] ?? null;
   }
 
-  const mapped = await Promise.all(allGraphEvents.map(mapEventAsync));
+  return allGraphEvents.map(mapEventSync);
+}
+
+/**
+ * Fast calendar fetch — returns events immediately using only Graph-provided coordinates.
+ * Use this when you need to show the list quickly; call enrichCalendarEventsAll afterwards
+ * in the background to fill in geocoded coordinates and contact info.
+ */
+export async function getCalendarEventsRaw(
+  token: string,
+  startDate: Date,
+  endDate: Date
+): Promise<CalendarEvent[]> {
+  return fetchGraphEvents(token, startDate, endDate);
+}
+
+/**
+ * Enrich a batch of events: geocode addresses + fill contact addresses + fill contact info.
+ * Run this after getCalendarEventsRaw to progressively improve displayed data.
+ */
+export async function enrichCalendarEventsAll(
+  token: string,
+  events: CalendarEvent[]
+): Promise<CalendarEvent[]> {
+  const geocoded = await geocodeEventsAsync(events);
   try {
-    const withAddresses = await enrichCalendarEventsWithContactAddresses(token, mapped);
+    const withAddresses = await enrichCalendarEventsWithContactAddresses(token, geocoded);
     return await enrichCalendarEventsWithContactInfo(token, withAddresses);
   } catch {
-    return mapped;
+    return geocoded;
   }
+}
+
+/** Full pipeline: fetch + geocode + enrich. Use when you can afford the wait. */
+export async function getCalendarEvents(
+  token: string,
+  startDate: Date,
+  endDate: Date
+): Promise<CalendarEvent[]> {
+  const raw = await fetchGraphEvents(token, startDate, endDate);
+  return enrichCalendarEventsAll(token, raw);
 }
 
 /**
@@ -235,18 +276,22 @@ async function enrichCalendarEventsWithContactInfo(
   }
 
   const keyToContact = new Map<string, { phone?: string; email?: string }>();
-  for (const key of keys) {
-    const result = await searchContacts(token, key);
-    if (!result.success || !result.contacts?.length) continue;
-    const exact = result.contacts.find((c) => c.displayName.toLowerCase() === key.toLowerCase());
-    const contact = exact ?? result.contacts.find((c) => c.phones.length > 0 || c.emails.length > 0);
-    if (contact) {
-      keyToContact.set(key, {
-        phone: contact.phones[0]?.trim() || undefined,
-        email: contact.emails[0]?.trim() || undefined,
-      });
-    }
-  }
+
+  // Parallel contact lookups (all keys resolved concurrently)
+  await Promise.all(
+    [...keys].map(async (key) => {
+      const result = await searchContacts(token, key);
+      if (!result.success || !result.contacts?.length) return;
+      const exact = result.contacts.find((c) => c.displayName.toLowerCase() === key.toLowerCase());
+      const contact = exact ?? result.contacts.find((c) => c.phones.length > 0 || c.emails.length > 0);
+      if (contact) {
+        keyToContact.set(key, {
+          phone: contact.phones[0]?.trim() || undefined,
+          email: contact.emails[0]?.trim() || undefined,
+        });
+      }
+    })
+  );
 
   if (keyToContact.size === 0) return events;
 
@@ -282,29 +327,29 @@ export async function enrichCalendarEventsWithContactAddresses(
     { location: string; coordinates: { latitude: number; longitude: number }; phone?: string; email?: string }
   >();
 
-  for (const loc of uniqueLocations) {
-    const result = await searchContacts(token, loc);
-    if (!result.success || !result.contacts || result.contacts.length === 0) continue;
+  // Parallel contact + geocode lookups for all unique locations
+  await Promise.all(
+    uniqueLocations.map(async (loc) => {
+      const result = await searchContacts(token, loc);
+      if (!result.success || !result.contacts || result.contacts.length === 0) return;
 
-    const exactMatch = result.contacts.find(
-      (c) => c.displayName.toLowerCase() === loc.toLowerCase() && c.hasAddress
-    );
-    const contact = exactMatch ?? result.contacts.find((c) => c.hasAddress);
-    if (!contact?.hasAddress || !contact.formattedAddress) continue;
+      const exactMatch = result.contacts.find(
+        (c) => c.displayName.toLowerCase() === loc.toLowerCase() && c.hasAddress
+      );
+      const contact = exactMatch ?? result.contacts.find((c) => c.hasAddress);
+      if (!contact?.hasAddress || !contact.formattedAddress) return;
 
-    const geocodeResult = await geocodeContactAddress(
-      contact.formattedAddress,
-      contact.bestAddress
-    );
-    if (!geocodeResult.success) continue;
+      const geocodeResult = await geocodeContactAddress(contact.formattedAddress, contact.bestAddress);
+      if (!geocodeResult.success) return;
 
-    locationToEnriched.set(loc, {
-      location: contact.formattedAddress,
-      coordinates: { latitude: geocodeResult.lat, longitude: geocodeResult.lon },
-      phone: contact.phones[0]?.trim() || undefined,
-      email: contact.emails[0]?.trim() || undefined,
-    });
-  }
+      locationToEnriched.set(loc, {
+        location: contact.formattedAddress,
+        coordinates: { latitude: geocodeResult.lat, longitude: geocodeResult.lon },
+        phone: contact.phones[0]?.trim() || undefined,
+        email: contact.emails[0]?.trim() || undefined,
+      });
+    })
+  );
 
   if (locationToEnriched.size === 0) return events;
 
@@ -504,7 +549,12 @@ export async function createContact(
   return { success: true, id: data.id ?? '' };
 }
 
-// ─── Contact Search (Plan Visit location) ───────────────────────────────────
+// ─── Contact Search (Plan Visit location) ────────────────────────────────────
+// In-flight deduplication: if the same query is already fetching, return the same promise
+// Session cache: avoid re-fetching the same query within a session
+const _contactInflight = new Map<string, Promise<SearchContactsResult>>();
+const _contactCache = new Map<string, SearchContactsResult>();
+const _CONTACT_CACHE_MAX = 200;
 
 type GraphPhysicalAddress = {
   street?: string;
@@ -579,16 +629,69 @@ export type SearchContactsResult =
 
 /**
  * Search Outlook contacts by display name, given name, surname, company.
- * Graph $filter is limited for contacts; we fetch and filter client-side for reliable partial match.
+ * Uses a session cache and in-flight deduplication to avoid redundant API calls.
+ * Tries a fast server-side $search first ($top=25); falls back to fetching all 500 if needed.
  */
 export async function searchContacts(
   token: string,
   query: string
 ): Promise<SearchContactsResult> {
   const q = query.trim();
+  if (!q) return { success: true, contacts: [] };
+
+  const cacheKey = q.toLowerCase();
+
+  // Session cache hit
+  if (_contactCache.has(cacheKey)) {
+    return _contactCache.get(cacheKey)!;
+  }
+
+  // In-flight deduplication: reuse an ongoing request for the same query
+  if (_contactInflight.has(cacheKey)) {
+    return _contactInflight.get(cacheKey)!;
+  }
+
+  const promise = _doSearchContacts(token, q);
+  _contactInflight.set(cacheKey, promise);
+  promise
+    .then((result) => {
+      if (_contactCache.size >= _CONTACT_CACHE_MAX) {
+        // Evict oldest entry when cache is full
+        const firstKey = _contactCache.keys().next().value;
+        if (firstKey) _contactCache.delete(firstKey);
+      }
+      _contactCache.set(cacheKey, result);
+    })
+    .finally(() => _contactInflight.delete(cacheKey));
+
+  return promise;
+}
+
+async function _doSearchContacts(
+  token: string,
+  q: string
+): Promise<SearchContactsResult> {
   const select =
     'id,displayName,givenName,surname,companyName,businessPhones,homePhones,mobilePhone,emailAddresses,homeAddress,businessAddress,otherAddress';
 
+  // Fast path: server-side $search (returns top 25, avoids downloading 500 contacts)
+  const searchUrl = `https://graph.microsoft.com/v1.0/me/contacts?$search="${encodeURIComponent(q)}"&$top=25&$select=${encodeURIComponent(select)}`;
+  try {
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' },
+    });
+    if (searchRes.ok) {
+      const searchData = (await searchRes.json()) as { value?: GraphContact[] };
+      const contacts = _mapGraphContacts(searchData.value ?? [], q);
+      if (contacts.length > 0) return { success: true, contacts };
+      // $search returned empty — fall through to full fetch for partial matches
+    }
+    // $search not supported or returned nothing — fall through
+  } catch {
+    // network error on fast path — fall through
+  }
+
+  // Fallback: full fetch + client-side filter
   const url = `https://graph.microsoft.com/v1.0/me/contacts?$top=500&$select=${encodeURIComponent(select)}`;
   try {
     const res = await fetch(url, {
@@ -599,8 +702,6 @@ export async function searchContacts(
       return { success: false, error: 'Session expired. Sign in again.', is401: true };
     }
     if (res.status === 403) {
-      const data = await res.json().catch(() => ({}));
-      const code = data?.error?.code ?? '';
       return {
         success: false,
         error: 'Grant Contacts.Read or Contacts.ReadWrite to search contacts.',
@@ -616,37 +717,35 @@ export async function searchContacts(
     const data = (await res.json()) as { value?: GraphContact[] };
     const all = data.value ?? [];
     const queryLower = q.toLowerCase();
-    const filtered = q
-      ? all.filter((c) => contactMatchesQuery(c, queryLower))
-      : [];
-
-    const contacts: ContactSearchResult[] = filtered.map((c) => {
-      const bestAddr = getBestAddress(c);
-      const formatted = bestAddr ? formatPhysicalAddress(bestAddr) : '';
-      const phones = [
-        ...(c.businessPhones ?? []),
-        ...(c.homePhones ?? []),
-        c.mobilePhone,
-      ].filter(Boolean) as string[];
-      const emails = (c.emailAddresses ?? []).map((e) => e.address).filter(Boolean) as string[];
-
-      return {
-        id: c.id ?? '',
-        displayName: c.displayName ?? c.givenName ?? c.surname ?? '(No name)',
-        companyName: c.companyName,
-        phones,
-        emails,
-        bestAddress: bestAddr,
-        formattedAddress: formatted,
-        hasAddress: !!formatted,
-      };
-    });
-
-    return { success: true, contacts };
+    const filtered = q ? all.filter((c) => contactMatchesQuery(c, queryLower)) : [];
+    return { success: true, contacts: _mapGraphContacts(filtered, q) };
   } catch (err) {
     return {
       success: false,
       error: err instanceof Error ? err.message : 'Network error',
     };
   }
+}
+
+function _mapGraphContacts(raw: GraphContact[], _query: string): ContactSearchResult[] {
+  return raw.map((c) => {
+    const bestAddr = getBestAddress(c);
+    const formatted = bestAddr ? formatPhysicalAddress(bestAddr) : '';
+    const phones = [
+      ...(c.businessPhones ?? []),
+      ...(c.homePhones ?? []),
+      c.mobilePhone,
+    ].filter(Boolean) as string[];
+    const emails = (c.emailAddresses ?? []).map((e) => e.address).filter(Boolean) as string[];
+    return {
+      id: c.id ?? '',
+      displayName: c.displayName ?? c.givenName ?? c.surname ?? '(No name)',
+      companyName: c.companyName,
+      phones,
+      emails,
+      bestAddress: bestAddr,
+      formattedAddress: formatted,
+      hasAddress: !!formatted,
+    };
+  });
 }

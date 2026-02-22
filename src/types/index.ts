@@ -30,6 +30,17 @@ export type UserPreferences = {
   useGoogleGeocoding?: boolean;
   /** Google Cloud API key with Places API and Geocoding API enabled. Only used when useGoogleGeocoding is true. */
   googleMapsApiKey?: string;
+  /**
+   * When true (default), the scheduler assumes the worker drives from home to the first
+   * meeting and back home after the last meeting each day. Travel time to/from home base
+   * is factored into earliest and latest meeting times.
+   *
+   * When false (field/overnight mode), the first meeting can start exactly at work start
+   * time and the last can end at work end time — no home travel is counted. The cross-day
+   * adjacency bonus also activates: slots that end near the next day's first meeting score
+   * better, since no nightly return trip is assumed.
+   */
+  alwaysStartFromHomeBase?: boolean;
 };
 
 /** Default Mon–Fri enabled, Sat–Sun disabled (matches Date.getDay() 0=Sun..6=Sat) */

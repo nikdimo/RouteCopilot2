@@ -21,22 +21,22 @@ function parseNumber(s: string, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-/** 15-min slot index 0–95: 0 = 00:00, 95 = 23:45 */
-const SLOTS_PER_HOUR = 4; // 60/15
-const MAX_SLOT = 24 * SLOTS_PER_HOUR - 1; // 95
+/** 5-min slot index 0–287: 0 = 00:00, 287 = 23:55 */
+const SLOTS_PER_HOUR = 12; // 60/5
+const MAX_SLOT = 24 * SLOTS_PER_HOUR - 1; // 287
 
 function timeToSlot(time: string): number {
   const m = time.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return 32; // default 08:00
+  if (!m) return 96; // default 08:00
   const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
   const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
-  const slot = h * SLOTS_PER_HOUR + Math.round(min / 15);
+  const slot = h * SLOTS_PER_HOUR + Math.round(min / 5);
   return Math.min(MAX_SLOT, Math.max(0, slot));
 }
 
 function slotToTime(slot: number): string {
   const s = Math.min(MAX_SLOT, Math.max(0, Math.round(slot)));
-  const totalMin = s * 15;
+  const totalMin = s * 5;
   const h = Math.floor(totalMin / 60);
   const min = totalMin % 60;
   return `${h.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
@@ -238,6 +238,26 @@ export default function ProfileScreen() {
       </View>
 
       <View style={styles.card}>
+        <Text style={styles.cardTitle}>Start and end from home base</Text>
+        <Text style={styles.hint}>
+          {preferences.alwaysStartFromHomeBase !== false
+            ? 'On — the app assumes you drive from home to your first meeting and back home after your last meeting each day. Travel time to and from home is counted when calculating available slots.'
+            : 'Off — field travel mode. Your first meeting can start exactly at your work start time and your last can end at work end time. Use this when you stay overnight in the field and are not driving home each evening.'}
+        </Text>
+        <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>
+            {preferences.alwaysStartFromHomeBase !== false ? 'On (commute daily)' : 'Off (staying in field)'}
+          </Text>
+          <Switch
+            value={preferences.alwaysStartFromHomeBase !== false}
+            onValueChange={(value) => updatePreferences({ alwaysStartFromHomeBase: value })}
+            trackColor={{ false: '#E1DFDD', true: '#0078D4' }}
+            thumbColor="#fff"
+          />
+        </View>
+      </View>
+
+      <View style={styles.card}>
         <Text style={styles.cardTitle}>Use Google for address search</Text>
         <Text style={styles.hint}>
           {useGoogle
@@ -355,7 +375,7 @@ export default function ProfileScreen() {
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Working Hours</Text>
-        <Text style={styles.hint}>No travel or meeting can extend beyond end time. Steps in 15-minute intervals.</Text>
+        <Text style={styles.hint}>No travel or meeting can extend beyond end time. Steps in 5-minute intervals.</Text>
         <View style={styles.workingHoursSliders}>
           <View style={styles.sliderBlock}>
             <Text style={styles.sliderLabel}>Start</Text>
