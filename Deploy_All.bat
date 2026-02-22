@@ -63,7 +63,7 @@ echo Git push done.
 
 echo.
 echo [2/5] Pull on VPS - you may be prompted for SSH passphrase
-ssh -i "%KEY%" -o ConnectTimeout=15 %HOST% "cd ~/RouteCopilot2 && git pull origin %BRANCH%"
+ssh -i "%KEY%" -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 %HOST% "cd ~/RouteCopilot2 && git pull origin %BRANCH%"
 if errorlevel 1 (
     echo Pull on VPS failed. Check key, passphrase, host: %HOST%
     pause
@@ -81,13 +81,13 @@ if errorlevel 1 (
 
 echo.
 echo [4/5] Upload and update live site on VPS - you may be prompted for SSH passphrase
-scp -i "%KEY%" -o ConnectTimeout=15 -r vps-landing\app\* %HOST%:~/app-deploy/
+scp -i "%KEY%" -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -r vps-landing\app\* %HOST%:~/app-deploy/
 if errorlevel 1 (
     echo SCP upload failed.
     pause
     exit /b 1
 )
-ssh -i "%KEY%" -o ConnectTimeout=15 %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
+ssh -i "%KEY%" -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
 if errorlevel 1 (
     echo VPS deploy step failed.
     echo One-time setup on VPS: see docs\WORKING_CONFIG.md "Deploy script on VPS"
