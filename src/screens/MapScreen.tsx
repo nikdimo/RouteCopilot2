@@ -25,6 +25,30 @@ import { format, isSameDay, startOfDay } from 'date-fns';
 import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { formatDistance, offsetPolyline } from '../utils/routeBubbles';
 import { getMarkerPositions } from '../utils/mapClusters';
+import type { CoordAppointment } from '../hooks/useRouteData';
+
+/** Format meeting start–end for root marker (e.g. "9:00-10:00"). */
+function formatMeetingTimeRange(coord: CoordAppointment): string {
+  if (coord.time && typeof coord.time === 'string') {
+    const parts = coord.time.split('-').map((p) => p.trim());
+    if (parts.length >= 2) {
+      const start = (parts[0] ?? '').trim();
+      const end = (parts[1] ?? '').trim();
+      if (start && end) return `${start}-${end}`;
+    }
+  }
+  if (coord.startIso && coord.endIso) {
+    try {
+      const s = new Date(coord.startIso);
+      const e = new Date(coord.endIso);
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      return `${pad(s.getHours())}:${pad(s.getMinutes())}-${pad(e.getHours())}:${pad(e.getMinutes())}`;
+    } catch {
+      // fallthrough
+    }
+  }
+  return '';
+}
 
 const DEFAULT_REGION = {
   latitude: 55.6761,
@@ -312,25 +336,59 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
         {!osrmRoute && routeCoordinates.length >= 2 && (
           <Polyline coordinates={routeCoordinates} strokeColor="#00B0FF" strokeWidth={5} />
         )}
-        {showHomeBase && (
-          <Marker
-            coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
-            pinColor={HOME_GREEN}
-          >
-            <Callout tooltip={false}>
-              <View style={styles.calloutBubble}>
-                <Text style={[styles.calloutBadge, { color: HOME_GREEN }]}>Home Base</Text>
-                <Text style={styles.calloutTitle}>{homeBaseLabel ?? 'Home Base'}</Text>
-                {typeof departByMs === 'number' && !Number.isNaN(departByMs) && (
-                  <Text style={styles.calloutDescription}>Depart by {formatTime(departByMs)}</Text>
-                )}
-                {typeof returnByMs === 'number' && !Number.isNaN(returnByMs) && (
-                  <Text style={styles.calloutDescription}>Return ~{formatTime(returnByMs)}</Text>
-                )}
-              </View>
-            </Callout>
-          </Marker>
-        )}
+        {showHomeBase && (() => {
+          const targetIndex = selectedArrivalLegIndex != null ? selectedArrivalLegIndex : 0;
+          const rootEta = coords.length > 0 && targetIndex < etas.length ? etas[targetIndex] : undefined;
+          const rootMeetingTime = coords.length > 0 && coords[targetIndex] ? formatMeetingTimeRange(coords[targetIndex]) : '';
+          const onRootPress = () => {
+            ignoreNextMapPressRef.current = true;
+            setFocusedClusterKey(null);
+            setFocusedClusterCoord(null);
+            setSelectedArrivalLegIndex(0);
+            setSelectedWaypointIndices([0]);
+            setHighlightWaypointIndex(0);
+          };
+          return (
+            <Marker
+              coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
+              pinColor={isWide ? HOME_GREEN : undefined}
+              anchor={isWide ? undefined : { x: 0.5, y: 0.5 }}
+              tracksViewChanges={!isWide}
+              onPress={onRootPress}
+            >
+              {isWide ? (
+                <Callout tooltip={false}>
+                  <View style={styles.calloutBubble}>
+                    <Text style={[styles.calloutBadge, { color: HOME_GREEN }]}>Home Base</Text>
+                    <Text style={styles.calloutTitle}>{homeBaseLabel ?? 'Home Base'}</Text>
+                    {typeof departByMs === 'number' && !Number.isNaN(departByMs) && (
+                      <Text style={styles.calloutDescription}>Depart by {formatTime(departByMs)}</Text>
+                    )}
+                    {typeof returnByMs === 'number' && !Number.isNaN(returnByMs) && (
+                      <Text style={styles.calloutDescription}>Return ~{formatTime(returnByMs)}</Text>
+                    )}
+                  </View>
+                </Callout>
+              ) : (
+                <View style={styles.markerWithEta}>
+                  {(rootEta != null || rootMeetingTime) && (
+                    <View style={[styles.markerEtaBadge, styles.markerRootLabel]}>
+                      {rootEta != null && (
+                        <Text style={styles.markerEtaText}>{formatTime(rootEta)}</Text>
+                      )}
+                      {rootMeetingTime ? (
+                        <Text style={styles.markerMeetingTimeText}>{rootMeetingTime}</Text>
+                      ) : null}
+                    </View>
+                  )}
+                  <View style={[styles.markerPin, { backgroundColor: HOME_GREEN }]}>
+                    <Text style={styles.markerPinNumber}>H</Text>
+                  </View>
+                </View>
+              )}
+            </Marker>
+          );
+        })()}
         {markerPositions.map(
           ({ index, coordinate, realCoordinate }) =>
             realCoordinate != null && (
@@ -653,6 +711,16 @@ const styles = StyleSheet.create({
   markerEtaText: {
     fontSize: 11,
     fontWeight: '700',
+    color: '#3c3c3c',
+  },
+  markerRootLabel: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 0,
+  },
+  markerMeetingTimeText: {
+    fontSize: 10,
+    fontWeight: '600',
     color: '#3c3c3c',
   },
   markerEtaBadgeCluster: {

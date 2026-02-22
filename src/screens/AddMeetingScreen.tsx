@@ -797,6 +797,12 @@ export default function AddMeetingScreen() {
             <MapPreviewModal
               visible={!!mapSlot}
               onClose={() => setMapSlot(null)}
+              onConfirmBooking={() => {
+                if (mapSlot) {
+                  setConfirmSlot(mapSlot);
+                  setMapSlot(null);
+                }
+              }}
               dayEvents={eventsForDay(filteredAppointments, mapSlot.dayIso)}
               insertionCoord={newLocation}
               slot={mapSlot}

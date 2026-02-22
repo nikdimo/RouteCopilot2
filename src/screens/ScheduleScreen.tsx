@@ -431,14 +431,21 @@ export default function ScheduleScreen() {
       const isLate = (waitTimeBeforeMeetingMin[item.appointmentIndex] ?? 0) < 0;
       const block = (
         <View style={[styles.blockRow, isActive && styles.blockRowActive, isLate && styles.meetingRowLate]}>
+          {isWide ? (
+            <TouchableOpacity
+              onLongPress={drag}
+              style={styles.dragHandle}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <GripVertical size={22} color="#605E5C" />
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity
-            onLongPress={drag}
-            style={styles.dragHandle}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={styles.blockContent}
+            activeOpacity={1}
+            onLongPress={isWide ? undefined : drag}
+            delayLongPress={400}
           >
-            <GripVertical size={22} color="#605E5C" />
-          </TouchableOpacity>
-          <View style={styles.blockContent}>
             {legFromHome ? (
               <LegBetweenRow
                 durationSec={legFromHome.durationSec}
@@ -489,7 +496,7 @@ export default function ScheduleScreen() {
                 label={legAfter.label}
               />
             ) : null}
-          </View>
+          </TouchableOpacity>
         </View>
       );
       return block;
@@ -504,8 +511,12 @@ export default function ScheduleScreen() {
       unmarkEventAsDone,
       markEventAsDone,
       removeAppointment,
+      isWide,
     ]
   );
+
+  const isWide = useIsWideScreen();
+  const insets = useSafeAreaInsets();
 
   const listHeader = (
     <>
@@ -525,33 +536,37 @@ export default function ScheduleScreen() {
           longWaitCount={daySummary.longWaitCount}
         />
       ) : null}
-      <View style={styles.toolbarRow}>
-        <View style={styles.viewModeWrap}>
-          <ViewModeToggle value={viewMode} onChange={setViewMode} />
-        </View>
-        {appointmentsList.length > 0 ? (
-          <TouchableOpacity
-            style={styles.reorderButton}
-            onPress={() => setReorderMode((m) => !m)}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.reorderButtonText}>
-              {reorderMode ? 'Cancel' : 'Reorder'}
-            </Text>
-          </TouchableOpacity>
-        ) : null}
-      </View>
-      {reorderMode && appointmentsList.length > 0 ? (
-        <View style={styles.reorderBar}>
-          <TouchableOpacity style={styles.reorderBarButton} onPress={handleSaveOrder}>
-            <Text style={styles.reorderBarButtonText}>Save order</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.reorderBarButton} onPress={handleReoptimize}>
-            <Text style={styles.reorderBarButtonText}>Re-optimize</Text>
-          </TouchableOpacity>
-        </View>
+      {isWide ? (
+        <>
+          <View style={styles.toolbarRow}>
+            <View style={styles.viewModeWrap}>
+              <ViewModeToggle value={viewMode} onChange={setViewMode} />
+            </View>
+            {appointmentsList.length > 0 ? (
+              <TouchableOpacity
+                style={styles.reorderButton}
+                onPress={() => setReorderMode((m) => !m)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.reorderButtonText}>
+                  {reorderMode ? 'Cancel' : 'Reorder'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          {reorderMode && appointmentsList.length > 0 ? (
+            <View style={styles.reorderBar}>
+              <TouchableOpacity style={styles.reorderBarButton} onPress={handleSaveOrder}>
+                <Text style={styles.reorderBarButtonText}>Save order</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.reorderBarButton} onPress={handleReoptimize}>
+                <Text style={styles.reorderBarButtonText}>Re-optimize</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </>
       ) : null}
-      {viewMode === 'timeline' && appointmentsList.length > 0 ? (
+      {(viewMode === 'timeline' || !isWide) && appointmentsList.length > 0 ? (
         <DayTimelineStrip
           appointments={appointmentsList}
           selectedDateMs={selectedDate.getTime()}
@@ -559,9 +574,6 @@ export default function ScheduleScreen() {
       ) : null}
     </>
   );
-
-  const isWide = useIsWideScreen();
-  const insets = useSafeAreaInsets();
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -578,7 +590,7 @@ export default function ScheduleScreen() {
     });
   }, [navigation, headerTitle, isWide]);
 
-  const useDragList = reorderMode && appointmentsList.length > 0 && Platform.OS !== 'web' && !isExpoGo;
+  const useDragList = appointmentsList.length > 0 && Platform.OS !== 'web' && !isExpoGo && !isWide;
   const DraggableFlatListComponent = useDragList ? getDraggableFlatList() : null;
   const scheduleContent = (
     <>
