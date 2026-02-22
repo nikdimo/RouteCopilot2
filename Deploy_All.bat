@@ -10,9 +10,9 @@ echo.
 set KEY=%USERPROFILE%\.ssh\contabo_nikola
 set HOST=nikola@207.180.222.248
 set BRANCH=master
-REM Use short (8.3) path for SSH ControlPath so spaces in username do not break SSH
-set "CTRL=%USERPROFILE%\.ssh\ctrl-wiseplan-vps"
-for %%I in ("%USERPROFILE%\.ssh") do set "CTRL=%%~sI\ctrl-wiseplan-vps"
+
+REM No ControlMaster - Windows OpenSSH often fails with "getsockname failed: Not a socket".
+REM You may be prompted for SSH passphrase for pull, scp, and deploy (or once if using ssh-agent).
 
 REM --- Check SSH key exists ---
 if not exist "%KEY%" (
@@ -62,20 +62,10 @@ if errorlevel 1 (
 echo Git push done.
 
 echo.
-echo [2/5] Connect to VPS - one-time passphrase if needed
-ssh -i "%KEY%" -o ControlMaster=yes -o ControlPath="%CTRL%" -o ControlPersist=120 -o ConnectTimeout=15 -f -N %HOST%
+echo [2/5] Pull on VPS - you may be prompted for SSH passphrase
+ssh -i "%KEY%" -o ConnectTimeout=15 %HOST% "cd ~/RouteCopilot2 && git pull origin %BRANCH%"
 if errorlevel 1 (
-    echo Could not connect to VPS. Check key, passphrase, and host: %HOST%
-    pause
-    exit /b 1
-)
-
-echo.
-echo [3/5] Pull on VPS
-ssh -i "%KEY%" -o ControlPath="%CTRL%" -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin %BRANCH%"
-if errorlevel 1 (
-    echo Pull on VPS failed.
-    ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
+    echo Pull on VPS failed. Check key, passphrase, host: %HOST%
     pause
     exit /b 1
 )
@@ -85,30 +75,26 @@ echo [4/5] Build web app - local
 call npm run prepare:vps
 if errorlevel 1 (
     echo Build failed.
-    ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
     pause
     exit /b 1
 )
 
 echo.
-echo [5/5] Upload and update live site on VPS
-scp -i "%KEY%" -o ControlPath="%CTRL%" -r vps-landing\app\* %HOST%:~/app-deploy/
+echo [5/5] Upload and update live site on VPS - you may be prompted for SSH passphrase
+scp -i "%KEY%" -o ConnectTimeout=15 -r vps-landing\app\* %HOST%:~/app-deploy/
 if errorlevel 1 (
     echo SCP upload failed.
-    ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
     pause
     exit /b 1
 )
-ssh -i "%KEY%" -o ControlPath="%CTRL%" %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
+ssh -i "%KEY%" -o ConnectTimeout=15 %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
 if errorlevel 1 (
     echo VPS deploy step failed.
     echo One-time setup on VPS: see docs\WORKING_CONFIG.md "Deploy script on VPS"
     echo Or on VPS run: sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ ^&^& rm -r ~/app-deploy
-    ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
     pause
     exit /b 1
 )
-ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
 
 echo.
 echo === Done. Live site updated. ===
