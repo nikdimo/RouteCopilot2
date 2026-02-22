@@ -363,6 +363,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                 setFocusedClusterCoord(null);
                 setSelectedArrivalLegIndex(index);
                 setSelectedWaypointIndices([index]);
+                setHighlightWaypointIndex(index);
               }}
             >
               <View style={styles.markerWithEta}>

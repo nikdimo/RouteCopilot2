@@ -8,8 +8,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
-  NativeSyntheticEvent,
-  NativeScrollEvent,
   Platform,
 } from 'react-native';
 import type { RenderItemParams } from 'react-native-draggable-flatlist';
@@ -216,7 +214,6 @@ export default function ScheduleScreen() {
   const { coords, legStats, etas, waitTimeBeforeMeetingMin, departByMs, returnByMs, homeBase } = useRouteData();
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showDaySlider, setShowDaySlider] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [reorderMode, setReorderMode] = useState(false);
 
@@ -512,6 +509,11 @@ export default function ScheduleScreen() {
 
   const listHeader = (
     <>
+      <DaySlider
+        selectedDate={selectedDate}
+        onSelectDate={onSelectDate}
+        meetingCountByDay={meetingCountByDay}
+      />
       {daySummary ? (
         <DaySummaryBar
           totalDriveSec={daySummary.totalDriveSec}
@@ -563,7 +565,7 @@ export default function ScheduleScreen() {
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      headerShown: showDaySlider,
+      headerShown: true,
       headerTitle,
       headerTitleStyle: {
         fontWeight: '600',
@@ -574,34 +576,12 @@ export default function ScheduleScreen() {
         ...(isWide && { minHeight: 44 }),
       },
     });
-  }, [navigation, headerTitle, isWide, showDaySlider]);
-
-  const handleScroll = useCallback(
-    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, velocity } = e.nativeEvent;
-      const y = contentOffset.y;
-      if (velocity) {
-        if (velocity.y > 0) setShowDaySlider(false);
-        else if (velocity.y < 0 || y < 30) setShowDaySlider(true);
-      } else {
-        if (y > 80) setShowDaySlider(false);
-        else if (y < 30) setShowDaySlider(true);
-      }
-    },
-    []
-  );
+  }, [navigation, headerTitle, isWide]);
 
   const useDragList = reorderMode && appointmentsList.length > 0 && Platform.OS !== 'web' && !isExpoGo;
   const DraggableFlatListComponent = useDragList ? getDraggableFlatList() : null;
   const scheduleContent = (
     <>
-      {showDaySlider && (
-        <DaySlider
-          selectedDate={selectedDate}
-          onSelectDate={onSelectDate}
-          meetingCountByDay={meetingCountByDay}
-        />
-      )}
       {appointmentsLoading && !refreshing && appointmentsList.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#0078D4" />
@@ -618,8 +598,6 @@ export default function ScheduleScreen() {
           onDragEnd={handleDragEnd}
           ListHeaderComponent={listHeader}
           contentContainerStyle={styles.listContent}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
         />
       ) : (
         <FlatList
@@ -639,8 +617,6 @@ export default function ScheduleScreen() {
               tintColor="#0078D4"
             />
           }
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
         />
       )}
     </>

@@ -27,7 +27,7 @@ function MapScreenWithSuspense(props: React.ComponentProps<typeof MapScreen>) {
   );
 }
 
-/** Shown in Expo Go only – avoids loading react-native-maps (RNMapsAirModule not in Expo Go) */
+/** Expo Go: native map not available (RNMapsAirModule), show message instead */
 function MapExpoGoPlaceholder() {
   return (
     <View style={[styles.loadingContainer, { backgroundColor: '#f8fafc' }]}>
