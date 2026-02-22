@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, Suspense } from 'react';
 import {
   View,
   Text,
@@ -6,10 +6,12 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Modal,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { startOfDay } from 'date-fns';
-import { Alert } from 'react-native';
+import Constants from 'expo-constants';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
@@ -37,9 +39,11 @@ import TimeframeSelector, {
 } from '../components/TimeframeSelector';
 import DayTimeline, { buildTimelineEntries } from '../components/DayTimeline';
 import GhostSlotCard from '../components/GhostSlotCard';
-import MapPreviewModal from '../components/MapPreviewModal';
-import PlanVisitMapPanel from '../components/PlanVisitMapPanel';
 import ConfirmBookingSheet, { type ContactInput } from '../components/ConfirmBookingSheet';
+
+const isExpoGo = Constants.appOwnership === 'expo';
+const MapPreviewModal = React.lazy(() => import('../components/MapPreviewModal'));
+const PlanVisitMapPanel = React.lazy(() => import('../components/PlanVisitMapPanel'));
 import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LocationSearch, {
@@ -180,7 +184,7 @@ async function enrichAppointmentsWithCoords(
 export default function AddMeetingScreen() {
   const navigation = useNavigation();
   const { userToken, getValidToken, signOut } = useAuth();
-  const { appointments, addAppointment } = useRoute();
+  const { appointments, addAppointment, setSelectedDate, setPendingLocalEvent } = useRoute();
   const { preferences } = useUserPreferences();
   const useGoogleWithKey =
     preferences.useGoogleGeocoding === true &&
@@ -470,6 +474,12 @@ export default function AddMeetingScreen() {
     addAppointment(finalEvent);
     setSelectedSlotId(null);
     setConfirmSlot(null);
+    const meetingDay = finalEvent.startIso ? new Date(finalEvent.startIso) : null;
+    if (meetingDay) {
+      const dayKey = toLocalDayKey(meetingDay);
+      setPendingLocalEvent({ dayKey, event: finalEvent });
+      setSelectedDate(startOfDay(meetingDay));
+    }
     navigation.goBack();
 
     if (token && contactInput && (contactInput.displayName || contactInput.email)) {
@@ -767,29 +777,59 @@ export default function AddMeetingScreen() {
       </ScrollView>
 
       {!isWide && mapSlot && newLocation && (
-        <MapPreviewModal
-          visible={!!mapSlot}
-          onClose={() => setMapSlot(null)}
-          dayEvents={eventsForDay(filteredAppointments, mapSlot.dayIso)}
-          insertionCoord={newLocation}
-          slot={mapSlot}
-          homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
-        />
+        isExpoGo ? (
+          <Modal visible transparent animationType="fade">
+            <TouchableOpacity
+              style={styles.expoGoModalOverlay}
+              activeOpacity={1}
+              onPress={() => setMapSlot(null)}
+            >
+              <View style={styles.expoGoModalBox}>
+                <Text style={styles.expoGoModalTitle}>Map preview</Text>
+                <Text style={styles.expoGoModalText}>
+                  Map preview is available in the development build (EAS Build / TestFlight).
+                </Text>
+                <TouchableOpacity style={styles.expoGoModalButton} onPress={() => setMapSlot(null)}>
+                  <Text style={styles.expoGoModalButtonText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </Modal>
+        ) : (
+          <Suspense fallback={null}>
+            <MapPreviewModal
+              visible={!!mapSlot}
+              onClose={() => setMapSlot(null)}
+              dayEvents={eventsForDay(filteredAppointments, mapSlot.dayIso)}
+              insertionCoord={newLocation}
+              slot={mapSlot}
+              homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
+            />
+          </Suspense>
+        )
       )}
       </View>
 
       {isWide && hasValidLocation && (
         <View style={styles.mapPane}>
-          <PlanVisitMapPanel
-            newLocation={newLocation}
-            slot={displayedMapSlot ?? undefined}
-            dayEvents={
-              displayedMapSlot
-                ? eventsForDay(filteredAppointments, displayedMapSlot.dayIso)
-                : []
-            }
-            homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
-          />
+          {isExpoGo ? (
+            <View style={styles.expoGoMapPlaceholder}>
+              <Text style={styles.expoGoMapPlaceholderText}>Map available in development build</Text>
+            </View>
+          ) : (
+            <Suspense fallback={<View style={styles.expoGoMapPlaceholder}><ActivityIndicator size="large" color={MS_BLUE} /></View>}>
+              <PlanVisitMapPanel
+                newLocation={newLocation}
+                slot={displayedMapSlot ?? undefined}
+                dayEvents={
+                  displayedMapSlot
+                    ? eventsForDay(filteredAppointments, displayedMapSlot.dayIso)
+                    : []
+                }
+                homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
+              />
+            </Suspense>
+          )}
         </View>
       )}
 
@@ -827,6 +867,51 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     minHeight: 300,
+  },
+  expoGoMapPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  expoGoMapPlaceholderText: {
+    fontSize: 14,
+    color: '#64748b',
+  },
+  expoGoModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  expoGoModalBox: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 20,
+    maxWidth: 320,
+  },
+  expoGoModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: 8,
+  },
+  expoGoModalText: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 16,
+  },
+  expoGoModalButton: {
+    backgroundColor: MS_BLUE,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  expoGoModalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
   durationRow: {
     paddingHorizontal: 16,

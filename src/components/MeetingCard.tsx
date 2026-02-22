@@ -16,6 +16,8 @@ export type MeetingCardProps = {
   variantBooked?: boolean;
   /** Opens native directions (Apple/Google Maps) to this meeting */
   onNavigate?: () => void;
+  /** When user taps the waypoint number in the corner: same as tapping that route point on the map (switch to Map + highlight) */
+  onWaypointNumberPress?: () => void;
   /** Waypoint number (1-based) in blue chamfered top-right corner */
   waypointNumber?: number;
   /** Contact phone number; when set, shows a tappable phone icon to call */
@@ -33,6 +35,7 @@ export default function MeetingCard({
   statusColor = DEFAULT_STATUS_COLOR,
   variantBooked,
   onNavigate,
+  onWaypointNumberPress,
   waypointNumber,
   phone,
   email,
@@ -44,14 +47,22 @@ export default function MeetingCard({
   const content = (
     <View style={[styles.card, variantBooked && styles.cardBooked, isCompleted && styles.cardCompleted]}>
       {waypointNumber != null && (
-        <View style={styles.chamferWrap} pointerEvents="none">
+        <TouchableOpacity
+          style={styles.chamferWrap}
+          onPress={(e) => {
+            e?.stopPropagation?.();
+            onWaypointNumberPress?.();
+          }}
+          activeOpacity={0.8}
+          disabled={onWaypointNumberPress == null}
+        >
           <Svg width={CHAMFER_SIZE} height={CHAMFER_SIZE} style={styles.chamferSvg}>
             <Polygon points={`0,0 ${CHAMFER_SIZE},0 ${CHAMFER_SIZE},${CHAMFER_SIZE}`} fill={MS_BLUE} />
           </Svg>
-          <View style={styles.chamferNumberWrap}>
+          <View style={styles.chamferNumberWrap} pointerEvents="none">
             <Text style={styles.chamferNumber} allowFontScaling={false}>{waypointNumber}</Text>
           </View>
-        </View>
+        </TouchableOpacity>
       )}
       <View style={[styles.content, waypointNumber != null && styles.contentWithChamfer]}>
         <View style={styles.main}>

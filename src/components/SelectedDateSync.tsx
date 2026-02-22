@@ -40,10 +40,25 @@ export default function SelectedDateSync() {
     setAppointments,
     setAppointmentsLoading,
     getDayOrder,
+    pendingLocalEvent,
+    setPendingLocalEvent,
   } = useRoute();
   const dayCache = useRef<Map<string, Awaited<ReturnType<typeof sortAppointmentsByTime>>>>(new Map());
   const isFirstRun = useRef(true);
   const lastRefreshTrigger = useRef(0);
+
+  /** Merge pending local event into list for this day (so newly confirmed meeting shows immediately). */
+  const mergePendingIfSameDay = useCallback(
+    (dayKey: string, list: Awaited<ReturnType<typeof sortAppointmentsByTime>>) => {
+      if (!pendingLocalEvent || pendingLocalEvent.dayKey !== dayKey) return list;
+      const hasId = list.some((e) => e.id === pendingLocalEvent.event.id);
+      if (hasId) return list;
+      const merged = sortAppointmentsByTime([...list, { ...pendingLocalEvent.event, status: 'pending' as const }]);
+      setPendingLocalEvent(null);
+      return merged;
+    },
+    [pendingLocalEvent, setPendingLocalEvent]
+  );
 
   const fetchForDate = useCallback(
     async (date: Date) => {
@@ -55,7 +70,8 @@ export default function SelectedDateSync() {
       const dayKey = toLocalDayKey(date);
       const cached = dayCache.current.get(dayKey);
       if (cached) {
-        setAppointments(cached);
+        const merged = mergePendingIfSameDay(dayKey, cached);
+        setAppointments(merged);
         setAppointmentsLoading(false);
         return;
       }
@@ -69,8 +85,9 @@ export default function SelectedDateSync() {
         ]);
         const sorted = sortAppointmentsByTime(events);
         const ordered = applyOrderSync(sorted, savedOrder);
-        dayCache.current.set(dayKey, ordered);
-        setAppointments(ordered);
+        const merged = mergePendingIfSameDay(dayKey, ordered);
+        dayCache.current.set(dayKey, merged);
+        setAppointments(merged);
       } catch (e) {
         setAppointments([]);
         if (e instanceof GraphUnauthorizedError) signOut();
@@ -78,7 +95,7 @@ export default function SelectedDateSync() {
         setAppointmentsLoading(false);
       }
     },
-    [userToken, getValidToken, setAppointments, setAppointmentsLoading, getDayOrder, signOut]
+    [userToken, getValidToken, setAppointments, setAppointmentsLoading, getDayOrder, signOut, mergePendingIfSameDay]
   );
 
   /** Fetch a day and store only in cache (for preloading). Does not update context. */
@@ -113,14 +130,16 @@ export default function SelectedDateSync() {
     const dayKey = toLocalDayKey(selectedDate);
     const cached = dayCache.current.get(dayKey);
     if (cached) {
-      setAppointments(cached);
+      const merged = mergePendingIfSameDay(dayKey, cached);
+      if (merged !== cached) dayCache.current.set(dayKey, merged);
+      setAppointments(merged);
       setAppointmentsLoading(false);
       return;
     }
     setAppointments([]);
     setAppointmentsLoading(true);
     fetchForDate(selectedDate);
-  }, [selectedDate, fetchForDate, setAppointments, setAppointmentsLoading]);
+  }, [selectedDate, fetchForDate, setAppointments, setAppointmentsLoading, mergePendingIfSameDay]);
 
   useEffect(() => {
     if (!userToken && !getValidToken) return;

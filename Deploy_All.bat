@@ -5,6 +5,7 @@ cd /d "%~dp0"
 
 set KEY=%USERPROFILE%\.ssh\contabo_nikola
 set HOST=nikola@207.180.222.248
+set CTRL=%USERPROFILE%\.ssh\ctrl-wiseplan-vps
 
 REM Commit message: first argument or default
 set MSG=%~1
@@ -29,7 +30,7 @@ if errorlevel 1 (
     powershell -NoProfile -Command "Start-Service ssh-agent -ErrorAction SilentlyContinue" 2>nul
     ssh-add "%KEY%" 2>nul
     if errorlevel 1 (
-        echo Agent not available. You will be asked for your passphrase for each SSH/SCP step.
+        echo Agent not available. You will be asked for your passphrase once; connection is reused.
         set USE_SSH_PROMPT=1
     )
 )
@@ -62,11 +63,19 @@ REM --- 2. Pull on VPS ---
 echo.
 echo [2/4] Pulling on VPS...
 if defined USE_SSH_PROMPT (
-    ssh -i "%KEY%" -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin master"
+    REM Open one SSH connection (prompt once); reuse for pull, scp, deploy
+    ssh -i "%KEY%" -o ControlMaster=yes -o ControlPath="%CTRL%" -o ControlPersist=120 -o ConnectTimeout=10 -f -N %HOST%
+    if errorlevel 1 (
+        echo SSH connection failed.
+        pause
+        exit /b 1
+    )
+    ssh -i "%KEY%" -o ControlPath="%CTRL%" -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin master"
 ) else (
     ssh -i "%KEY%" -o BatchMode=yes -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin master"
 )
 if errorlevel 1 (
+    if defined USE_SSH_PROMPT ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
     echo SSH pull failed. Key: %KEY%
     pause
     exit /b 1
@@ -86,25 +95,29 @@ REM --- 4. Upload and update live site on VPS ---
 echo.
 echo [4/4] Uploading and updating live site...
 if defined USE_SSH_PROMPT (
-    scp -i "%KEY%" -r vps-landing\app\* %HOST%:~/app-deploy/
+    scp -i "%KEY%" -o ControlPath="%CTRL%" -r vps-landing\app\* %HOST%:~/app-deploy/
 ) else (
     scp -i "%KEY%" -r -o BatchMode=yes vps-landing\app\* %HOST%:~/app-deploy/
 )
 if errorlevel 1 (
+    if defined USE_SSH_PROMPT ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
     echo SCP failed.
     pause
     exit /b 1
 )
 if defined USE_SSH_PROMPT (
-    ssh -i "%KEY%" %HOST% "sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ && rm -rf ~/app-deploy"
+    ssh -i "%KEY%" -o ControlPath="%CTRL%" %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
 ) else (
-    ssh -i "%KEY%" -o BatchMode=yes %HOST% "sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ && rm -rf ~/app-deploy"
+    ssh -i "%KEY%" -o BatchMode=yes %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
 )
 if errorlevel 1 (
-    echo VPS copy failed. You may need to run on VPS: sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ ^&^& rm -r ~/app-deploy
+    if defined USE_SSH_PROMPT ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
+    echo VPS copy failed. One-time setup on VPS: see docs\WORKING_CONFIG.md "Deploy script on VPS"
+    echo Or run manually on VPS: sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ ^&^& rm -r ~/app-deploy
     pause
     exit /b 1
 )
+if defined USE_SSH_PROMPT ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
 
 echo.
 echo === Done. Live site updated. ===

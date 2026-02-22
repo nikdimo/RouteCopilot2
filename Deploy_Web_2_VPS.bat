@@ -20,9 +20,9 @@ if errorlevel 1 (
 )
 
 echo Updating live site on VPS...
-ssh -i "%KEY%" %HOST% "sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ && rm -rf ~/app-deploy"
+ssh -i "%KEY%" %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
 if errorlevel 1 (
-  echo VPS copy failed. Run on VPS: sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ ^&^& rm -r ~/app-deploy
+  echo VPS copy failed. One-time setup: see docs\WORKING_CONFIG.md "Deploy script on VPS". Or run on VPS: sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ ^&^& rm -r ~/app-deploy
   pause
   exit /b 1
 )

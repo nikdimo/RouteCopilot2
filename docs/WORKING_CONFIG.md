@@ -106,6 +106,28 @@ Full reference config: use `vps-landing/nginx-multi-project.conf` when hosting b
 
 ---
 
+### 5. EAS iOS build (Prebuild)
+
+If **Build_IOS_Testflight.bat** fails with "Unknown error" in the **Prebuild** phase:
+
+1. **Check the real error:** Open the build URL (e.g. `https://expo.dev/accounts/nikdim/projects/wiseplan/builds/...`), open the failed build, expand the **Prebuild** phase and read the log. The CLI only shows "Unknown error"; the web log has the actual message.
+2. **react-native-maps + Expo 54:** This project uses `react-native-maps` with the Expo config plugin and version 1.26.6 for compatibility with Expo 54 prebuild (Swift AppDelegate). Do not downgrade to 1.20.1 for iOS EAS builds.
+3. **Version source:** `eas.json` sets `cli.appVersionSource: "remote"` so EAS can manage build/version; required in future EAS versions.
+
+**EACCES: permission denied, mkdir '.expo/web':** This is a known EAS Build infrastructure issue ([expo/expo#37550](https://github.com/expo/expo/issues/37550)). The prebuild step (iOS icon generation) uses `@expo/image-utils`, which tries to create `.expo/web/cache/...` in the project directory. On some EAS workers the build user cannot create `.expo` there. Nothing in this repo “broke” it—the same permission denial would occur without any of our hooks. Workarounds: (1) Retry the build later; (2) Upgrade to the latest `expo` and `eas-cli` in case it’s fixed upstream; (3) Report the build URL and log to Expo so they can fix the worker permissions.
+
+---
+
+### 6. Expo Go and react-native-maps
+
+**Expo Go does not include the native module for react-native-maps** (`RNMapsAirModule`). If we load it there, the app crashes with:
+
+`TurboModuleRegistry.getEnforcing(...): 'RNMapsAirModule' could not be found`
+
+So we **never load react-native-maps when `Constants.appOwnership === 'expo'`**: the Map tab shows a placeholder, the Schedule embedded map pane shows a placeholder, and Add Meeting’s map preview/modal show placeholders in Expo Go. Full maps work in **development builds** (EAS Build / TestFlight) and on **web** (Leaflet). Do not remove these Expo Go checks in `AppNavigator`, `ScheduleScreen`, and `AddMeetingScreen`.
+
+---
+
 ## Deploy Workflow (Do Not Deviate)
 
 ### Push to GitHub
@@ -155,7 +177,25 @@ Runs in order: push to Git (with default or custom commit message) → pull on V
 1. **SSH key** – Use a key without passphrase, or store the passphrase in Windows Credential Manager so the script can load it:
    - PowerShell once: `Install-Module CredentialManager -Scope CurrentUser`
    - Control Panel → Credential Manager → Windows Credentials → Add generic credential: address **RouteCopilot2_VPS_SSH**, user (any), password = your SSH key passphrase.
-2. **VPS sudo** – The script runs `sudo cp ...` on the VPS over SSH. For no password prompt, configure passwordless sudo for that copy (e.g. a small deploy script on the VPS with NOPASSWD in sudoers).
+2. **VPS deploy script (one-time)** – `Deploy_All.bat` runs `sudo /usr/local/bin/wiseplan-deploy-app` on the VPS. Without this, sudo will ask for a password and fail (no TTY). Do this once on the VPS:
+
+   ```bash
+   # On the VPS, as root or with sudo:
+   sudo tee /usr/local/bin/wiseplan-deploy-app << 'EOF'
+   #!/bin/bash
+   if [ -d /home/nikola/app-deploy ]; then
+     cp -r /home/nikola/app-deploy/* /var/www/wiseplan-test/app/
+     rm -rf /home/nikola/app-deploy
+   fi
+   EOF
+   sudo chmod 755 /usr/local/bin/wiseplan-deploy-app
+
+   # Allow nikola to run it without password:
+   echo 'nikola ALL=(ALL) NOPASSWD: /usr/local/bin/wiseplan-deploy-app' | sudo tee /etc/sudoers.d/wiseplan-deploy
+   sudo chmod 440 /etc/sudoers.d/wiseplan-deploy
+   ```
+
+   Then `Deploy_All.bat` can update the live site with no VPS password prompt.
 
 Usage: `Deploy_All.bat` (commit message = "Deploy date time") or `Deploy_All.bat "Your message"`.
 

@@ -345,7 +345,7 @@ type MapScreenProps = { embeddedInSchedule?: boolean };
 
 export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const navigation = useNavigation();
-  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay } = useRoute();
+  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay, highlightWaypointIndex, setHighlightWaypointIndex } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const [showDetails, setShowDetails] = useState(false);
   const [selectedArrivalLegIndex, setSelectedArrivalLegIndex] = useState<number | null>(null);
@@ -405,6 +405,18 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   useEffect(() => {
     clearSelection();
   }, [ctxSelectedDate, clearSelection]);
+
+  // When schedule sets highlight (e.g. tap waypoint number on card), highlight that waypoint/leg on map (tab and embedded)
+  useEffect(() => {
+    const idx = highlightWaypointIndex;
+    if (typeof idx === 'number' && coords[idx] != null) {
+      setSelectedArrivalLegIndex(idx);
+      setSelectedWaypointIndices([idx]);
+      setFocusedClusterKey(null);
+      setFocusedClusterCoord(null);
+      setHighlightWaypointIndex(null);
+    }
+  }, [highlightWaypointIndex, coords, setHighlightWaypointIndex]);
 
   useLayoutEffect(() => {
     if (embeddedInSchedule) return;

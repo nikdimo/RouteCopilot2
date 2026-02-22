@@ -1,9 +1,15 @@
 # Optional: Load SSH key passphrase from Windows Credential Manager and add key to ssh-agent.
-# Run once: Install-Module CredentialManager -Scope CurrentUser
-# Then in Windows: Control Panel -> Credential Manager -> Windows Credentials -> Add a generic credential
-#   Address: RouteCopilot2_VPS_SSH
-#   User: (any, e.g. "key")
-#   Password: (your SSH key passphrase)
+# When set up, Deploy_All.bat will not ask for your passphrase.
+#
+# ONE-TIME SETUP:
+# 1. Enable OpenSSH Authentication Agent: Win+R -> services.msc -> find "OpenSSH Authentication Agent"
+#    -> Startup type: Manual or Automatic -> Start. (Required so ssh-add can run.)
+# 2. In PowerShell (Run as current user): Install-Module CredentialManager -Scope CurrentUser
+# 3. In Windows: Control Panel -> Credential Manager -> Windows Credentials -> Add a generic credential
+#    Internet or network address: RouteCopilot2_VPS_SSH
+#    User name: (any, e.g. "key")
+#    Password: (your SSH key passphrase for contabo_nikola)
+#
 # If you use a key WITHOUT passphrase, you can skip this; the deploy bat will still work.
 
 $ErrorActionPreference = 'SilentlyContinue'

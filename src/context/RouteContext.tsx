@@ -35,6 +35,12 @@ type RouteContextValue = {
   getDayOrder: (dayKey: string) => Promise<string[] | null>;
   /** Reorder appointments to match saved order; append events not in saved. */
   applyDayOrder: (events: CalendarEvent[], dayKey: string) => Promise<CalendarEvent[]>;
+  /** When set, SelectedDateSync merges this event into the day's list (so new meeting shows immediately). */
+  pendingLocalEvent: { dayKey: string; event: CalendarEvent } | null;
+  setPendingLocalEvent: (p: { dayKey: string; event: CalendarEvent } | null) => void;
+  /** When set from schedule (e.g. tap waypoint number), map highlights that waypoint/leg. Map consumes and clears. */
+  highlightWaypointIndex: number | null;
+  setHighlightWaypointIndex: (index: number | null) => void;
 };
 
 const RouteContext = createContext<RouteContextValue | null>(null);
@@ -47,6 +53,8 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
   const triggerRefresh = useCallback(() => setRefreshTrigger((n) => n + 1), []);
   const [appointments, setAppointmentsState] = useState<CalendarEvent[]>([]);
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [pendingLocalEvent, setPendingLocalEvent] = useState<{ dayKey: string; event: CalendarEvent } | null>(null);
+  const [highlightWaypointIndex, setHighlightWaypointIndex] = useState<number | null>(null);
   const [completedEventIds, setCompletedEventIds] = useState<string[]>([]);
   const completedIdsRef = useRef<string[]>([]);
   completedIdsRef.current = completedEventIds;
@@ -203,6 +211,10 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     saveDayOrder,
     getDayOrder,
     applyDayOrder,
+    pendingLocalEvent,
+    setPendingLocalEvent,
+    highlightWaypointIndex,
+    setHighlightWaypointIndex,
   };
 
   return (

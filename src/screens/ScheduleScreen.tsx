@@ -1,4 +1,4 @@
-import React, { useState, useLayoutEffect, useCallback, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useLayoutEffect, useCallback, useMemo, useRef, useEffect, Suspense } from 'react';
 import {
   View,
   Text,
@@ -46,8 +46,8 @@ import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsFo
 import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
-import MapScreen from './MapScreen';
 
+const MapScreen = React.lazy(() => import('./MapScreen'));
 const isExpoGo = Constants.appOwnership === 'expo';
 
 const GREEN = '#107C10';
@@ -208,6 +208,7 @@ export default function ScheduleScreen() {
     setMeetingCountByDay,
     loadedRange,
     setLoadedRange,
+    setHighlightWaypointIndex,
     triggerRefresh,
     appointmentsLoading,
   } = useRoute();
@@ -368,6 +369,9 @@ export default function ScheduleScreen() {
         onToggleDone={() =>
           meeting.status === 'completed' ? unmarkEventAsDone(meeting.id) : markEventAsDone(meeting.id)
         }
+        onWaypointNumberPress={
+          hasCoords ? () => setHighlightWaypointIndex(item.appointmentIndex) : undefined
+        }
         onNavigate={
           hasCoords
             ? () =>
@@ -462,6 +466,9 @@ export default function ScheduleScreen() {
                   ? unmarkEventAsDone(meeting.id)
                   : markEventAsDone(meeting.id)
               }
+              onWaypointNumberPress={
+                hasCoords ? () => setHighlightWaypointIndex(item.appointmentIndex) : undefined
+              }
               onNavigate={
                 hasCoords
                   ? () =>
@@ -496,6 +503,7 @@ export default function ScheduleScreen() {
       scheduleListItems,
       waitTimeBeforeMeetingMin,
       navigation,
+      setHighlightWaypointIndex,
       unmarkEventAsDone,
       markEventAsDone,
       removeAppointment,
@@ -645,7 +653,21 @@ export default function ScheduleScreen() {
           {scheduleContent}
         </View>
         <View style={styles.mapPane}>
-          <MapScreen embeddedInSchedule />
+          {isExpoGo ? (
+            <View style={[styles.container, styles.mapPlaceholder]}>
+              <Text style={styles.mapPlaceholderText}>Map available in development build</Text>
+            </View>
+          ) : (
+            <Suspense
+              fallback={
+                <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                  <ActivityIndicator size="large" color="#0078D4" />
+                </View>
+              }
+            >
+              <MapScreen embeddedInSchedule />
+            </Suspense>
+          )}
         </View>
       </View>
     );
@@ -671,6 +693,15 @@ const styles = StyleSheet.create({
   mapPane: {
     flex: 1,
     minWidth: 0,
+  },
+  mapPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  mapPlaceholderText: {
+    fontSize: 14,
+    color: '#64748b',
   },
   toolbarRow: {
     flexDirection: 'row',

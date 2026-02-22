@@ -58,7 +58,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const [selectedWaypointIndices, setSelectedWaypointIndices] = useState<number[] | null>(null);
   const navigation = useNavigation();
   const isWide = useIsWideScreen();
-  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay } = useRoute();
+  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay, highlightWaypointIndex, setHighlightWaypointIndex } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const navParams = useNavRoute<MapScreenNavParams>().params;
   const triggerLoadWhenEmpty = navParams?.triggerLoadWhenEmpty ?? false;
@@ -121,6 +121,18 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     setFocusedClusterKey(null);
     setFocusedClusterCoord(null);
   }, [ctxSelectedDate]);
+
+  // When schedule sets highlight (e.g. tap waypoint number on card), highlight that waypoint/leg on map (tab and embedded)
+  useEffect(() => {
+    const idx = highlightWaypointIndex;
+    if (typeof idx === 'number' && coords[idx] != null) {
+      setSelectedArrivalLegIndex(idx);
+      setSelectedWaypointIndices([idx]);
+      setFocusedClusterKey(null);
+      setFocusedClusterCoord(null);
+      setHighlightWaypointIndex(null);
+    }
+  }, [highlightWaypointIndex, coords, setHighlightWaypointIndex]);
 
   useLayoutEffect(() => {
     if (embeddedInSchedule) return;
