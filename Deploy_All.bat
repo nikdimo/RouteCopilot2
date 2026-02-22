@@ -1,123 +1,109 @@
 @echo off
-REM One-click: push to Git, pull on VPS, build web, deploy to live site.
-REM Optional: store SSH key passphrase in Windows Credential Manager (see scripts\Load-VpsSshKey.ps1).
+REM Push to GitHub, pull on VPS, build web app, deploy to live site.
+REM You will be prompted for: commit message (or skip), GitHub credentials if needed, SSH passphrase if needed.
 cd /d "%~dp0"
 
 set KEY=%USERPROFILE%\.ssh\contabo_nikola
 set HOST=nikola@207.180.222.248
 set CTRL=%USERPROFILE%\.ssh\ctrl-wiseplan-vps
-
-REM Commit message: first argument or default
-set MSG=%~1
-if "%MSG%"=="" set MSG=Deploy %date% %time%
-
-REM --- Optional: load SSH key from Windows Credential Manager (no passphrase prompt) ---
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Load-VpsSshKey.ps1" 2>nul
+set BRANCH=master
 
 REM --- Check SSH key exists ---
 if not exist "%KEY%" (
     echo SSH key not found: %KEY%
-    echo Create the key or fix the path in this script. For deploy you need this key on the VPS in ~/.ssh/authorized_keys.
+    echo Put your key there or edit KEY in this script. The same key must be in VPS ~/.ssh/authorized_keys.
     pause
     exit /b 1
 )
 
-REM --- If key has passphrase: try agent (ssh-add); if agent unavailable, we'll prompt per step ---
-set USE_SSH_PROMPT=
-ssh -i "%KEY%" -o BatchMode=yes -o ConnectTimeout=5 %HOST% "exit" 2>nul
-if errorlevel 1 (
-    echo SSH key needs passphrase. Trying to add to agent...
-    powershell -NoProfile -Command "Start-Service ssh-agent -ErrorAction SilentlyContinue" 2>nul
-    ssh-add "%KEY%" 2>nul
-    if errorlevel 1 (
-        echo Agent not available. You will be asked for your passphrase once; connection is reused.
-        set USE_SSH_PROMPT=1
-    )
-)
-
-REM --- 1. Git: add, commit, push ---
 where git >nul 2>nul
 if errorlevel 1 (
     echo Git not found.
     pause
     exit /b 1
 )
+
+REM Optional: try to load SSH key from Credential Manager (no passphrase prompt later)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Load-VpsSshKey.ps1" 2>nul
+
+setlocal enabledelayedexpansion
+REM Commit message: first argument, or prompt, or default
+set MSG=%~1
+if "%MSG%"=="" (
+    echo.
+    set /p MSG="Commit message (or press Enter for default): "
+    if "!MSG!"=="" set "MSG=Deploy %date% %time%"
+)
+if "%MSG%"=="" set "MSG=Deploy %date% %time%"
+
 echo.
-echo [1/4] Pushing to Git...
+echo [1/5] Push to GitHub
+echo You may be prompted for GitHub username/password or token if needed.
+echo.
 git add -A
+git status -sb
 git commit -m "%MSG%" 2>nul
 if errorlevel 1 (
-    echo Nothing to commit or commit failed. Continuing with push...
+    echo Nothing to commit or commit skipped. Continuing with push...
 ) else (
     echo Committed.
 )
 git push
 if errorlevel 1 (
-    echo Git push failed.
+    echo Git push failed. Fix (e.g. credentials, branch) and run again.
     pause
     exit /b 1
 )
 echo Git push done.
 
-REM --- 2. Pull on VPS ---
 echo.
-echo [2/4] Pulling on VPS...
-if defined USE_SSH_PROMPT (
-    REM Open one SSH connection (prompt once); reuse for pull, scp, deploy
-    ssh -i "%KEY%" -o ControlMaster=yes -o ControlPath="%CTRL%" -o ControlPersist=120 -o ConnectTimeout=10 -f -N %HOST%
-    if errorlevel 1 (
-        echo SSH connection failed.
-        pause
-        exit /b 1
-    )
-    ssh -i "%KEY%" -o ControlPath="%CTRL%" -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin master"
-) else (
-    ssh -i "%KEY%" -o BatchMode=yes -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin master"
-)
+echo ========== [2/5] Connect to VPS (one-time passphrase if needed) ==========
+ssh -i "%KEY%" -o ControlMaster=yes -o ControlPath="%CTRL%" -o ControlPersist=120 -o ConnectTimeout=15 -f -N %HOST%
 if errorlevel 1 (
-    if defined USE_SSH_PROMPT ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
-    echo SSH pull failed. Key: %KEY%
+    echo Could not connect to VPS. Check key, passphrase, and host: %HOST%
     pause
     exit /b 1
 )
 
-REM --- 3. Build web app ---
 echo.
-echo [3/4] Building web app...
+echo ========== [3/5] Pull on VPS ==========
+ssh -i "%KEY%" -o ControlPath="%CTRL%" -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin %BRANCH%"
+if errorlevel 1 (
+    echo Pull on VPS failed.
+    ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
+    pause
+    exit /b 1
+)
+
+echo.
+echo ========== [4/5] Build web app (local) ==========
 call npm run prepare:vps
 if errorlevel 1 (
     echo Build failed.
+    ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
     pause
     exit /b 1
 )
 
-REM --- 4. Upload and update live site on VPS ---
 echo.
-echo [4/4] Uploading and updating live site...
-if defined USE_SSH_PROMPT (
-    scp -i "%KEY%" -o ControlPath="%CTRL%" -r vps-landing\app\* %HOST%:~/app-deploy/
-) else (
-    scp -i "%KEY%" -r -o BatchMode=yes vps-landing\app\* %HOST%:~/app-deploy/
-)
+echo ========== [5/5] Upload and update live site on VPS ==========
+scp -i "%KEY%" -o ControlPath="%CTRL%" -r vps-landing\app\* %HOST%:~/app-deploy/
 if errorlevel 1 (
-    if defined USE_SSH_PROMPT ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
-    echo SCP failed.
+    echo SCP upload failed.
+    ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
     pause
     exit /b 1
 )
-if defined USE_SSH_PROMPT (
-    ssh -i "%KEY%" -o ControlPath="%CTRL%" %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
-) else (
-    ssh -i "%KEY%" -o BatchMode=yes %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
-)
+ssh -i "%KEY%" -o ControlPath="%CTRL%" %HOST% "sudo /usr/local/bin/wiseplan-deploy-app"
 if errorlevel 1 (
-    if defined USE_SSH_PROMPT ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
-    echo VPS copy failed. One-time setup on VPS: see docs\WORKING_CONFIG.md "Deploy script on VPS"
-    echo Or run manually on VPS: sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ ^&^& rm -r ~/app-deploy
+    echo VPS deploy step failed.
+    echo One-time setup on VPS: see docs\WORKING_CONFIG.md "Deploy script on VPS"
+    echo Or on VPS run: sudo cp -r ~/app-deploy/* /var/www/wiseplan-test/app/ ^&^& rm -r ~/app-deploy
+    ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
     pause
     exit /b 1
 )
-if defined USE_SSH_PROMPT ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
+ssh -o ControlPath="%CTRL%" -O exit %HOST% 2>nul
 
 echo.
 echo === Done. Live site updated. ===
