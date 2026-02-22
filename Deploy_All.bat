@@ -1,12 +1,18 @@
 @echo off
+setlocal enabledelayedexpansion
 REM Push to GitHub, pull on VPS, build web app, deploy to live site.
 REM You will be prompted for: commit message (or skip), GitHub credentials if needed, SSH passphrase if needed.
 cd /d "%~dp0"
+echo.
+echo === Deploy_All: Push to Git, pull on VPS, deploy web app ===
+echo.
 
 set KEY=%USERPROFILE%\.ssh\contabo_nikola
 set HOST=nikola@207.180.222.248
-set CTRL=%USERPROFILE%\.ssh\ctrl-wiseplan-vps
 set BRANCH=master
+REM Use short (8.3) path for SSH ControlPath so spaces in username do not break SSH
+set "CTRL=%USERPROFILE%\.ssh\ctrl-wiseplan-vps"
+for %%I in ("%USERPROFILE%\.ssh") do set "CTRL=%%~sI\ctrl-wiseplan-vps"
 
 REM --- Check SSH key exists ---
 if not exist "%KEY%" (
@@ -26,7 +32,6 @@ if errorlevel 1 (
 REM Optional: try to load SSH key from Credential Manager (no passphrase prompt later)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Load-VpsSshKey.ps1" 2>nul
 
-setlocal enabledelayedexpansion
 REM Commit message: first argument, or prompt, or default
 set MSG=%~1
 if "%MSG%"=="" (
