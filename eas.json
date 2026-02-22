@@ -1,9 +1,24 @@
 {
-  "cli": { "version": ">= 5.0.0" },
+  "cli": {
+    "version": ">= 5.0.0",
+    "appVersionSource": "remote",
+    "requireCommit": true
+  },
   "build": {
-    "development": { "developmentClient": true, "distribution": "internal" },
-    "preview": { "distribution": "internal", "ios": { "simulator": false }, "android": { "buildType": "apk" } },
-    "production": { "env": { "EAS_BUILD_NO_EXPO_GO_WARNING": "true" }, "ios": {}, "android": {} }
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "ios": { "simulator": false },
+      "android": { "buildType": "apk" }
+    },
+    "production": {
+      "env": { "EAS_BUILD_NO_EXPO_GO_WARNING": "true" },
+      "ios": {},
+      "android": {}
+    }
   },
   "submit": {
     "production": {
