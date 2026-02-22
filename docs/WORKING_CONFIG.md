@@ -183,8 +183,11 @@ Runs in order: push to Git (with default or custom commit message) → pull on V
    # On the VPS, as root or with sudo:
    sudo tee /usr/local/bin/wiseplan-deploy-app << 'EOF'
    #!/bin/bash
+   set -e
    if [ -d /home/nikola/app-deploy ]; then
+     rm -rf /var/www/wiseplan-test/app/*
      cp -r /home/nikola/app-deploy/* /var/www/wiseplan-test/app/
+     chown -R www-data:www-data /var/www/wiseplan-test/app
      rm -rf /home/nikola/app-deploy
    fi
    EOF
