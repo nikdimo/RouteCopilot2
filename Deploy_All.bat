@@ -55,14 +55,14 @@ if errorlevel 1 (
 )
 git push
 if errorlevel 1 (
-    echo Git push failed. Fix (e.g. credentials, branch) and run again.
+    echo Git push failed. Fix credentials or branch and run again.
     pause
     exit /b 1
 )
 echo Git push done.
 
 echo.
-echo ========== [2/5] Connect to VPS (one-time passphrase if needed) ==========
+echo [2/5] Connect to VPS - one-time passphrase if needed
 ssh -i "%KEY%" -o ControlMaster=yes -o ControlPath="%CTRL%" -o ControlPersist=120 -o ConnectTimeout=15 -f -N %HOST%
 if errorlevel 1 (
     echo Could not connect to VPS. Check key, passphrase, and host: %HOST%
@@ -71,7 +71,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo ========== [3/5] Pull on VPS ==========
+echo [3/5] Pull on VPS
 ssh -i "%KEY%" -o ControlPath="%CTRL%" -o ConnectTimeout=10 %HOST% "cd ~/RouteCopilot2 && git pull origin %BRANCH%"
 if errorlevel 1 (
     echo Pull on VPS failed.
@@ -81,7 +81,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo ========== [4/5] Build web app (local) ==========
+echo [4/5] Build web app - local
 call npm run prepare:vps
 if errorlevel 1 (
     echo Build failed.
@@ -91,7 +91,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo ========== [5/5] Upload and update live site on VPS ==========
+echo [5/5] Upload and update live site on VPS
 scp -i "%KEY%" -o ControlPath="%CTRL%" -r vps-landing\app\* %HOST%:~/app-deploy/
 if errorlevel 1 (
     echo SCP upload failed.
