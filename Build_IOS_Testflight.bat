@@ -3,6 +3,11 @@ REM ============================================================
 REM WisePlan - iOS Build & TestFlight Submit
 REM ============================================================
 REM
+REM IMPORTANT: Always use this script (do not run "eas build" alone).
+REM Step 0 bumps app.json build number; eas.json uses appVersionSource: local,
+REM so each run produces a new build number and TestFlight submit will succeed.
+REM Skipping the bump or running eas build without it can waste EAS builds.
+REM
 REM Prerequisites (one-time):
 REM   - Node.js, npm installed
 REM   - EAS CLI: npm install -g eas-cli
