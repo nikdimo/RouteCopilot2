@@ -31,6 +31,9 @@ export default function DevDocsScreen() {
 
   return (
     <View style={styles.container}>
+      <View style={styles.versionBar}>
+        <Text style={styles.versionText}>Build: 2025-02-android-fixes</Text>
+      </View>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -622,6 +625,24 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 40,
+  },
+  versionBar: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#E8F4FC',
+    borderBottomWidth: 1,
+    borderBottomColor: '#0078D4',
+  },
+  versionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0078D4',
+  },
+  buildTag: {
+    fontSize: 11,
+    color: '#94a3b8',
+    marginTop: 24,
+    marginBottom: 8,
   },
   section: {
     marginBottom: 24,

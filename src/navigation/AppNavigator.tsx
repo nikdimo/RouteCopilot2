@@ -56,8 +56,10 @@ const Tab = createBottomTabNavigator<BottomTabParamList>();
 /** Wraps the default tab bar with explicit bottom safe area so tab bar sits above system nav (edge-to-edge). */
 function TabBarWithSafeArea(props: React.ComponentProps<typeof BottomTabBar>) {
   const insets = useSafeAreaInsets();
+  // On Android edge-to-edge many devices report 0 or small values; use at least 48 so all 5 tabs stay above nav/gesture bar.
+  const bottomInset = Platform.OS === 'android' ? Math.max(insets.bottom, 48) : insets.bottom;
   return (
-    <View style={{ paddingBottom: insets.bottom, backgroundColor: '#ffffff' }}>
+    <View style={{ paddingBottom: bottomInset, backgroundColor: '#ffffff' }}>
       <BottomTabBar {...props} />
     </View>
   );
