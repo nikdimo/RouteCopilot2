@@ -2,6 +2,7 @@ import React, { Suspense } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Calendar, Map, User, Code, Plus } from 'lucide-react-native';
 import Constants from 'expo-constants';
 import ScheduleStack from './ScheduleStack';
@@ -16,15 +17,17 @@ const MapScreen = React.lazy(() => import('../screens/MapScreen'));
 
 function MapScreenWithSuspense(props: React.ComponentProps<typeof MapScreen>) {
   return (
-    <Suspense
-      fallback={
-        <View style={[styles.loadingContainer, { backgroundColor: '#f8fafc' }]}>
-          <ActivityIndicator size="large" color={MS_BLUE} />
-        </View>
-      }
-    >
-      <MapScreen {...props} />
-    </Suspense>
+    <ErrorBoundary>
+      <Suspense
+        fallback={
+          <View style={[styles.loadingContainer, { backgroundColor: '#f8fafc' }]}>
+            <ActivityIndicator size="large" color={MS_BLUE} />
+          </View>
+        }
+      >
+        <MapScreen {...props} />
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 
@@ -74,6 +77,7 @@ export default function AppNavigator() {
     <Tab.Navigator
       initialRouteName="Schedule"
       lazy={true}
+      tabBar={(props) => <TabBarWithSafeArea {...props} />}
       screenOptions={{
         headerStyle: { backgroundColor: MS_BLUE },
         headerTintColor: '#fff',
@@ -86,7 +90,6 @@ export default function AppNavigator() {
           backgroundColor: '#ffffff',
           ...(Platform.OS === 'android' && { elevation: 8 }),
         },
-        tabBar: (props) => <TabBarWithSafeArea {...props} />,
       }}
     >
       <Tab.Screen
