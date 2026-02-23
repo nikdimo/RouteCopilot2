@@ -25,6 +25,7 @@ function getDraggableFlatList(): React.ComponentType<any> | null {
   return cachedDraggableFlatList;
 }
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { ScheduleStackParamList } from '../navigation/ScheduleStack';
 import { startOfDay, endOfDay, isSameDay, format, addDays } from 'date-fns';
@@ -219,6 +220,8 @@ export default function ScheduleScreen() {
 
   const isWide = useIsWideScreen();
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
+  const listBottomPadding = tabBarHeight + insets.bottom + 16;
 
   const appointmentsList = appointments ?? [];
   const meetings = appointmentsList.map(eventToMeetingItem);
@@ -609,7 +612,7 @@ export default function ScheduleScreen() {
           renderItem={renderBlockItem}
           onDragEnd={handleDragEnd}
           ListHeaderComponent={listHeader}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingBottom: listBottomPadding }]}
         />
       ) : (
         <FlatList
@@ -618,7 +621,9 @@ export default function ScheduleScreen() {
           renderItem={renderItem}
           ListHeaderComponent={listHeader}
           contentContainerStyle={
-            scheduleListItems.length === 0 ? styles.listEmpty : styles.listContent
+            scheduleListItems.length === 0
+              ? [styles.listEmpty, { paddingBottom: listBottomPadding }]
+              : [styles.listContent, { paddingBottom: listBottomPadding }]
           }
           ListEmptyComponent={EmptySchedule}
           refreshControl={

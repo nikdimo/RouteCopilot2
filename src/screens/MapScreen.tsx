@@ -8,7 +8,7 @@ import {
   ScrollView,
   Linking,
   ActivityIndicator,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { useFocusEffect, useRoute as useNavRoute, useNavigation } from '@react-navigation/native';
@@ -213,7 +213,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   const showHomeBase = fullPolyline.length > 0;
   const coordList = useMemo(() => coords.map((a) => a.coordinates), [coords]);
-  const screenWidth = Dimensions.get('window').width;
+  const { width: screenWidth } = useWindowDimensions();
   const markerPositions = useMemo(
     () =>
       getMarkerPositions(

@@ -47,7 +47,8 @@
       [
         "react-native-maps",
         {}
-      ]
+      ],
+      "./plugins/withAndroidConfigChanges.js"
     ],
     "scheme": "wiseplan",
     "extra": {

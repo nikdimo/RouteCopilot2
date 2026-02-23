@@ -1,5 +1,5 @@
 import React, { Suspense } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Calendar, Map, User, Code, Plus } from 'lucide-react-native';
 import Constants from 'expo-constants';
@@ -68,7 +68,12 @@ export default function AppNavigator() {
         tabBarActiveTintColor: MS_BLUE,
         tabBarInactiveTintColor: '#94a3b8',
         tabBarShowLabel: false,
-        tabBarStyle: { paddingBottom: 4, height: 56 },
+        tabBarStyle: {
+          paddingBottom: 4,
+          height: 56,
+          backgroundColor: '#ffffff',
+          ...(Platform.OS === 'android' && { elevation: 8 }),
+        },
       }}
     >
       <Tab.Screen
