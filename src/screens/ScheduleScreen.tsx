@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import type { RenderItemParams } from 'react-native-draggable-flatlist';
 import { GripVertical, ChevronUp, ChevronDown } from 'lucide-react-native';
@@ -221,7 +222,9 @@ export default function ScheduleScreen() {
   const isWide = useIsWideScreen();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
-  const listBottomPadding = tabBarHeight + insets.bottom + 16;
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  // Fallback 56 when hook returns 0 (e.g. stack-inside-tab). Min 100 so content clears tab bar + system nav on edge-to-edge Android.
+  const listBottomPadding = Math.max(100, (tabBarHeight || 56) + insets.bottom + 16);
 
   const appointmentsList = appointments ?? [];
   const meetings = appointmentsList.map(eventToMeetingItem);
@@ -658,7 +661,7 @@ export default function ScheduleScreen() {
                 </View>
               }
             >
-              <MapScreen embeddedInSchedule />
+              <MapScreen key={`embed-${windowWidth}-${windowHeight}`} embeddedInSchedule />
             </Suspense>
           )}
         </View>

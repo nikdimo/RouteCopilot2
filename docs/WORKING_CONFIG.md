@@ -118,7 +118,22 @@ If **Build_IOS_Testflight.bat** fails with "Unknown error" in the **Prebuild** p
 
 ---
 
-### 6. Expo Go and react-native-maps
+### 6. Android – rotation / landscape map crash
+
+**Symptom:** App crashes when rotating the phone to landscape on "Today's Route" (expected: schedule on left, map on right).
+
+**Cause:** By default Android recreates the Activity on orientation change; `react-native-maps` can crash when the Activity is destroyed/recreated or when the map is resized during rotation.
+
+**Fix in this repo:**
+
+1. **Config plugin** `plugins/withAndroidConfigChanges.js` sets `android:configChanges` on the main Activity so the Activity is **not** recreated on rotation. This only takes effect after a **new** Android build (prebuild regenerates the manifest).
+2. **ScheduleScreen** remounts the embedded map when window dimensions change (`key=embed-${width}-${height}`) so the native MapView is created with the correct size instead of being resized.
+
+**You must run a new prebuild and build** (e.g. `npx expo prebuild --platform android` then build, or a new EAS Android build) for the config plugin to apply. Old APKs built before the plugin was added will still crash on rotate.
+
+---
+
+### 7. Expo Go and react-native-maps
 
 **Expo Go does not include the native module for react-native-maps** (`RNMapsAirModule`). If we load it there, the app crashes with:
 

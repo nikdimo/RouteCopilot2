@@ -69,10 +69,12 @@ export default function AppNavigator() {
         tabBarInactiveTintColor: '#94a3b8',
         tabBarShowLabel: false,
         tabBarStyle: {
-          paddingBottom: 4,
           height: 56,
           backgroundColor: '#ffffff',
           ...(Platform.OS === 'android' && { elevation: 8 }),
+          // Do NOT set paddingBottom here – the default tab bar uses insets.bottom
+          // so the tab bar sits above the system nav (back/home/recent). Overriding
+          // it would push the Schedule/Map/+/Profile/Dev buttons under the nav bar.
         },
       }}
     >
