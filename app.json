@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "WisePlan",
-    "slug": "wiseplan",
+    "slug": "routecopilot2",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -53,8 +53,9 @@
     "scheme": "wiseplan",
     "extra": {
       "eas": {
-        "projectId": "4d926b50-153f-408d-8f89-a4c79a123524"
+        "projectId": "716beeea-e5b0-4871-89be-16a216191644"
       }
-    }
+    },
+    "owner": "nikdim"
   }
 }

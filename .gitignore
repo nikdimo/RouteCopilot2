@@ -58,3 +58,11 @@ google-service-account.json
 # EAS workaround scripts (not needed in build)
 scripts/eas-build-pre-install.sh
 scripts/ensure-expo-web-dir.js
+
+# Editor/IDE and Windows reserved names (avoid "nul" etc. breaking git on Windows)
+.claude/
+Claude/
+nul
+con
+prn
+aux
