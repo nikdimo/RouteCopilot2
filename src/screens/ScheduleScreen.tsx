@@ -217,6 +217,9 @@ export default function ScheduleScreen() {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [reorderMode, setReorderMode] = useState(false);
 
+  const isWide = useIsWideScreen();
+  const insets = useSafeAreaInsets();
+
   const appointmentsList = appointments ?? [];
   const meetings = appointmentsList.map(eventToMeetingItem);
 
@@ -514,9 +517,6 @@ export default function ScheduleScreen() {
       isWide,
     ]
   );
-
-  const isWide = useIsWideScreen();
-  const insets = useSafeAreaInsets();
 
   const listHeader = (
     <>

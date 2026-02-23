@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git worktree:*)",
+      "Bash(tree:*)",
+      "Bash(du:*)",
+      "Bash(ls:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\Nikola Dimovski\\\\RouteCopilot2\\\\remove-worktrees-and-cleanup.ps1\")",
+      "Bash(npx tsc:*)",
+      "Bash(rd /s /q appbuild)",
+      "Bash(tasklist:*)",
+      "Bash(taskkill:*)"
+    ]
+  }
+}

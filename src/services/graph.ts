@@ -11,6 +11,66 @@ export class GraphUnauthorizedError extends Error {
   }
 }
 
+// ===== REQUEST DEDUPLICATION & RATE LIMIT HANDLING =====
+
+/** Cache in-flight calendar requests to prevent duplicate fetches */
+const _calendarInflight = new Map<string, Promise<CalendarEvent[]>>();
+
+/** Helper: retry with exponential backoff for 429 rate limit errors */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3
+): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(url, options);
+
+    // Success or non-retryable error
+    if (res.ok || (res.status !== 429 && res.status !== 503)) {
+      return res;
+    }
+
+    // Rate limited - wait and retry
+    if (attempt < maxRetries) {
+      const retryAfter = res.headers.get('Retry-After');
+      const delayMs = retryAfter
+        ? parseInt(retryAfter, 10) * 1000
+        : Math.pow(2, attempt) * 1000; // Exponential backoff: 1s, 2s, 4s
+
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    } else {
+      // Max retries reached
+      return res;
+    }
+  }
+
+  throw new Error('Max retries exceeded');
+}
+
+/** Helper: limit parallel promises to maxConcurrent */
+async function limitConcurrency<T>(
+  items: T[],
+  maxConcurrent: number,
+  fn: (item: T) => Promise<void>
+): Promise<void> {
+  const queue = [...items];
+  const active: Promise<void>[] = [];
+
+  while (queue.length > 0 || active.length > 0) {
+    while (active.length < maxConcurrent && queue.length > 0) {
+      const item = queue.shift()!;
+      const promise = fn(item).finally(() => {
+        active.splice(active.indexOf(promise), 1);
+      });
+      active.push(promise);
+    }
+
+    if (active.length > 0) {
+      await Promise.race(active);
+    }
+  }
+}
+
 export type CalendarEvent = {
   id: string;
   title: string;
@@ -183,6 +243,27 @@ async function fetchGraphEvents(
   startDate: Date,
   endDate: Date
 ): Promise<CalendarEvent[]> {
+  // Deduplicate identical requests
+  const cacheKey = `${startDate.toISOString()}|${endDate.toISOString()}`;
+  if (_calendarInflight.has(cacheKey)) {
+    return _calendarInflight.get(cacheKey)!;
+  }
+
+  const promise = _fetchGraphEventsInternal(token, startDate, endDate);
+  _calendarInflight.set(cacheKey, promise);
+  promise.finally(() => {
+    // Clean up after 2 seconds to allow short-term deduplication
+    setTimeout(() => _calendarInflight.delete(cacheKey), 2000);
+  });
+
+  return promise;
+}
+
+async function _fetchGraphEventsInternal(
+  token: string,
+  startDate: Date,
+  endDate: Date
+): Promise<CalendarEvent[]> {
   const start = startDate.toISOString();
   const end = endDate.toISOString();
   const params = new URLSearchParams({
@@ -201,7 +282,7 @@ async function fetchGraphEvents(
   const allGraphEvents: GraphEvent[] = [];
   let nextLink: string | null = baseUrl;
   while (nextLink) {
-    const res = await fetch(nextLink, { headers });
+    const res = await fetchWithRetry(nextLink, { headers });
     if (res.status === 401) throw new GraphUnauthorizedError();
     if (!res.ok) throw new Error(`Calendar request failed: ${res.status}`);
     const data = await res.json();
@@ -277,21 +358,21 @@ async function enrichCalendarEventsWithContactInfo(
 
   const keyToContact = new Map<string, { phone?: string; email?: string }>();
 
-  // Parallel contact lookups (all keys resolved concurrently)
-  await Promise.all(
-    [...keys].map(async (key) => {
-      const result = await searchContacts(token, key);
-      if (!result.success || !result.contacts?.length) return;
-      const exact = result.contacts.find((c) => c.displayName.toLowerCase() === key.toLowerCase());
-      const contact = exact ?? result.contacts.find((c) => c.phones.length > 0 || c.emails.length > 0);
-      if (contact) {
-        keyToContact.set(key, {
-          phone: contact.phones[0]?.trim() || undefined,
-          email: contact.emails[0]?.trim() || undefined,
-        });
-      }
-    })
-  );
+  // Throttled contact lookups (max 3 concurrent to avoid rate limits)
+  await limitConcurrency([...keys], 3, async (key) => {
+    // Add small delay to spread out requests
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const result = await searchContacts(token, key);
+    if (!result.success || !result.contacts?.length) return;
+    const exact = result.contacts.find((c) => c.displayName.toLowerCase() === key.toLowerCase());
+    const contact = exact ?? result.contacts.find((c) => c.phones.length > 0 || c.emails.length > 0);
+    if (contact) {
+      keyToContact.set(key, {
+        phone: contact.phones[0]?.trim() || undefined,
+        email: contact.emails[0]?.trim() || undefined,
+      });
+    }
+  });
 
   if (keyToContact.size === 0) return events;
 
@@ -677,7 +758,7 @@ async function _doSearchContacts(
   // Fast path: server-side $search (returns top 25, avoids downloading 500 contacts)
   const searchUrl = `https://graph.microsoft.com/v1.0/me/contacts?$search="${encodeURIComponent(q)}"&$top=25&$select=${encodeURIComponent(select)}`;
   try {
-    const searchRes = await fetch(searchUrl, {
+    const searchRes = await fetchWithRetry(searchUrl, {
       headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' },
     });
     if (searchRes.ok) {
@@ -694,7 +775,7 @@ async function _doSearchContacts(
   // Fallback: full fetch + client-side filter
   const url = `https://graph.microsoft.com/v1.0/me/contacts?$top=500&$select=${encodeURIComponent(select)}`;
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
