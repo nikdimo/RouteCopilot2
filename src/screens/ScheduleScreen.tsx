@@ -648,7 +648,7 @@ export default function ScheduleScreen() {
         <View style={[styles.schedulePane, { paddingLeft: insets.left }]}>
           {scheduleContent}
         </View>
-        <View style={styles.mapPane}>
+        <View style={[styles.mapPane, { paddingRight: insets.right }]}>
           {isExpoGo ? (
             <View style={[styles.container, styles.mapPlaceholder]}>
               <Text style={styles.mapPlaceholderText}>Map available in development build</Text>

@@ -1,6 +1,7 @@
 import React, { Suspense } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Calendar, Map, User, Code, Plus } from 'lucide-react-native';
 import Constants from 'expo-constants';
 import ScheduleStack from './ScheduleStack';
@@ -52,6 +53,16 @@ export type BottomTabParamList = {
 
 const Tab = createBottomTabNavigator<BottomTabParamList>();
 
+/** Wraps the default tab bar with explicit bottom safe area so tab bar sits above system nav (edge-to-edge). */
+function TabBarWithSafeArea(props: React.ComponentProps<typeof BottomTabBar>) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={{ paddingBottom: insets.bottom, backgroundColor: '#ffffff' }}>
+      <BottomTabBar {...props} />
+    </View>
+  );
+}
+
 function AddPlaceholder() {
   return null;
 }
@@ -72,10 +83,8 @@ export default function AppNavigator() {
           height: 56,
           backgroundColor: '#ffffff',
           ...(Platform.OS === 'android' && { elevation: 8 }),
-          // Do NOT set paddingBottom here – the default tab bar uses insets.bottom
-          // so the tab bar sits above the system nav (back/home/recent). Overriding
-          // it would push the Schedule/Map/+/Profile/Dev buttons under the nav bar.
         },
+        tabBar: (props) => <TabBarWithSafeArea {...props} />,
       }}
     >
       <Tab.Screen

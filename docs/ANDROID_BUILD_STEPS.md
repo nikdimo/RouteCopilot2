@@ -119,18 +119,25 @@ EAS runs **prebuild** for you, so the rotation fix (config plugin) is applied.
 
 ## If you build locally instead of EAS
 
-If you prefer to build on your machine and have Android SDK set up:
+If you prefer to build on your machine and have **Android SDK and Java (JAVA_HOME)** set up:
 
-1. **Prebuild** (so the rotation config plugin runs):
+1. **Prebuild** (already done; run again if you change config plugins):
    ```text
    npx expo prebuild --platform android --clean
    ```
 
-2. **Run and build**:
+2. **Build release APK**:
+   ```text
+   cd android
+   .\gradlew.bat assembleRelease
+   ```
+   The APK is at `android\app\build\outputs\apk\release\app-release.apk`.
+
+   Or build and install via Expo (requires device/emulator):
    ```text
    npx expo run:android
    ```
-   This builds and can install via USB if the phone is connected. The APK is under `android/app/build/outputs/apk/` (exact path depends on build type).
+   APKs are under `android/app/build/outputs/apk/`.
 
 ---
 
