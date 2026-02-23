@@ -9,7 +9,8 @@
       "Bash(npx tsc:*)",
       "Bash(rd /s /q appbuild)",
       "Bash(tasklist:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(dir /b:*)"
     ]
   }
 }

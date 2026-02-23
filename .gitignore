@@ -62,6 +62,8 @@ scripts/ensure-expo-web-dir.js
 # Editor/IDE and Windows reserved names (avoid "nul" etc. breaking git on Windows)
 .claude/
 Claude/
+tmpclaude-*
+android-crash-log.txt
 nul
 con
 prn
