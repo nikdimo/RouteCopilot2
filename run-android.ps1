@@ -3,7 +3,8 @@
 
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 $env:ANDROID_HOME = "C:\Users\Nikola Dimovski\AppData\Local\Android\Sdk"
+$env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 $env:Path = "$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:ANDROID_HOME\emulator;$env:ANDROID_HOME\tools;$env:Path"
 
 Set-Location $PSScriptRoot
-npx expo run:android --device emulator-5554 --port 8083
+npx.cmd expo run:android --device emulator-5554 --port 8082

@@ -8,20 +8,37 @@ const appJson = require('./app.json');
 module.exports = ({ config }) => {
   // EAS may pass the expo block only (no .expo wrapper); support both shapes.
   const expoBlock = config?.expo ?? config ?? appJson.expo;
+
+  // Prefer ANDROID_GOOGLE_MAPS_API_KEY (EAS secret/env), fall back to legacy name.
+  const mapsApiKey =
+    process.env.ANDROID_GOOGLE_MAPS_API_KEY ||
+    process.env.GOOGLE_MAPS_API_KEY ||
+    '';
+
   const plugins = (expoBlock.plugins || []).map((p) => {
     if (Array.isArray(p) && p[0] === 'react-native-maps') {
       return [
         'react-native-maps',
         {
-          androidGoogleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
+          androidGoogleMapsApiKey: mapsApiKey,
         },
       ];
     }
     return p;
   });
+
+  const androidConfig = {
+    ...expoBlock.android,
+    config: {
+      ...(expoBlock.android?.config || {}),
+      googleMaps: { apiKey: mapsApiKey },
+    },
+  };
+
   return {
     expo: {
       ...expoBlock,
+      android: androidConfig,
       plugins,
     },
   };

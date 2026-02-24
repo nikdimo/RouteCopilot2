@@ -1,0 +1,25 @@
+Starting project at C:\Users\Nikola Dimovski\RouteCopilot2
+Starting Metro Bundler
+warning: Bundler cache is empty, rebuilding (this may take a minute)
+Waiting on http://localhost:8083
+Logs for your project will appear below.
+Android .\index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Android .\index.ts ▓▓▓▓▓▓░░░░░░░░░░ 42.5% (45/69)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓░░░░░░░ 61.0% (183/356)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓░░░░░░░ 61.0% (516/969)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓░░░░ 79.2% ( 968/2759)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓░░░░ 79.2% (1561/2951)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓░░░░ 79.2% (2391/2953)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 91.1% (3014/3239)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 98.4% (3444/3472)
+Android Bundled 31122ms index.ts (3488 modules)
+Android .\index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Android .\index.ts ▓▓▓▓▓▓░░░░░░░░░░ 39.5% (404/885)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓░░░░░░░ 60.0% ( 915/1181)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.1% (1274/2963)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.1% (2274/2989)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 88.0% (2959/3155)
+Android .\index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 98.2% (3347/3378)
+Android Bundled 23694ms index.ts (3435 modules)
+Android .\index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Android Bundled 230ms index.ts (1 module)

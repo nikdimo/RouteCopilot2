@@ -4,6 +4,7 @@
 $ErrorActionPreference = "Stop"
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 $env:ANDROID_HOME = "C:\Users\Nikola Dimovski\AppData\Local\Android\Sdk"
+$env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 $env:Path = "$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:ANDROID_HOME\emulator;$env:ANDROID_HOME\tools;$env:Path"
 # Use port 8083 to avoid prompt when 8081 is in use
 $env:REACT_NATIVE_PACKAGER_PORT = "8083"
@@ -46,4 +47,4 @@ if ($elapsed -ge $timeout) {
 Start-Sleep -Seconds 5
 
 Write-Host "Building and launching app..." -ForegroundColor Cyan
-& npx expo run:android --device emulator-5554 --port 8083
+& npx.cmd expo run:android --device emulator-5554 --port 8083
