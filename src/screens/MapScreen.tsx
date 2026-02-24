@@ -82,7 +82,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const [selectedWaypointIndices, setSelectedWaypointIndices] = useState<number[] | null>(null);
   const navigation = useNavigation();
   const isWide = useIsWideScreen();
-  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay, highlightWaypointIndex, setHighlightWaypointIndex } = useRoute();
+  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay, highlightWaypointIndex, setHighlightWaypointIndex, triggerRefresh } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const navParams = useNavRoute<MapScreenNavParams>().params;
   const triggerLoadWhenEmpty = navParams?.triggerLoadWhenEmpty ?? false;
@@ -118,9 +118,10 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   useFocusEffect(
     useCallback(() => {
       if (triggerLoadWhenEmpty && appointments.length === 0 && isSameDay(ctxSelectedDate, today)) load();
+      if (!embeddedInSchedule && appointments.length === 0) triggerRefresh();
       if (!embeddedInSchedule) ensureMeetingCountsForDate(ctxSelectedDate);
       refetchRouteIfNeeded();
-    }, [triggerLoadWhenEmpty, load, appointments.length, refetchRouteIfNeeded, embeddedInSchedule, ensureMeetingCountsForDate, ctxSelectedDate, today])
+    }, [triggerLoadWhenEmpty, load, appointments.length, refetchRouteIfNeeded, embeddedInSchedule, ensureMeetingCountsForDate, ctxSelectedDate, today, triggerRefresh])
   );
 
   const headerTitle = isSameDay(ctxSelectedDate, today) ? "Today's Route" : format(ctxSelectedDate, 'EEE, MMM d');

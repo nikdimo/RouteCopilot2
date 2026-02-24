@@ -44,7 +44,6 @@ export default function SelectedDateSync() {
     setPendingLocalEvent,
   } = useRoute();
   const dayCache = useRef<Map<string, Awaited<ReturnType<typeof sortAppointmentsByTime>>>>(new Map());
-  const isFirstRun = useRef(true);
   const lastRefreshTrigger = useRef(0);
   /** Track which day is currently "active" so background enrichment doesn't clobber a switched day. */
   const activeDayKey = useRef<string>('');
@@ -160,10 +159,6 @@ export default function SelectedDateSync() {
   );
 
   useEffect(() => {
-    if (isFirstRun.current) {
-      isFirstRun.current = false;
-      return;
-    }
     const dayKey = toLocalDayKey(selectedDate);
     const cached = dayCache.current.get(dayKey);
     if (cached) {
