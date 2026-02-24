@@ -348,12 +348,14 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
             setSelectedWaypointIndices([0]);
             setHighlightWaypointIndex(0);
           };
+          // On Android, custom Marker children often don't render with tracksViewChanges={false}
+          const homeTracksView = Platform.OS === 'android' ? true : !isWide;
           return (
             <Marker
               coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
               pinColor={isWide ? HOME_GREEN : undefined}
               anchor={isWide ? undefined : { x: 0.5, y: 0.5 }}
-              tracksViewChanges={!isWide}
+              tracksViewChanges={homeTracksView}
               onPress={onRootPress}
             >
               {isWide ? (
@@ -409,12 +411,14 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           const bgColor = anyCompleted ? '#808080' : isLate ? '#D13438' : MS_BLUE;
           const eta = etas[index];
           const isFocused = isCluster && clusterKey != null && clusterKey === focusedClusterKey;
+          // On Android, custom Marker views often don't render with tracksViewChanges={false}
+          const waypointTracksView = Platform.OS === 'android';
           return (
             <Marker
               key={`waypoint-${index}`}
               coordinate={coordinate}
               anchor={{ x: 0.5, y: 0.5 }}
-              tracksViewChanges={false}
+              tracksViewChanges={waypointTracksView}
               onPress={() => {
                 ignoreNextMapPressRef.current = true;
                 setFocusedClusterKey(null);
@@ -452,7 +456,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
               key={`leg-${selectedArrivalLegIndex}`}
               coordinate={osrmRoute.legs[selectedArrivalLegIndex]!.labelPoint}
               anchor={{ x: 0.5, y: 1 }}
-              tracksViewChanges={false}
+              tracksViewChanges={Platform.OS === 'android'}
             >
               <View style={styles.segmentBubble}>
                 <View style={styles.segmentBubbleContent}>
