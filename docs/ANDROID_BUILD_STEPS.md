@@ -147,3 +147,25 @@ If you prefer to build on your machine and have **Android SDK and Java (JAVA_HOM
 - **Build fails at prebuild:** Check the build log on the EAS page for the exact error (e.g. plugin or config).
 - **Old APK still installed:** Uninstall the previous app from the phone, then install the new APK from the latest build.
 - **Map or rotation still wrong:** Ensure you installed the APK from the build that was made **after** all the fixes (new EAS build or new local build after prebuild).
+
+---
+
+## Local `expo run:android` CMake patch setup (important)
+
+For local Android builds, CMake fixes are tracked with `patch-package` so they survive `npm install`.
+
+1. Keep these lines in `android/gradle.properties`:
+   ```text
+   org.gradle.parallel=false
+   newArchEnabled=false
+   ```
+2. Keep `postinstall` in `package.json`:
+   ```text
+   "postinstall": "patch-package"
+   ```
+3. Required patch files:
+   - `patches/expo-modules-core+3.0.29.patch`
+   - `patches/react-native-reanimated+3.19.5.patch`
+   - `patches/react-native-screens+4.16.0.patch`
+
+If package versions change, regenerate patches for the same CMakeLists targets.

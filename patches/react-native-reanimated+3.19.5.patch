@@ -1,0 +1,26 @@
+diff --git a/node_modules/react-native-reanimated/android/src/main/cpp/reanimated/CMakeLists.txt b/node_modules/react-native-reanimated/android/src/main/cpp/reanimated/CMakeLists.txt
+index c61b03a..399c750 100644
+--- a/node_modules/react-native-reanimated/android/src/main/cpp/reanimated/CMakeLists.txt
++++ b/node_modules/react-native-reanimated/android/src/main/cpp/reanimated/CMakeLists.txt
+@@ -29,7 +29,7 @@ endif()
+ 
+ set_target_properties(reanimated PROPERTIES LINKER_LANGUAGE CXX)
+ 
+-target_link_libraries(reanimated worklets android)
++target_link_libraries(reanimated worklets android c++_shared)
+ 
+ if(ReactAndroid_VERSION_MINOR GREATER_EQUAL 76)
+   target_link_libraries(reanimated ReactAndroid::reactnative)
+diff --git a/node_modules/react-native-reanimated/android/src/main/cpp/worklets/CMakeLists.txt b/node_modules/react-native-reanimated/android/src/main/cpp/worklets/CMakeLists.txt
+index bb61ff7..9f0d89f 100644
+--- a/node_modules/react-native-reanimated/android/src/main/cpp/worklets/CMakeLists.txt
++++ b/node_modules/react-native-reanimated/android/src/main/cpp/worklets/CMakeLists.txt
+@@ -46,7 +46,7 @@ endif()
+ # build shared lib
+ set_target_properties(worklets PROPERTIES LINKER_LANGUAGE CXX)
+ 
+-target_link_libraries(worklets log ReactAndroid::jsi fbjni::fbjni)
++target_link_libraries(worklets log c++_shared ReactAndroid::jsi fbjni::fbjni)
+ 
+ if(ReactAndroid_VERSION_MINOR GREATER_EQUAL 76)
+   target_link_libraries(worklets ReactAndroid::reactnative)
