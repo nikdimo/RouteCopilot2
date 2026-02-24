@@ -4,11 +4,14 @@
  * No API key required.
  */
 
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const OSRM_BASE = 'https://router.project-osrm.org';
 const OSRM_CACHE_PREFIX = 'routecopilot_osrm_';
 const OSRM_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const ROUTE_QC_LOG = __DEV__ || Platform.OS === 'android';
 
 // In-memory cache for the current session (avoids AsyncStorage reads on repeated calls)
 const _osrmMemCache = new Map<string, OSRMRoute>();
@@ -83,8 +86,33 @@ export async function fetchRoute(
 
   try {
     const res = await fetch(url);
+    const body = await res.text();
+    if (ROUTE_QC_LOG) {
+      let code = '';
+      try {
+        const parsed = JSON.parse(body);
+        code = parsed?.code ?? '';
+      } catch {
+        // ignore
+      }
+      console.log('[RouteQC] OSRM fetch', {
+        ok: res.ok,
+        status: res.status,
+        code,
+        waypointsCount: waypoints.length,
+      });
+    }
     if (!res.ok) return null;
-    const data = await res.json();
+    const data = JSON.parse(body) as {
+      code?: string;
+      routes?: Array<{
+        legs?: Array<{ distance?: number; duration?: number }>;
+        geometry?: { coordinates?: [number, number][] };
+        distance?: number;
+        duration?: number;
+      }>;
+      waypoints?: Array<{ location?: [number, number] }>;
+    };
     if (data.code !== 'Ok' || !data.routes?.[0]) return null;
 
     const route = data.routes[0];

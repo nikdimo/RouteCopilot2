@@ -59,7 +59,7 @@ export default function MeetingCard({
           <Svg width={CHAMFER_SIZE} height={CHAMFER_SIZE} style={styles.chamferSvg}>
             <Polygon points={`0,0 ${CHAMFER_SIZE},0 ${CHAMFER_SIZE},${CHAMFER_SIZE}`} fill={MS_BLUE} />
           </Svg>
-          <View style={styles.chamferNumberWrap} pointerEvents="none">
+          <View style={[styles.chamferNumberWrap, { pointerEvents: 'none' }]}>
             <Text style={styles.chamferNumber} allowFontScaling={false}>{waypointNumber}</Text>
           </View>
         </TouchableOpacity>

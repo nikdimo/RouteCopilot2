@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import { useRoute } from '../context/RouteContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { getTravelMinutes } from '../utils/scheduler';
@@ -80,6 +81,16 @@ export function useRouteData(): UseRouteDataResult {
     return [home, ...meetingCoords, home];
   }, [coords, homeBase]);
 
+  const ROUTE_QC_LOG = __DEV__ || Platform.OS === 'android';
+  useEffect(() => {
+    if (!ROUTE_QC_LOG) return;
+    console.log('[RouteQC] useRouteData: appointments/coords/waypoints', {
+      appointments: appointments.length,
+      coords: coords.length,
+      waypoints: waypoints.length,
+    });
+  }, [ROUTE_QC_LOG, appointments.length, coords.length, waypoints.length]);
+
   const waypointsKey = useMemo(
     () =>
       waypoints.map((w) => `${w.latitude.toFixed(6)},${w.longitude.toFixed(6)}`).join('|'),
@@ -104,10 +115,22 @@ export function useRouteData(): UseRouteDataResult {
     debounceRef.current = setTimeout(() => {
       fetchRoute(waypoints)
         .then((route) => {
-          if (!cancelled) setOsrmRoute(route);
+          if (!cancelled) {
+            if (ROUTE_QC_LOG) {
+              console.log('[RouteQC] useRouteData: OSRM result', {
+                success: !!route,
+                coordsCount: route?.coordinates?.length ?? 0,
+                legsCount: route?.legs?.length ?? 0,
+              });
+            }
+            setOsrmRoute(route);
+          }
         })
-        .catch(() => {
-          if (!cancelled) setOsrmRoute(null);
+        .catch((err) => {
+          if (!cancelled) {
+            if (ROUTE_QC_LOG) console.log('[RouteQC] useRouteData: OSRM fetch failed', err?.message ?? err);
+            setOsrmRoute(null);
+          }
         })
         .finally(() => {
           if (!cancelled) setRouteLoading(false);

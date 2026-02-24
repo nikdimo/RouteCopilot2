@@ -5,6 +5,7 @@
  * Preloads appointments for the next 5 days in the background for faster day switching.
  */
 import { useCallback, useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import { startOfDay, endOfDay, addDays } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
@@ -13,6 +14,9 @@ import { sortAppointmentsByTime } from '../utils/optimization';
 import { toLocalDayKey } from '../utils/dateUtils';
 
 const PRELOAD_DAYS_AHEAD = 5;
+
+/** Log route QC diagnostics on Android or in __DEV__ to trace why routes may not display */
+const ROUTE_QC_LOG = __DEV__ || Platform.OS === 'android';
 
 function applyOrderSync(
   events: Awaited<ReturnType<typeof sortAppointmentsByTime>>,
@@ -75,6 +79,14 @@ export default function SelectedDateSync() {
       const cached = dayCache.current.get(dayKey);
       if (cached) {
         const merged = mergePendingIfSameDay(dayKey, cached);
+        if (ROUTE_QC_LOG) {
+          const withCoords = merged.filter((e) => e.coordinates != null);
+          console.log('[RouteQC] SelectedDateSync: from cache', {
+            dayKey,
+            total: merged.length,
+            withCoordinates: withCoords.length,
+          });
+        }
         setAppointments(merged);
         setAppointmentsLoading(false);
         return;
@@ -95,6 +107,14 @@ export default function SelectedDateSync() {
         const rawMerged = mergePendingIfSameDay(dayKey, rawOrdered);
 
         if (activeDayKey.current === dayKey) {
+          if (ROUTE_QC_LOG) {
+            const withCoords = rawMerged.filter((e) => e.coordinates != null);
+            console.log('[RouteQC] SelectedDateSync: raw set', {
+              dayKey,
+              total: rawMerged.length,
+              withCoordinates: withCoords.length,
+            });
+          }
           setAppointments(rawMerged);
           setAppointmentsLoading(false);
         }
@@ -107,6 +127,14 @@ export default function SelectedDateSync() {
             const enrichedOrdered = applyOrderSync(enrichedSorted, savedOrder);
             const enrichedMerged = mergePendingIfSameDay(dayKey, enrichedOrdered);
             dayCache.current.set(dayKey, enrichedMerged);
+            if (ROUTE_QC_LOG) {
+              const withCoords = enrichedMerged.filter((e) => e.coordinates != null);
+              console.log('[RouteQC] SelectedDateSync: enriched set', {
+                dayKey,
+                total: enrichedMerged.length,
+                withCoordinates: withCoords.length,
+              });
+            }
             setAppointments(enrichedMerged);
           })
           .catch(() => {
@@ -175,9 +203,18 @@ export default function SelectedDateSync() {
 
   useEffect(() => {
     if (!userToken && !getValidToken) return;
-    for (let i = 1; i <= PRELOAD_DAYS_AHEAD; i++) {
-      preloadOneDay(addDays(selectedDate, i));
-    }
+    let cancelled = false;
+    const run = async () => {
+      for (let i = 1; i <= PRELOAD_DAYS_AHEAD; i++) {
+        if (cancelled) return;
+        preloadOneDay(addDays(selectedDate, i));
+        if (i < PRELOAD_DAYS_AHEAD) await new Promise((r) => setTimeout(r, 400));
+      }
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedDate, userToken, getValidToken, preloadOneDay]);
 
   useEffect(() => {

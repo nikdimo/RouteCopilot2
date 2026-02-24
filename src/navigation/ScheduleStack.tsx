@@ -26,6 +26,7 @@ export default function ScheduleStack() {
     <Stack.Navigator
       initialRouteName="ScheduleHome"
       screenOptions={{
+        headerShown: false,
         headerStyle: { backgroundColor: MS_BLUE },
         headerTintColor: '#fff',
         headerTitleStyle: { fontWeight: '600' },

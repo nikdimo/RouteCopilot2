@@ -162,6 +162,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   useLayoutEffect(() => {
     if (embeddedInSchedule) return;
     navigation.setOptions({
+      headerShown: false,
       headerTitle,
       headerTitleStyle: { fontWeight: '600', fontSize: isWide ? 16 : undefined },
       headerStyle: { backgroundColor: MS_BLUE },
@@ -250,6 +251,18 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
       {showNoAddressOverlay && (
         <View style={styles.emptyOverlay}>
           <Text style={styles.emptyOverlayText}>Add addresses to see them on the map</Text>
+        </View>
+      )}
+      {(__DEV__ || Platform.OS === 'android') && !embeddedInSchedule && (
+        <View style={[styles.routeQcOverlay, { pointerEvents: 'none' }]}>
+          <Text style={styles.routeQcTitle}>Route QC</Text>
+          <Text style={styles.routeQcLine}>appointments: {appointments.length}</Text>
+          <Text style={styles.routeQcLine}>coords: {coords.length}</Text>
+          <Text style={styles.routeQcLine}>waypoints: {routeData.waypoints.length}</Text>
+          <Text style={styles.routeQcLine}>fullPolyline: {fullPolyline.length}</Text>
+          <Text style={styles.routeQcLine}>osrmRoute: {osrmRoute ? 'yes' : 'no'}</Text>
+          <Text style={styles.routeQcLine}>routeCoords: {routeCoordinates.length}</Text>
+          <Text style={styles.routeQcLine}>allCoordsForFit: {allCoordsForFit.length}</Text>
         </View>
       )}
       <MapView
@@ -483,7 +496,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
       {selectedWaypointIndices &&
         selectedWaypointIndices.length > 0 &&
         selectedWaypointIndices.every((i) => coords[i] != null) && (
-        <View style={styles.bottomCardContainer} pointerEvents="box-none">
+        <View style={[styles.bottomCardContainer, { pointerEvents: 'box-none' }]}>
           <View style={[styles.selectedCalloutCard, styles.bottomCard]}>
             {selectedWaypointIndices.length === 1 ? (
               <ScrollView
@@ -662,6 +675,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     textAlign: 'center',
+  },
+  routeQcOverlay: {
+    position: 'absolute',
+    top: 56,
+    left: 8,
+    zIndex: 25,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    maxWidth: 200,
+  },
+  routeQcTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  routeQcLine: {
+    fontSize: 10,
+    color: '#e2e8f0',
+    fontFamily: Platform.OS === 'android' ? 'monospace' : undefined,
   },
   segmentBubble: {
     alignItems: 'center',

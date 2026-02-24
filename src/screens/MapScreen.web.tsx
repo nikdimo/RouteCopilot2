@@ -421,6 +421,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   useLayoutEffect(() => {
     if (embeddedInSchedule) return;
     navigation.setOptions?.({
+      headerShown: false,
       headerTitle: headerTitle,
       headerStyle: { backgroundColor: MS_BLUE },
       headerTintColor: '#fff',
@@ -673,7 +674,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
       {selectedWaypointIndices &&
         selectedWaypointIndices.length > 0 &&
         selectedWaypointIndices.every((i) => coords[i] != null) && (
-        <View style={styles.bottomCardContainer} pointerEvents="box-none">
+        <View style={[styles.bottomCardContainer, { pointerEvents: 'box-none' }]}>
           <View style={[styles.bottomCard]}>
             {selectedWaypointIndices.length === 1 ? (
               (() => {
@@ -815,10 +816,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 8,
     elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    boxShadow: '0px 2px 4px rgba(0,0,0,0.2)',
   },
   detailsButtonText: {
     fontSize: 13,
@@ -835,10 +833,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     zIndex: 1000,
     elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
+    boxShadow: '0px 4px 8px rgba(0,0,0,0.25)',
   },
   detailsOverlayContent: {
     padding: 12,
@@ -909,10 +904,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     maxHeight: '40%',
     elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    boxShadow: '0px 4px 8px rgba(0,0,0,0.3)',
   },
   bottomCardTitle: {
     fontSize: 14,
@@ -965,7 +957,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: MS_BLUE,
     textAlign: 'center',
-    textDecoration: 'none',
+    textDecorationLine: 'none',
   },
   bottomCardClose: {
     paddingVertical: 8,
@@ -1000,6 +992,6 @@ const popupStyles = {
     display: 'block',
     marginTop: 6,
     textAlign: 'center' as const,
-    textDecoration: 'none',
+    textDecorationLine: 'none',
   },
 };

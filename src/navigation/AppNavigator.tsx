@@ -56,11 +56,11 @@ export type BottomTabParamList = {
 
 const Tab = createBottomTabNavigator<BottomTabParamList>();
 
-/** Wraps the default tab bar with explicit bottom safe area so tab bar sits above system nav (edge-to-edge). */
+/** Wraps the default tab bar with safe area. Android: no shadow, transparent tab bar so wrapper white extends to bottom. iOS: slightly reduced bottom inset so footer sits a bit higher. */
 function TabBarWithSafeArea(props: React.ComponentProps<typeof BottomTabBar>) {
   const insets = useSafeAreaInsets();
-  // On Android edge-to-edge many devices report 0 or small values; use at least 48 so all 5 tabs stay above nav/gesture bar.
-  const bottomInset = Platform.OS === 'android' ? Math.max(insets.bottom, 48) : insets.bottom;
+  const isAndroid = Platform.OS === 'android';
+  const bottomInset = isAndroid ? Math.max(insets.bottom, 48) : Math.max(0, insets.bottom - 8);
   return (
     <View style={{ paddingBottom: bottomInset, backgroundColor: '#ffffff' }}>
       <BottomTabBar {...props} />
@@ -79,6 +79,7 @@ export default function AppNavigator() {
       lazy={true}
       tabBar={(props) => <TabBarWithSafeArea {...props} />}
       screenOptions={{
+        headerShown: false,
         headerStyle: { backgroundColor: MS_BLUE },
         headerTintColor: '#fff',
         headerTitleStyle: { fontWeight: '600' },
@@ -87,8 +88,8 @@ export default function AppNavigator() {
         tabBarShowLabel: false,
         tabBarStyle: {
           height: 56,
-          backgroundColor: '#ffffff',
-          ...(Platform.OS === 'android' && { elevation: 8 }),
+          backgroundColor: Platform.OS === 'android' ? 'transparent' : '#ffffff',
+          ...(Platform.OS === 'android' && { elevation: 0 }),
         },
       }}
     >

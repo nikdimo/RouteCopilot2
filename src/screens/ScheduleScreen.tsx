@@ -583,7 +583,7 @@ export default function ScheduleScreen() {
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      headerShown: true,
+      headerShown: false,
       headerTitle,
       headerTitleStyle: {
         fontWeight: '600',
