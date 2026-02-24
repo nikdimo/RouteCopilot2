@@ -194,6 +194,8 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const mainPolylineCoords = useMemo(() => {
     if (routeCoordinates.length < 2) return routeCoordinates;
     if (Platform.OS !== 'android') return routeCoordinates;
+    // On Android try simplest path first: waypoint-to-waypoint only (few points), often renders when full route doesn't
+    if (fullPolyline.length >= 2) return fullPolyline;
     const maxPoints = 500;
     if (routeCoordinates.length <= maxPoints) return routeCoordinates;
     const step = routeCoordinates.length / maxPoints;
@@ -204,7 +206,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     }
     out.push(routeCoordinates[routeCoordinates.length - 1]!);
     return out;
-  }, [routeCoordinates]);
+  }, [routeCoordinates, fullPolyline]);
 
   /** DEV + Android: first and last waypoint for a 2-point test line (confirms Polyline can render) */
   const waypointsForPolylineTest = useMemo(() => {
@@ -324,7 +326,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                 mapReadyTimeoutRef.current = setTimeout(() => {
                   setMapReady(true);
                   mapReadyTimeoutRef.current = null;
-                }, 400);
+                }, 600);
               }
             : undefined
         }
@@ -445,8 +447,21 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
             setSelectedWaypointIndices([0]);
             setHighlightWaypointIndex(0);
           };
+          // Android: use default pin only (custom Marker views often don't render)
+          if (Platform.OS === 'android') {
+            return (
+              <Marker
+                key="home-base"
+                coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
+                pinColor={HOME_GREEN}
+                title="H"
+                description={homeBaseLabel ?? 'Home Base'}
+                onPress={onRootPress}
+              />
+            );
+          }
           // On Android, custom Marker children often don't render with tracksViewChanges={false}
-          const homeTracksView = Platform.OS === 'android' ? true : !isWide;
+          const homeTracksView = !isWide;
           return (
             <Marker
               coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
@@ -508,8 +523,27 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           const bgColor = anyCompleted ? '#808080' : isLate ? '#D13438' : MS_BLUE;
           const eta = etas[index];
           const isFocused = isCluster && clusterKey != null && clusterKey === focusedClusterKey;
-          // On Android, custom Marker views often don't render with tracksViewChanges={false}
-          const waypointTracksView = Platform.OS === 'android';
+          // Android: use default pin only (custom Marker views often don't render)
+          if (Platform.OS === 'android') {
+            return (
+              <Marker
+                key={`waypoint-${index}`}
+                coordinate={coordinate}
+                pinColor={anyCompleted ? '#808080' : isLate ? '#D13438' : MS_BLUE}
+                title={String(index + 1)}
+                description={appointment.title ?? appointment.location ?? ''}
+                onPress={() => {
+                  ignoreNextMapPressRef.current = true;
+                  setFocusedClusterKey(null);
+                  setFocusedClusterCoord(null);
+                  setSelectedArrivalLegIndex(index);
+                  setSelectedWaypointIndices([index]);
+                  setHighlightWaypointIndex(index);
+                }}
+              />
+            );
+          }
+          const waypointTracksView = true;
           return (
             <Marker
               key={`waypoint-${index}`}
