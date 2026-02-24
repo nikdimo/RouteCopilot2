@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { useFocusEffect, useRoute as useNavRoute, useNavigation } from '@react-navigation/native';
 import { Phone, Car } from 'lucide-react-native';
@@ -70,7 +71,10 @@ type MapScreenProps = { embeddedInSchedule?: boolean };
 export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const mapRef = useRef<MapView>(null);
   const ignoreNextMapPressRef = useRef(false);
+  const mapReadyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [region, setRegion] = useState(DEFAULT_REGION);
+  /** On Android, Polylines/Markers often don't show if added before the native map is ready; gate overlays on this */
+  const [mapReady, setMapReady] = useState(Platform.OS !== 'android');
   const [focusedClusterKey, setFocusedClusterKey] = useState<string | null>(null);
   const [focusedClusterCoord, setFocusedClusterCoord] = useState<{
     latitude: number;
@@ -82,6 +86,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const [selectedWaypointIndices, setSelectedWaypointIndices] = useState<number[] | null>(null);
   const navigation = useNavigation();
   const isWide = useIsWideScreen();
+  const insets = useSafeAreaInsets();
   const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay, highlightWaypointIndex, setHighlightWaypointIndex, triggerRefresh } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const navParams = useNavRoute<MapScreenNavParams>().params;
@@ -159,6 +164,15 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     }
   }, [highlightWaypointIndex, coords, setHighlightWaypointIndex]);
 
+  useEffect(() => {
+    return () => {
+      if (mapReadyTimeoutRef.current) {
+        clearTimeout(mapReadyTimeoutRef.current);
+        mapReadyTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   useLayoutEffect(() => {
     if (embeddedInSchedule) return;
     navigation.setOptions({
@@ -175,6 +189,29 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     : fullPolyline.length >= 2
       ? fullPolyline
       : [];
+
+  /** On Android, very long polylines (2000+) often don't render or cause freezes; use decimated coords for the main line */
+  const mainPolylineCoords = useMemo(() => {
+    if (routeCoordinates.length < 2) return routeCoordinates;
+    if (Platform.OS !== 'android') return routeCoordinates;
+    const maxPoints = 500;
+    if (routeCoordinates.length <= maxPoints) return routeCoordinates;
+    const step = routeCoordinates.length / maxPoints;
+    const out: typeof routeCoordinates = [];
+    for (let i = 0; i < maxPoints; i++) {
+      const idx = Math.min(Math.floor(i * step), routeCoordinates.length - 1);
+      out.push(routeCoordinates[idx]!);
+    }
+    out.push(routeCoordinates[routeCoordinates.length - 1]!);
+    return out;
+  }, [routeCoordinates]);
+
+  /** DEV + Android: first and last waypoint for a 2-point test line (confirms Polyline can render) */
+  const waypointsForPolylineTest = useMemo(() => {
+    const w = routeData.waypoints;
+    if (!__DEV__ || Platform.OS !== 'android' || w.length < 2) return [];
+    return [w[0]!, w[w.length - 1]!];
+  }, [routeData.waypoints]);
 
   const fitWhenStable = true;
 
@@ -229,8 +266,10 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   const showLoadingBar = !embeddedInSchedule && routeLoading;
 
+  const topInset = embeddedInSchedule ? 0 : insets.top;
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, topInset > 0 && { paddingTop: topInset }]}>
       {!embeddedInSchedule && (
         <DaySlider
           selectedDate={ctxSelectedDate}
@@ -254,7 +293,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
         </View>
       )}
       {(__DEV__ || Platform.OS === 'android') && !embeddedInSchedule && (
-        <View style={[styles.routeQcOverlay, { pointerEvents: 'none' }]}>
+        <View style={[styles.routeQcOverlay, { pointerEvents: 'none', top: topInset + 52 }]}>
           <Text style={styles.routeQcTitle}>Route QC</Text>
           <Text style={styles.routeQcLine}>appointments: {appointments.length}</Text>
           <Text style={styles.routeQcLine}>coords: {coords.length}</Text>
@@ -271,6 +310,24 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
         initialRegion={DEFAULT_REGION}
         showsUserLocation
         mapType={Platform.OS === 'ios' ? 'mutedStandard' : 'standard'}
+        onMapReady={() => {
+          setMapReady(true);
+          if (mapReadyTimeoutRef.current) {
+            clearTimeout(mapReadyTimeoutRef.current);
+            mapReadyTimeoutRef.current = null;
+          }
+        }}
+        onLayout={
+          Platform.OS === 'android'
+            ? () => {
+                if (mapReadyTimeoutRef.current) return;
+                mapReadyTimeoutRef.current = setTimeout(() => {
+                  setMapReady(true);
+                  mapReadyTimeoutRef.current = null;
+                }, 400);
+              }
+            : undefined
+        }
         onRegionChangeComplete={setRegion}
         onPress={() => {
           if (ignoreNextMapPressRef.current) {
@@ -283,6 +340,32 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           setFocusedClusterCoord(null);
         }}
       >
+        {mapReady && (
+          <>
+        {/* DEV + Android: 2-point test line to confirm Polyline renders at all (bright red, thick) */}
+        {__DEV__ && Platform.OS === 'android' && waypointsForPolylineTest.length === 2 && (
+          <Polyline
+            key="route-test-2pt"
+            coordinates={waypointsForPolylineTest}
+            strokeColor="#E53935"
+            strokeWidth={12}
+            zIndex={999}
+            geodesic
+            tappable={false}
+          />
+        )}
+        {/* Single full-route polyline so the route always shows on Android (per-leg polylines may not render) */}
+        {mainPolylineCoords.length >= 2 && (
+          <Polyline
+            key="route-main"
+            coordinates={mainPolylineCoords}
+            strokeColor="#00B0FF"
+            strokeWidth={6}
+            zIndex={1}
+            geodesic
+            tappable={false}
+          />
+        )}
         {osrmRoute?.legs && (() => {
           const LEG_OFFSET_DEG = 0.00025;
           const HIGHLIGHT_WIDTH = 7;
@@ -492,6 +575,8 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
               </View>
             </Marker>
           )}
+          </>
+        )}
       </MapView>
       {selectedWaypointIndices &&
         selectedWaypointIndices.length > 0 &&
