@@ -10,14 +10,14 @@ export function useEnsureMeetingCountsForDate() {
   const { loadedRange, setMeetingCountByDay, setLoadedRange } = useRoute();
 
   return useCallback(
-    async (date: Date) => {
+    async (date: Date, forceRefetch?: boolean) => {
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
       if (!token) return;
       const windowStart = startOfDay(addDays(date, -30));
       const windowEnd = endOfDay(addDays(date, 30));
       const startKey = toLocalDayKey(windowStart);
       const endKey = toLocalDayKey(windowEnd);
-      if (loadedRange && loadedRange.start <= startKey && loadedRange.end >= endKey) return;
+      if (!forceRefetch && loadedRange && loadedRange.start <= startKey && loadedRange.end >= endKey) return;
       getCalendarEventsRaw(token, windowStart, windowEnd)
         .then((events) => {
           const counts: Record<string, number> = {};

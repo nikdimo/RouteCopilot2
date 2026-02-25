@@ -12,7 +12,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import type { RenderItemParams } from 'react-native-draggable-flatlist';
-import { GripVertical, ChevronUp, ChevronDown } from 'lucide-react-native';
+import { GripVertical, ChevronUp, ChevronDown, RefreshCw } from 'lucide-react-native';
 
 let cachedDraggableFlatList: React.ComponentType<any> | null | undefined = undefined;
 function getDraggableFlatList(): React.ComponentType<any> | null {
@@ -175,6 +175,24 @@ function buildScheduleListItems(
 
 const TODAY_FOR_EMPTY = startOfDay(new Date());
 
+const SKELETON_CARD_COUNT = 4;
+
+function ScheduleSkeletonCards() {
+  return (
+    <View style={styles.skeletonList}>
+      {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+        <View key={i} style={styles.skeletonCard}>
+          <View style={styles.skeletonTime} />
+          <View style={styles.skeletonContent}>
+            <View style={[styles.skeletonLine, styles.skeletonTitle]} />
+            <View style={[styles.skeletonLine, styles.skeletonAddress]} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function EmptySchedule() {
   const { selectedDate } = useRoute();
   const label = isSameDay(selectedDate, TODAY_FOR_EMPTY)
@@ -290,7 +308,7 @@ export default function ScheduleScreen() {
     setRefreshing(true);
     setLoadedRange(null);
     triggerRefresh();
-    ensureMeetingCountsForDate(selectedDate);
+    ensureMeetingCountsForDate(selectedDate, true);
     refreshTimeoutRef.current = setTimeout(() => setRefreshing(false), 12000);
   }, [triggerRefresh, ensureMeetingCountsForDate, selectedDate, setLoadedRange]);
 
@@ -526,11 +544,28 @@ export default function ScheduleScreen() {
 
   const listHeader = (
     <>
-      <DaySlider
-        selectedDate={selectedDate}
-        onSelectDate={onSelectDate}
-        meetingCountByDay={meetingCountByDay}
-      />
+      <View style={styles.daySliderRow}>
+        <View style={styles.daySliderWrap}>
+          <DaySlider
+            selectedDate={selectedDate}
+            onSelectDate={onSelectDate}
+            meetingCountByDay={meetingCountByDay}
+          />
+        </View>
+        {Platform.OS === 'web' && (
+          <TouchableOpacity
+            style={styles.refreshButton}
+            onPress={onRefresh}
+            disabled={refreshing}
+            activeOpacity={0.7}
+          >
+            <RefreshCw size={18} color={refreshing ? '#999' : '#0078D4'} />
+            <Text style={[styles.refreshButtonText, refreshing && styles.refreshButtonTextDisabled]}>
+              Refresh
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
       {daySummary ? (
         <DaySummaryBar
           totalDriveSec={daySummary.totalDriveSec}
@@ -602,7 +637,7 @@ export default function ScheduleScreen() {
     <>
       {appointmentsLoading && !refreshing && appointmentsList.length === 0 ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#0078D4" />
+          <ScheduleSkeletonCards />
         </View>
       ) : error ? (
         <View style={styles.emptyContainer}>
@@ -779,6 +814,33 @@ const styles = StyleSheet.create({
   moveButtonDisabled: {
     opacity: 0.5,
   },
+  daySliderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 4,
+  },
+  daySliderWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  refreshButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#E8E8E8',
+    borderRadius: 8,
+  },
+  refreshButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0078D4',
+  },
+  refreshButtonTextDisabled: {
+    color: '#999',
+  },
   listContent: {
     padding: 16,
     paddingBottom: 88,
@@ -789,8 +851,42 @@ const styles = StyleSheet.create({
   },
   loadingContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  skeletonList: {
+    gap: 12,
+  },
+  skeletonCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+  },
+  skeletonTime: {
+    width: 56,
+    height: 14,
+    backgroundColor: '#E1DFDD',
+    borderRadius: 4,
+    marginRight: 12,
+    marginTop: 2,
+  },
+  skeletonContent: {
+    flex: 1,
+    gap: 8,
+  },
+  skeletonLine: {
+    height: 12,
+    backgroundColor: '#E1DFDD',
+    borderRadius: 4,
+  },
+  skeletonTitle: {
+    width: '70%',
+  },
+  skeletonAddress: {
+    width: '90%',
   },
   emptyContainer: {
     flex: 1,

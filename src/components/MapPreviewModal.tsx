@@ -9,7 +9,7 @@ import {
   Dimensions,
   PanResponder,
 } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { X } from 'lucide-react-native';
 import type { CalendarEvent } from '../services/graph';
 import type { ScoredSlot } from '../utils/scheduler';
@@ -163,6 +163,8 @@ export default function MapPreviewModal({
             <MapView
               ref={mapRef}
               style={styles.map}
+              provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+              googleRenderer={Platform.OS === 'android' ? 'LEGACY' : undefined}
               initialRegion={{
                 latitude: (homeBase.lat + insertionCoord.lat) / 2,
                 longitude: (homeBase.lon + insertionCoord.lon) / 2,

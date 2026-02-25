@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
-import { startOfDay, endOfDay, addDays } from 'date-fns';
+import { startOfDay, endOfDay, addDays, subDays } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
 import { getCalendarEventsRaw, enrichCalendarEventsAll, GraphUnauthorizedError } from '../services/graph';
@@ -220,6 +220,8 @@ export default function SelectedDateSync() {
     if (!userToken && !getValidToken) return;
     let cancelled = false;
     const run = async () => {
+      // Preload yesterday for instant day switch when going back
+      preloadOneDay(subDays(selectedDate, 1));
       for (let i = 1; i <= PRELOAD_DAYS_AHEAD; i++) {
         if (cancelled) return;
         preloadOneDay(addDays(selectedDate, i));

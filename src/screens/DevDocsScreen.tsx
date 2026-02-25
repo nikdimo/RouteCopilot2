@@ -179,6 +179,66 @@ function RoadmapSection() {
         real driving times and distances. Replace heuristic ETA with live or
         cached route data when offline-capable.
       </Text>
+
+      <Text style={styles.h1}>Performance & UX Optimization Roadmap</Text>
+      <Text style={styles.body}>
+        Plan to improve perceived speed and performance: what to load first, what runs in background, and optional VPS-backed caches. Scope excludes Microsoft Graph calendar data on server (privacy/compliance); VPS only for geocode/OSRM cache and app state.
+      </Text>
+
+      <Text style={styles.h2}>Current Bottlenecks</Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>Duplicate today load — RootNavigator and SelectedDateSync both fetch today on startup (~50% redundant Graph calls)</Text>
+        <Text style={styles.stackItem}>Initial load — 1–3 s spinner until first meetings appear</Text>
+        <Text style={styles.stackItem}>Map first view — 600 ms–2 s until polylines (OSRM + map ready)</Text>
+        <Text style={styles.stackItem}>Enrichment — If sequential: geocode then contact lookup adds 1–5 s</Text>
+        <Text style={styles.stackItem}>Day switch — Re-fetch if not in dayCache; ±1 day can be prefetched</Text>
+        <Text style={styles.stackItem}>OSRM debounce — 350 ms + 500 ms–2 s per reorder</Text>
+      </View>
+
+      <Text style={styles.h2}>Phase 1: Quick Wins (No VPS) — ~1 day</Text>
+      <Text style={styles.body}>Priority order:</Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>1. Remove duplicate today load — Delete RootNavigator useLoadAppointmentsForDate(undefined); let SelectedDateSync be single source. Impact: ~50% fewer Graph calls on startup.</Text>
+        <Text style={styles.stackItem}>2. Parallelize enrichment — services/graph.ts: Promise.all([geocode, contacts]) if still sequential. Impact: 2–3 s → ~1 s enrichment.</Text>
+        <Text style={styles.stackItem}>3. Skeleton loaders — ScheduleScreen: 3–5 card skeletons while loading; MapScreen: home marker + loading overlay. Impact: Perceived load time cut in half.</Text>
+        <Text style={styles.stackItem}>4. Cache tuning — Meeting counts TTL 4 h → 8 h; OSRM debounce 350 ms → 250 ms; ensure ±1 day prefetch on idle. Impact: Day switching feels instant for adjacent days.</Text>
+      </View>
+      <Text style={styles.body}>Estimated effort: 4–6 h. Risk: very low (all client-side).</Text>
+
+      <Text style={styles.h2}>Phase 2: Progressive Map Loading — ~0.5 day</Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>Show home marker immediately (already done)</Text>
+        <Text style={styles.stackItem}>If previous session cached route in AsyncStorage → show faded polyline from last session</Text>
+        <Text style={styles.stackItem}>Calculate OSRM in background; replace with fresh route when resolved</Text>
+        <Text style={styles.stackItem}>Optional: haversine ETA estimates while OSRM loads</Text>
+      </View>
+      <Text style={styles.body}>Impact: Map interactive in ~100 ms vs 600–2000 ms. Effort: 2–3 h. Risk: low.</Text>
+
+      <Text style={styles.h2}>Phase 3: VPS Backend — Geocode + OSRM Cache — 2–3 days</Text>
+      <Text style={styles.body}>Scope (explicitly NOT including Graph data):</Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>Include: POST /api/geocode (address → coordinates cache), POST /api/route (waypoints → OSRM polyline cache), GET/POST /api/user/state (completed IDs, custom order)</Text>
+        <Text style={styles.stackItem}>Exclude: Microsoft Graph calendar caching; user PII/meeting content storage</Text>
+        <Text style={styles.stackItem}>DB: geocode_cache (shared), osrm_routes (shared), user_app_state (user_id, completed_ids, day_order). Auth: Microsoft OAuth token validation (no new login)</Text>
+      </View>
+      <Text style={styles.body}>Estimated effort: 2–3 days. Risk: medium (new infra, isolated from user data).</Text>
+
+      <Text style={styles.h2}>Phase 4: Multi-Device Sync (Optional) — 1–2 days</Text>
+      <Text style={styles.body}>
+        Once VPS exists: sync completed_ids and custom meeting order across devices; real-time via polling (e.g. 60 s) or WebSocket. Does NOT sync Graph data — app state only.
+      </Text>
+
+      <Text style={styles.h2}>Refinements & Boundaries</Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>VPS DB scope — Safe on VPS: geocode results, OSRM routes, user app state (completed IDs, order). Separate decision: caching Graph calendar data (PII/compliance).</Text>
+        <Text style={styles.stackItem}>Meeting counts — On web already sync from localStorage; on native AsyncStorage is async. Win: use cached counts as soon as they resolve + extend TTL to 8 h.</Text>
+        <Text style={styles.stackItem}>OSRM debounce — 250 ms recommended (not 200 ms) to avoid excess calls during rapid drag.</Text>
+      </View>
+
+      <Text style={styles.h2}>Recommended Order</Text>
+      <Text style={styles.body}>
+        Start with Phase 1 (quick wins): remove duplicate load, parallelize enrichment, skeleton loaders. Then choose: Phase 2 (progressive map), Phase 3 (VPS backend), or Phase 4 (sync) as needed.
+      </Text>
     </View>
   );
 }

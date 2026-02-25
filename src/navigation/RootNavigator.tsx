@@ -2,14 +2,12 @@ import React, { useEffect } from 'react';
 import { Platform, View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { useAuth } from '../context/AuthContext';
-import { useLoadAppointmentsForDate } from '../hooks/useLoadAppointmentsForDate';
 import LoginScreen from '../screens/LoginScreen';
 import AppNavigator from './AppNavigator';
 import SelectedDateSync from '../components/SelectedDateSync';
 
 export default function RootNavigator() {
   const { userToken, isRestoringSession } = useAuth();
-  const { load } = useLoadAppointmentsForDate(undefined);
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -17,12 +15,8 @@ export default function RootNavigator() {
     }
   }, []);
 
-  // Kick off today's appointments load as soon as we have a token — non-blocking.
+  // Today's appointments: SelectedDateSync is the single source (no duplicate load from here).
   // ScheduleScreen shows its own inline spinner via appointmentsLoading from RouteContext.
-  useEffect(() => {
-    if (!userToken) return;
-    load();
-  }, [userToken, load]);
 
   if (isRestoringSession) {
     return (

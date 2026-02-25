@@ -135,7 +135,7 @@ export function useRouteData(): UseRouteDataResult {
         .finally(() => {
           if (!cancelled) setRouteLoading(false);
         });
-    }, 350);
+    }, 250); // 250ms debounce (balance between snappiness and avoiding excess OSRM calls during reorder)
 
     return () => {
       cancelled = true;

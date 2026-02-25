@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import { View, Text, StyleSheet, Platform } from 'react-native';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import type { CalendarEvent } from '../services/graph';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { Coordinate } from '../utils/scheduler';
@@ -89,6 +89,8 @@ export default function PlanVisitMapPanel({
       <MapView
         ref={mapRef}
         style={styles.map}
+        provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+        googleRenderer={Platform.OS === 'android' ? 'LEGACY' : undefined}
         initialRegion={center}
         showsUserLocation
       >

@@ -3,6 +3,65 @@
 ## Latest Session Update (2026-02-25)
 - Android Studio APK build is now confirmed working end-to-end without recurring issues.
 - Current baseline is stable for local debug APK generation; continue regular project work from this state.
+- `Build_android.APK.nuclear.bat` refinements (evening):
+  - Args: first arg numeric → port; otherwise AVD. Second arg (if present) is port.
+  - PASS 1 pre-cleans locked build dirs: `android/app/build`, `android/build`, `node_modules\expo-constants|react-native-reanimated|react-native-svg\android\build`.
+  - Nuke helper now retries via PowerShell delete after `takeown/icacls`; fixes `: was unexpected at this time` lock errors.
+  - Label lookup robustness: build-env helper renamed to `BUILD_ENV_SETUP` and file re-saved as ASCII to avoid missing-label errors.
+  - Emulator detection avoids `findstr` pipe to prevent `'C:\Users\Nikola' is not recognized` noise.
+  - Requires elevated PowerShell; run from repo root: `.\Build_android.APK.nuclear.bat 8082` (or `"MyAVD" 8082`). UAC must be accepted for the run to proceed.
+
+## Current Session Follow-Up (2026-02-25, later)
+- Issue reported:
+  - `Build_android.APK.nuclear.bat` kept restarting/re-entering NUCLEAR flow repeatedly.
+- Work completed:
+  1. Hardened admin detection in `Build_android.APK.nuclear.bat` using a PowerShell Administrator check (`WindowsBuiltInRole::Administrator`) instead of token-group matching.
+  2. Added elevation sentinel argument `__ELEVATED__` to prevent recursive self-relaunch if elevation is not actually granted.
+  3. Added NUCLEAR-run guard file:
+     - `%TEMP%\RouteCopilot2.nuclear.inprogress.flag`
+     - Script now blocks immediate repeated NUCLEAR runs and exits with a clear error (`exit /b 90`) when a prior run marker is still active.
+  4. Added guaranteed cleanup of the NUCLEAR marker on all PASS 2 exits (success and failure paths).
+  5. Reduced aggressive process killing in PASS 2:
+     - Removed forced kills of `studio64.exe`, `studio.exe`, `code.exe`, `devenv.exe`.
+     - Kept emulator + Java/Gradle/Node/ADB cleanup.
+- Current status:
+  - Script logic is patched to prevent infinite restart loops.
+  - End-to-end behavior is now confirmed stable in your environment.
+  - BAT build flow issues from this thread are treated as completed.
+
+## Current Open Issue (2026-02-25, latest)
+- Platform/scope:
+  - Android emulator only (APK/dev client path).
+- What works:
+  - Route data loads correctly (appointments/waypoints/polyline/OSRM present in Route QC overlay).
+  - Map camera bounds/fit works (date change zooms to the correct region).
+  - Real Android device and web render route overlays correctly.
+- What fails (emulator only):
+  - Route polyline is not visible.
+  - Route markers/waypoints are not visible.
+  - Only base map tiles are visible.
+- Current conclusion:
+  - Data and fit logic are working; rendering of map overlays (Polyline/Marker layer) was failing specifically on Android emulator.
+  - A targeted fix has now been applied in code and is pending emulator verification.
+
+## Map Overlay Fix Applied (2026-02-25, latest)
+- Implemented changes:
+  1. `src/screens/MapScreen.tsx`
+     - Forced Android map to Google provider + legacy renderer:
+       - `provider={PROVIDER_GOOGLE}`
+       - `googleRenderer="LEGACY"`
+     - Added Android `mapReady` safety fallback timer (1600 ms) so overlays are not permanently blocked if native ready callbacks are flaky.
+     - Added `onMapLoaded={() => setMapReady(true)}` as an extra native-ready signal.
+     - Added `mapReady` to Route QC overlay for live debugging.
+  2. `src/components/PlanVisitMapPanel.tsx`
+     - Applied same Android provider + legacy renderer settings for consistency.
+  3. `src/components/MapPreviewModal.tsx`
+     - Applied same Android provider + legacy renderer settings for consistency.
+- Scope:
+  - Rendering-path fix only. No route data / OSRM / bounds calculation logic was changed.
+- Verification status:
+  - Pending full emulator retest on your machine.
+  - Local `tsc` run in this shell failed due runtime/tooling limits (Node OOM and TypeScript stack overflow), so static type-check completion is not yet available from this session.
 
 ## Pending Security Follow-Up (Google Maps Key)
 - Status:

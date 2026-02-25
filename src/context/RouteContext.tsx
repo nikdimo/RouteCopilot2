@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { startOfDay } from 'date-fns';
 import type { CalendarEvent } from '../services/graph';
 import { optimizeRoute } from '../utils/optimization';
+import { toLocalDayKey } from '../utils/dateUtils';
 
 export type UserLocation = { latitude: number; longitude: number };
 
@@ -14,7 +15,7 @@ const DAY_ORDER_PREFIX = 'routeCopilot_dayOrder_';
 // Persists meetingCountByDay so DaySlider dots appear instantly on every launch
 // instead of waiting for the ±30 day Graph API fetch to complete.
 const COUNTS_CACHE_KEY = 'routeCopilot_meetingCounts';
-const COUNTS_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const COUNTS_CACHE_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 type CountsCache = { counts: Record<string, number>; savedAt: number };
 
@@ -155,7 +156,18 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
       return next;
     });
     setAppointmentsState((prev) => prev.filter((ev) => ev.id !== eventId));
-  }, []);
+    // Update day-slider dot: deleted meeting was on selectedDate, so decrement that day's count
+    setMeetingCountByDay((prev) => {
+      const dayKey = toLocalDayKey(selectedDate);
+      const count = prev[dayKey] ?? 0;
+      const nextCount = Math.max(0, count - 1);
+      if (nextCount === 0) {
+        const { [dayKey]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [dayKey]: nextCount };
+    });
+  }, [selectedDate]);
 
   useEffect(() => {
     if (completedEventIds.length === 0) return;

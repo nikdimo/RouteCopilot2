@@ -15,7 +15,7 @@ import Svg, { Path } from 'react-native-svg';
 import { useFocusEffect, useRoute as useNavRoute, useNavigation } from '@react-navigation/native';
 import { Phone, Car } from 'lucide-react-native';
 import { openNativeDirections } from '../utils/maps';
-import MapView, { Marker, Polyline, Callout } from 'react-native-maps';
+import MapView, { Marker, Polyline, Callout, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useRoute } from '../context/RouteContext';
 import { useLoadAppointmentsForDate } from '../hooks/useLoadAppointmentsForDate';
 import { useRouteData } from '../hooks/useRouteData';
@@ -72,6 +72,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const mapRef = useRef<MapView>(null);
   const ignoreNextMapPressRef = useRef(false);
   const mapReadyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const androidMapReadyFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [region, setRegion] = useState(DEFAULT_REGION);
   /** On Android, Polylines/Markers often don't show if added before the native map is ready; gate overlays on this */
   const [mapReady, setMapReady] = useState(Platform.OS !== 'android');
@@ -171,8 +172,28 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
         clearTimeout(mapReadyTimeoutRef.current);
         mapReadyTimeoutRef.current = null;
       }
+      if (androidMapReadyFallbackRef.current) {
+        clearTimeout(androidMapReadyFallbackRef.current);
+        androidMapReadyFallbackRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (mapReady) return;
+    // Emulator safety-net: ensure overlays are not permanently blocked if native ready callbacks are flaky.
+    androidMapReadyFallbackRef.current = setTimeout(() => {
+      setMapReady(true);
+      androidMapReadyFallbackRef.current = null;
+    }, 1600);
+    return () => {
+      if (androidMapReadyFallbackRef.current) {
+        clearTimeout(androidMapReadyFallbackRef.current);
+        androidMapReadyFallbackRef.current = null;
+      }
+    };
+  }, [mapReady]);
 
   useLayoutEffect(() => {
     if (embeddedInSchedule) return;
@@ -337,7 +358,15 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           meetingCountByDay={meetingCountByDay}
         />
       )}
-      {showLoadingBar && <View style={styles.loadingBar} />}
+      {showLoadingBar && (
+        <>
+          <View style={styles.loadingBar} />
+          <View style={styles.routeLoadingOverlay}>
+            <ActivityIndicator size="small" color={MS_BLUE} />
+            <Text style={styles.routeLoadingText}>Calculating route…</Text>
+          </View>
+        </>
+      )}
       {showEmptyOverlay && (
         <View style={styles.emptyOverlay}>
           <Text style={styles.emptyOverlayText}>
@@ -362,11 +391,14 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           <Text style={styles.routeQcLine}>osrmRoute: {osrmRoute ? 'yes' : 'no'}</Text>
           <Text style={styles.routeQcLine}>routeCoords: {routeCoordinates.length}</Text>
           <Text style={styles.routeQcLine}>allCoordsForFit: {allCoordsForFit.length}</Text>
+          <Text style={styles.routeQcLine}>mapReady: {mapReady ? 'yes' : 'no'}</Text>
         </View>
       )}
       <MapView
         ref={mapRef}
         style={styles.map}
+        provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+        googleRenderer={Platform.OS === 'android' ? 'LEGACY' : undefined}
         initialRegion={DEFAULT_REGION}
         showsUserLocation
         mapType={Platform.OS === 'ios' ? 'mutedStandard' : 'standard'}
@@ -388,6 +420,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
               }
             : undefined
         }
+        onMapLoaded={() => setMapReady(true)}
         onRegionChangeComplete={setRegion}
         onPress={() => {
           if (ignoreNextMapPressRef.current) {
@@ -815,6 +848,30 @@ const styles = StyleSheet.create({
     backgroundColor: MS_BLUE,
     zIndex: 20,
     opacity: 0.9,
+  },
+  routeLoadingOverlay: {
+    position: 'absolute',
+    top: 8,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: 8,
+    zIndex: 19,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  routeLoadingText: {
+    fontSize: 14,
+    color: '#605E5C',
   },
   emptyOverlay: {
     position: 'absolute',

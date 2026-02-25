@@ -310,6 +310,7 @@ export async function getCalendarEventsRaw(
 /**
  * Enrich a batch of events: geocode addresses + fill contact addresses + fill contact info.
  * Run this after getCalendarEventsRaw to progressively improve displayed data.
+ * Geocoding runs first; contact-address and contact-info enrichment run in parallel.
  */
 export async function enrichCalendarEventsAll(
   token: string,
@@ -317,8 +318,22 @@ export async function enrichCalendarEventsAll(
 ): Promise<CalendarEvent[]> {
   const geocoded = await geocodeEventsAsync(events);
   try {
-    const withAddresses = await enrichCalendarEventsWithContactAddresses(token, geocoded);
-    return await enrichCalendarEventsWithContactInfo(token, withAddresses);
+    const [withAddresses, withInfo] = await Promise.all([
+      enrichCalendarEventsWithContactAddresses(token, geocoded),
+      enrichCalendarEventsWithContactInfo(token, geocoded),
+    ]);
+    // Merge: coordinates/location from contact-address lookup, phone/email from contact-info
+    return geocoded.map((ev) => {
+      const addrEv = withAddresses.find((e) => e.id === ev.id) ?? ev;
+      const infoEv = withInfo.find((e) => e.id === ev.id) ?? ev;
+      return {
+        ...ev,
+        ...(addrEv.coordinates && { coordinates: addrEv.coordinates }),
+        ...(addrEv.location && addrEv.location !== ev.location && { location: addrEv.location }),
+        ...(infoEv.phone && { phone: infoEv.phone }),
+        ...(infoEv.email && { email: infoEv.email }),
+      };
+    });
   } catch {
     return geocoded;
   }
