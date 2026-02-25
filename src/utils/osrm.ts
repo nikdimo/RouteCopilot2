@@ -203,7 +203,7 @@ export async function fetchRoute(
         [midLon, midLat] = coordsList[Math.min(midIdx, coordsList.length - 1)] ?? coordsList[0];
         labelPoint = { latitude: midLat, longitude: midLon };
       }
-      labelPositions.push(labelPoint);
+      labelPositions.push({ lat: labelPoint.latitude, lon: labelPoint.longitude });
 
       legs.push({
         distance: leg.distance ?? 0,

@@ -1,4 +1,4 @@
-{
+﻿{
   "expo": {
     "name": "WisePlan",
     "slug": "routecopilot2",
@@ -22,6 +22,11 @@
     },
     "android": {
       "package": "com.wiseplan.app",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBtZzYqQANPbwQBs0l_8lJn4DuQ-YnD-XI"
+        }
+      },
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"

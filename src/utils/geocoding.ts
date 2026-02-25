@@ -324,15 +324,14 @@ export async function getAddressSuggestionsGoogle(
     }
 
     const suggestions: AddressSuggestion[] = (data.suggestions ?? [])
-      .map((s) => {
+      .reduce<AddressSuggestion[]>((acc, s) => {
         const pred = s.placePrediction;
-        if (!pred?.placeId) return null;
-        return {
-          displayName: pred.text?.text ?? '',
-          placeId: pred.placeId,
-        };
-      })
-      .filter((s): s is AddressSuggestion => s !== null && !!s.displayName)
+        if (!pred?.placeId) return acc;
+        const displayName = pred.text?.text ?? '';
+        if (!displayName) return acc;
+        acc.push({ displayName, placeId: pred.placeId });
+        return acc;
+      }, [])
       .slice(0, 5);
 
     return { success: true, suggestions };

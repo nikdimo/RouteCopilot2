@@ -198,20 +198,23 @@ export function useRouteData(): UseRouteDataResult {
 
         let arrivalMs = departByMs + leg0DurMs;
         for (let i = 0; i < coords.length; i++) {
+          const currentCoord = coords[i]!;
           etas.push(arrivalMs);
-          const startMs = coords[i]!.startIso
-            ? new Date(coords[i]!.startIso).getTime()
-            : parseTimeToDayMs(coords[i]!.time, coords[i]!.startIso ?? coords[i]!.endIso ?? undefined);
+          const currentStartIso = currentCoord.startIso;
+          const startMs = currentStartIso
+            ? new Date(currentStartIso).getTime()
+            : parseTimeToDayMs(currentCoord.time, currentCoord.startIso ?? currentCoord.endIso ?? undefined);
           const waitMin = (startMs - arrivalMs) / (60 * 1000);
           waitTimeBeforeMeetingMin.push(waitMin);
           legStress.push(waitMin < 0 ? 'late' : waitMin < 5 ? 'tight' : 'ok');
-          meetingDurations.push(formatDurationMinutes(coords[i]!.startIso, coords[i]!.endIso));
+          meetingDurations.push(formatDurationMinutes(currentCoord.startIso, currentCoord.endIso));
           if (i < coords.length - 1 && osrmRoute.legs[i + 1]) {
-            const meetingEndMs = coords[i]!.endIso
-              ? new Date(coords[i]!.endIso).getTime()
+            const currentEndIso = currentCoord.endIso;
+            const meetingEndMs = currentEndIso
+              ? new Date(currentEndIso).getTime()
               : parseTimeToDayMs(
-                  coords[i]!.time,
-                  coords[i]!.startIso ?? coords[i]!.endIso ?? undefined,
+                  currentCoord.time,
+                  currentCoord.startIso ?? currentCoord.endIso ?? undefined,
                   true
                 );
             arrivalMs =
@@ -232,12 +235,14 @@ export function useRouteData(): UseRouteDataResult {
         departByMs = firstStartMs - preBuffer * 60 * 1000 - travelToFirstMs;
         returnByMs = lastEndMs + postBuffer * 60 * 1000 + travelFromLastMs;
         for (let i = 0; i < coords.length; i++) {
-          meetingDurations.push(formatDurationMinutes(coords[i]!.startIso, coords[i]!.endIso));
+          const currentCoord = coords[i]!;
+          meetingDurations.push(formatDurationMinutes(currentCoord.startIso, currentCoord.endIso));
           if (i === 0) {
             etas.push(departByMs + travelToFirstMs);
-            const startMs = coords[i]!.startIso
-              ? new Date(coords[i]!.startIso).getTime()
-              : parseTimeToDayMs(coords[i]!.time, coords[i]!.startIso ?? coords[i]!.endIso ?? undefined);
+            const currentStartIso = currentCoord.startIso;
+            const startMs = currentStartIso
+              ? new Date(currentStartIso).getTime()
+              : parseTimeToDayMs(currentCoord.time, currentCoord.startIso ?? currentCoord.endIso ?? undefined);
             const waitMin0 = (startMs - (departByMs + travelToFirstMs)) / (60 * 1000);
             waitTimeBeforeMeetingMin.push(waitMin0);
             legStress.push(waitMin0 < 0 ? 'late' : waitMin0 < 5 ? 'tight' : 'ok');
@@ -247,14 +252,16 @@ export function useRouteData(): UseRouteDataResult {
               lon: coords[i - 1]!.coordinates.longitude,
             };
             const curr = {
-              lat: coords[i]!.coordinates.latitude,
-              lon: coords[i]!.coordinates.longitude,
+              lat: currentCoord.coordinates.latitude,
+              lon: currentCoord.coordinates.longitude,
             };
-            const prevEndMs = coords[i - 1]!.endIso
-              ? new Date(coords[i - 1]!.endIso).getTime()
+            const prevCoord = coords[i - 1]!;
+            const prevEndIso = prevCoord.endIso;
+            const prevEndMs = prevEndIso
+              ? new Date(prevEndIso).getTime()
               : parseTimeToDayMs(
-                  coords[i - 1]!.time,
-                  coords[i - 1]!.startIso ?? coords[i - 1]!.endIso ?? undefined,
+                  prevCoord.time,
+                  prevCoord.startIso ?? prevCoord.endIso ?? undefined,
                   true
                 );
             const departPrev = prevEndMs + postBuffer * 60 * 1000;
@@ -262,9 +269,10 @@ export function useRouteData(): UseRouteDataResult {
             const travelMs = travelMin * 60 * 1000;
             legStats.push({ durationSec: travelMin * 60, distanceM: 0 });
             etas.push(departPrev + travelMs);
-            const startMs = coords[i]!.startIso
-              ? new Date(coords[i]!.startIso).getTime()
-              : parseTimeToDayMs(coords[i]!.time, coords[i]!.startIso ?? coords[i]!.endIso ?? undefined);
+            const currentStartIso = currentCoord.startIso;
+            const startMs = currentStartIso
+              ? new Date(currentStartIso).getTime()
+              : parseTimeToDayMs(currentCoord.time, currentCoord.startIso ?? currentCoord.endIso ?? undefined);
             const waitMinI = (startMs - (departPrev + travelMs)) / (60 * 1000);
             waitTimeBeforeMeetingMin.push(waitMinI);
             legStress.push(waitMinI < 0 ? 'late' : waitMinI < 5 ? 'tight' : 'ok');

@@ -9,7 +9,7 @@ import {
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { BottomTabParamList } from '../navigation/AppNavigator';
 
-type Props = BottomTabScreenProps<BottomTabParamList, 'Today'>;
+type Props = BottomTabScreenProps<BottomTabParamList, 'Schedule'>;
 
 const MEETINGS = [
   {

@@ -25,7 +25,7 @@ import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsFo
 import { format, isSameDay, startOfDay } from 'date-fns';
 import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { formatDistance, offsetPolyline } from '../utils/routeBubbles';
-import { getMarkerPositions } from '../utils/mapClusters';
+import { getClusters, getMarkerPositions } from '../utils/mapClusters';
 import type { CoordAppointment } from '../hooks/useRouteData';
 
 /** Format meeting start–end for root marker (e.g. "9:00-10:00"). */
@@ -89,7 +89,8 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const insets = useSafeAreaInsets();
   const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay, highlightWaypointIndex, setHighlightWaypointIndex, triggerRefresh } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
-  const navParams = useNavRoute<MapScreenNavParams>().params;
+  const navRoute = useNavRoute();
+  const navParams = navRoute.params as MapScreenNavParams | undefined;
   const triggerLoadWhenEmpty = navParams?.triggerLoadWhenEmpty ?? false;
   const { load } = useLoadAppointmentsForDate(undefined);
 
@@ -254,6 +255,13 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   const showHomeBase = fullPolyline.length > 0;
   const coordList = useMemo(() => coords.map((a) => a.coordinates), [coords]);
+  const clusterMembersByKey = useMemo(() => {
+    const out = new Map<string, number[]>();
+    for (const cluster of getClusters(coordList)) {
+      if (cluster.indices.length > 1) out.set(cluster.coordKey, [...cluster.indices]);
+    }
+    return out;
+  }, [coordList]);
   const { width: screenWidth } = useWindowDimensions();
   const markerPositions = useMemo(
     () =>
@@ -269,6 +277,56 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const showLoadingBar = !embeddedInSchedule && routeLoading;
 
   const topInset = embeddedInSchedule ? 0 : insets.top;
+
+  const clearSelection = useCallback(() => {
+    setSelectedArrivalLegIndex(null);
+    setSelectedWaypointIndices(null);
+    setFocusedClusterKey(null);
+    setFocusedClusterCoord(null);
+  }, []);
+
+  const handleWaypointPress = useCallback(
+    (
+      index: number,
+      coordinate: { latitude: number; longitude: number },
+      clusterKey?: string,
+      isCluster?: boolean
+    ) => {
+      ignoreNextMapPressRef.current = true;
+      if (isCluster && clusterKey) {
+        const clusterIndices = clusterMembersByKey.get(clusterKey) ?? [index];
+        const alreadyFocused = focusedClusterKey === clusterKey;
+        setFocusedClusterKey(clusterKey);
+        setFocusedClusterCoord(coordinate);
+        setSelectedArrivalLegIndex(index);
+        if (alreadyFocused) {
+          setSelectedWaypointIndices([index]);
+        } else {
+          setSelectedWaypointIndices(clusterIndices);
+          try {
+            mapRef.current?.animateToRegion(
+              {
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+                latitudeDelta: FOCUSED_ZOOM_DELTA,
+                longitudeDelta: FOCUSED_ZOOM_DELTA,
+              },
+              260
+            );
+          } catch {
+            // ignore
+          }
+        }
+        return;
+      }
+      setFocusedClusterKey(null);
+      setFocusedClusterCoord(null);
+      setSelectedArrivalLegIndex(index);
+      setSelectedWaypointIndices([index]);
+      setHighlightWaypointIndex(index);
+    },
+    [clusterMembersByKey, focusedClusterKey, setHighlightWaypointIndex]
+  );
 
   return (
     <View style={[styles.container, topInset > 0 && { paddingTop: topInset }]}>
@@ -336,10 +394,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
             ignoreNextMapPressRef.current = false;
             return;
           }
-          setSelectedArrivalLegIndex(null);
-          setSelectedWaypointIndices(null);
-          setFocusedClusterKey(null);
-          setFocusedClusterCoord(null);
+          clearSelection();
         }}
       >
         {mapReady && (
@@ -515,7 +570,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
               />
             )
         )}
-        {markerPositions.map(({ index, coordinate, clusterKey, isCluster }) => {
+        {markerPositions.map(({ index, coordinate, realCoordinate, clusterKey, isCluster }) => {
           const appointment = coords[index];
           if (!appointment) return null;
           const anyCompleted = appointment.status === 'completed';
@@ -533,12 +588,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                 title={String(index + 1)}
                 description={appointment.title ?? appointment.location ?? ''}
                 onPress={() => {
-                  ignoreNextMapPressRef.current = true;
-                  setFocusedClusterKey(null);
-                  setFocusedClusterCoord(null);
-                  setSelectedArrivalLegIndex(index);
-                  setSelectedWaypointIndices([index]);
-                  setHighlightWaypointIndex(index);
+                  handleWaypointPress(index, realCoordinate ?? coordinate, clusterKey, isCluster);
                 }}
               />
             );
@@ -551,12 +601,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
               anchor={{ x: 0.5, y: 0.5 }}
               tracksViewChanges={waypointTracksView}
               onPress={() => {
-                ignoreNextMapPressRef.current = true;
-                setFocusedClusterKey(null);
-                setFocusedClusterCoord(null);
-                setSelectedArrivalLegIndex(index);
-                setSelectedWaypointIndices([index]);
-                setHighlightWaypointIndex(index);
+                handleWaypointPress(index, realCoordinate ?? coordinate, clusterKey, isCluster);
               }}
             >
               <View style={styles.markerWithEta}>
@@ -667,10 +712,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                       </View>
                       <TouchableOpacity
                         style={styles.calloutAction}
-                        onPress={() => {
-                          setSelectedArrivalLegIndex(null);
-                          setSelectedWaypointIndices(null);
-                        }}
+                        onPress={clearSelection}
                       >
                         <Text style={styles.calloutLink}>Close</Text>
                       </TouchableOpacity>
@@ -731,10 +773,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                 </ScrollView>
                 <TouchableOpacity
                   style={styles.calloutAction}
-                  onPress={() => {
-                    setSelectedArrivalLegIndex(null);
-                    setSelectedWaypointIndices(null);
-                  }}
+                  onPress={clearSelection}
                 >
                   <Text style={styles.calloutLink}>Close</Text>
                 </TouchableOpacity>

@@ -89,7 +89,7 @@ export default function LoginScreen() {
       scopes: [...MS_SCOPES],
       redirectUri,
     },
-    discovery ?? undefined
+    discovery ?? null
   );
 
   // Handle return from redirect flow (mobile web): we landed with ?code= and have verifier in sessionStorage

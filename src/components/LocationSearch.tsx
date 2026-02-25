@@ -64,6 +64,9 @@ export type LocationSearchProps = {
   onDebug?: (info: Record<string, unknown>) => void;
 };
 
+type ContactSearchResponse = Awaited<ReturnType<LocationSearchProps['searchContacts']>>;
+type GeocodeResponse = Awaited<ReturnType<LocationSearchProps['geocodeAddress']>>;
+
 export default function LocationSearch({
   token,
   searchContacts,
@@ -122,8 +125,14 @@ export default function LocationSearch({
     setGraphError(null);
     setAddressError(null);
 
+    const noTokenContactsResult: ContactSearchResponse = {
+      success: false,
+      contacts: [],
+      error: 'Not signed in',
+      needsConsent: false,
+    };
     const [contactsResult, addrResult] = await Promise.all([
-      t ? sc(t, trimmed) : Promise.resolve({ success: false, contacts: [], error: 'Not signed in' }),
+      t ? sc(t, trimmed) : Promise.resolve(noTokenContactsResult),
       gas(trimmed),
     ]);
 
@@ -193,7 +202,7 @@ export default function LocationSearch({
 
     try {
       const cached = geocodeCacheRef.current.get(contact.id);
-      let result: { success: boolean; lat?: number; lon?: number; fromCache?: boolean };
+      let result: GeocodeResponse;
       if (cached) {
         result = { success: true, lat: cached.lat, lon: cached.lon, fromCache: true };
       } else {

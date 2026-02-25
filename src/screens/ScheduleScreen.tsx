@@ -23,7 +23,7 @@ function getDraggableFlatList(): React.ComponentType<any> | null {
   } catch {
     cachedDraggableFlatList = null;
   }
-  return cachedDraggableFlatList;
+  return cachedDraggableFlatList ?? null;
 }
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';

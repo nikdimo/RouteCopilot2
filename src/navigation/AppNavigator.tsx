@@ -1,11 +1,13 @@
 import React, { Suspense } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import type { NavigatorScreenParams } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Calendar, Map, User, Code, Plus } from 'lucide-react-native';
 import Constants from 'expo-constants';
 import ScheduleStack from './ScheduleStack';
+import type { ScheduleStackParamList } from './ScheduleStack';
 import ProfileScreen from '../screens/ProfileScreen';
 import DevDocsScreen from '../screens/DevDocsScreen';
 
@@ -47,8 +49,8 @@ function MapExpoGoPlaceholder() {
 }
 
 export type BottomTabParamList = {
-  Schedule: undefined;
-  Map: undefined;
+  Schedule: NavigatorScreenParams<ScheduleStackParamList> | undefined;
+  Map: { triggerLoadWhenEmpty?: boolean } | undefined;
   Add: undefined;
   Profile: undefined;
   Dev: undefined;
@@ -76,7 +78,6 @@ export default function AppNavigator() {
   return (
     <Tab.Navigator
       initialRouteName="Schedule"
-      lazy={true}
       tabBar={(props) => <TabBarWithSafeArea {...props} />}
       screenOptions={{
         headerShown: false,
@@ -107,7 +108,7 @@ export default function AppNavigator() {
       <Tab.Screen
         name="Map"
         component={isExpoGo ? MapExpoGoPlaceholder : MapScreenWithSuspense}
-        initialParams={isExpoGo ? undefined : { triggerLoadWhenEmpty: true }}
+        initialParams={{ triggerLoadWhenEmpty: true }}
         options={{
           title: 'Map',
           tabBarIcon: ({ color, size }) => <Map color={color} size={size} />,

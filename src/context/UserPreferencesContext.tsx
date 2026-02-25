@@ -16,10 +16,9 @@ function mergeStoredIntoDefaults(parsed: Partial<UserPreferences> | null): UserP
       wd.every((x): x is boolean => typeof x === 'boolean')
         ? (wd as UserPreferences['workingDays'])
         : DEFAULT_WORKING_DAYS;
-    const { lunchWindow: _lunch, ...rest } = parsed;
     return {
       ...DEFAULT_USER_PREFERENCES,
-      ...rest,
+      ...parsed,
       workingHours: {
         ...DEFAULT_USER_PREFERENCES.workingHours,
         ...(parsed.workingHours && typeof parsed.workingHours === 'object'

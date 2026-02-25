@@ -6,7 +6,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useRoute } from '../context/RouteContext';
 import { useLoadAppointmentsForDate } from '../hooks/useLoadAppointmentsForDate';
 import { useRouteData } from '../hooks/useRouteData';
-import { getMarkerPositions } from '../utils/mapClusters';
+import { getClusters, getMarkerPositions } from '../utils/mapClusters';
 import { formatTime, formatDurationSeconds } from '../utils/dateUtils';
 import DaySlider from '../components/DaySlider';
 import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsForDate';
@@ -32,6 +32,15 @@ const DEFAULT_CENTER: [number, number] = [55.6761, 12.5683];
 const DEFAULT_ZOOM = 10;
 const MS_BLUE = '#0078D4';
 const HOME_GREEN = '#107C10';
+const bottomCardAnchorStyle: React.CSSProperties = {
+  display: 'block',
+  marginBottom: 8,
+  fontSize: 12,
+  fontWeight: 600,
+  color: MS_BLUE,
+  textAlign: 'center',
+  textDecoration: 'none',
+};
 
 function createNumberedIcon(num: number | string, color: string, etaLabel?: string, sizePx: number = 28) {
   const r = sizePx / 2;
@@ -214,7 +223,9 @@ function MapClickToClear({ onClear }: { onClear: () => void }) {
   const map = useMap();
   useEffect(() => {
     map.on('click', onClear);
-    return () => map.off('click', onClear);
+    return () => {
+      map.off('click', onClear);
+    };
   }, [map, onClear]);
   return null;
 }
@@ -434,6 +445,13 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     [allCoordsForFit]
   );
   const coordList = useMemo(() => coords.map((a) => a.coordinates), [coords]);
+  const clusterMembersByKey = useMemo(() => {
+    const out = new Map<string, number[]>();
+    for (const cluster of getClusters(coordList)) {
+      if (cluster.indices.length > 1) out.set(cluster.coordKey, [...cluster.indices]);
+    }
+    return out;
+  }, [coordList]);
   const fullPolylineLatLon = useMemo(
     (): [number, number][] =>
       fullPolyline.map((c) => [c.latitude, c.longitude]),
@@ -587,7 +605,20 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
             etas={etas}
             legStress={legStress}
             focusedClusterKey={focusedClusterKey}
-            onSelect={(index, _clusterInfo) => {
+            onSelect={(index, clusterInfo) => {
+              if (clusterInfo?.isCluster) {
+                const clusterIndices = clusterMembersByKey.get(clusterInfo.clusterKey) ?? [index];
+                const alreadyFocused = focusedClusterKey === clusterInfo.clusterKey;
+                setFocusedClusterKey(clusterInfo.clusterKey);
+                setFocusedClusterCoord(clusterInfo.coordinate);
+                setSelectedArrivalLegIndex(index);
+                if (alreadyFocused) {
+                  setSelectedWaypointIndices([index]);
+                } else {
+                  setSelectedWaypointIndices(clusterIndices);
+                }
+                return;
+              }
               setFocusedClusterKey(null);
               setFocusedClusterCoord(null);
               setSelectedArrivalLegIndex(index);
@@ -707,7 +738,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                     {appt.phone ? (
                       <a
                         href={`tel:${appt.phone}`}
-                        style={styles.bottomCardButtonLink}
+                        style={bottomCardAnchorStyle}
                       >
                         Call
                       </a>
@@ -753,7 +784,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                           <Text style={styles.bottomCardButtonText}>Open in Google Maps</Text>
                         </TouchableOpacity>
                         {appt.phone ? (
-                          <a href={`tel:${appt.phone}`} style={styles.bottomCardButtonLink}>
+                          <a href={`tel:${appt.phone}`} style={bottomCardAnchorStyle}>
                             Call
                           </a>
                         ) : null}
@@ -949,15 +980,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#fff',
-  },
-  bottomCardButtonLink: {
-    display: 'block',
-    marginBottom: 8,
-    fontSize: 12,
-    fontWeight: '600',
-    color: MS_BLUE,
-    textAlign: 'center',
-    textDecorationLine: 'none',
   },
   bottomCardClose: {
     paddingVertical: 8,
