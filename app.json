@@ -24,7 +24,7 @@
       "package": "com.wiseplan.app",
       "config": {
         "googleMaps": {
-          "apiKey": "AIzaSyBtZzYqQANPbwQBs0l_8lJn4DuQ-YnD-XI"
+          "apiKey": ""
         }
       },
       "adaptiveIcon": {
