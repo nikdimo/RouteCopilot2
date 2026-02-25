@@ -68,3 +68,11 @@ nul
 con
 prn
 aux
+
+# Local build/cache artifacts (machine-specific)
+.android-user-home/
+.gradle/
+.tmp-debug/
+app.json.bak
+app.json.bak2
+.idea/caches/

@@ -43,6 +43,7 @@ export default function SelectedDateSync() {
     refreshTrigger,
     setAppointments,
     setAppointmentsLoading,
+    setAppointmentsEnriching,
     getDayOrder,
     pendingLocalEvent,
     setPendingLocalEvent,
@@ -70,6 +71,7 @@ export default function SelectedDateSync() {
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
       if (!token) {
         setAppointments([]);
+        setAppointmentsEnriching(false);
         return;
       }
       const dayKey = toLocalDayKey(date);
@@ -89,10 +91,12 @@ export default function SelectedDateSync() {
         }
         setAppointments(merged);
         setAppointmentsLoading(false);
+        setAppointmentsEnriching(false);
         return;
       }
 
       setAppointmentsLoading(true);
+      setAppointmentsEnriching(false);
       const start = startOfDay(date);
       const end = endOfDay(date);
 
@@ -117,6 +121,10 @@ export default function SelectedDateSync() {
           }
           setAppointments(rawMerged);
           setAppointmentsLoading(false);
+          const hasUnresolvedAddresses = rawMerged.some(
+            (e) => !e.coordinates && (e.location?.trim() ?? '') !== ''
+          );
+          setAppointmentsEnriching(hasUnresolvedAddresses);
         }
 
         // ── Phase 2: Enrich in background (geocoding + contacts) ──
@@ -136,20 +144,25 @@ export default function SelectedDateSync() {
               });
             }
             setAppointments(enrichedMerged);
+            setAppointmentsEnriching(false);
           })
           .catch(() => {
             // enrichment failed — raw events already displayed, cache raw as fallback
             dayCache.current.set(dayKey, rawMerged);
+            if (activeDayKey.current === dayKey) {
+              setAppointmentsEnriching(false);
+            }
           });
       } catch (e) {
         if (activeDayKey.current === dayKey) {
           setAppointments([]);
           setAppointmentsLoading(false);
+          setAppointmentsEnriching(false);
         }
         if (e instanceof GraphUnauthorizedError) signOut();
       }
     },
-    [userToken, getValidToken, setAppointments, setAppointmentsLoading, getDayOrder, signOut, mergePendingIfSameDay]
+    [userToken, getValidToken, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, getDayOrder, signOut, mergePendingIfSameDay]
   );
 
   /** Preload a future day fully (raw + enrich) and store in cache. Does not update context. */
@@ -194,12 +207,14 @@ export default function SelectedDateSync() {
       if (merged !== cached) dayCache.current.set(dayKey, merged);
       setAppointments(merged);
       setAppointmentsLoading(false);
+      setAppointmentsEnriching(false);
       return;
     }
     setAppointments([]);
     setAppointmentsLoading(true);
+    setAppointmentsEnriching(false);
     fetchForDate(selectedDate);
-  }, [selectedDate, fetchForDate, setAppointments, setAppointmentsLoading, mergePendingIfSameDay]);
+  }, [selectedDate, fetchForDate, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, mergePendingIfSameDay]);
 
   useEffect(() => {
     if (!userToken && !getValidToken) return;

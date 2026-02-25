@@ -4,6 +4,25 @@
 - Android Studio APK build is now confirmed working end-to-end without recurring issues.
 - Current baseline is stable for local debug APK generation; continue regular project work from this state.
 
+## Pending Security Follow-Up (Google Maps Key)
+- Status:
+  - Old hardcoded key was removed from tracked config.
+  - EAS secret `ANDROID_GOOGLE_MAPS_API_KEY` is configured with a new key.
+- Do later (required for secure production use):
+  1. In Google Cloud Console, use key restriction type `Android apps` (not `Websites`).
+  2. Add package name: `com.wiseplan.app`.
+  3. Add SHA-1 fingerprints:
+     - Debug SHA-1 (local/dev):
+       - `keytool -list -v -keystore "%USERPROFILE%\.android\debug.keystore" -alias androiddebugkey -storepass android -keypass android`
+     - Release SHA-1 (EAS/Play): from Play Console > App Integrity (App signing certificate).
+  4. Keep API restrictions minimal:
+     - Map render key: `Maps SDK for Android` only.
+     - If Google address search is used, prefer a separate key for `Places API (New)` + `Geocoding API`.
+- Notes:
+  - Do not store Google Maps key in `telegram-bot/.env`.
+  - Local shell for Android builds can set:
+    - `$env:ANDROID_GOOGLE_MAPS_API_KEY="<YOUR_KEY>"`
+
 ## Goal
 - Get local Android dev build running reliably on emulator (Expo dev client).
 - Persist native CMake fixes through `npm install`.

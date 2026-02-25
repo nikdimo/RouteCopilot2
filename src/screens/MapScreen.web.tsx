@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -356,7 +356,15 @@ type MapScreenProps = { embeddedInSchedule?: boolean };
 
 export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
   const navigation = useNavigation();
-  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay, highlightWaypointIndex, setHighlightWaypointIndex } = useRoute();
+  const {
+    selectedDate: ctxSelectedDate,
+    setSelectedDate,
+    meetingCountByDay,
+    highlightWaypointIndex,
+    setHighlightWaypointIndex,
+    appointmentsLoading,
+    appointmentsEnriching,
+  } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const [showDetails, setShowDetails] = useState(false);
   const [selectedArrivalLegIndex, setSelectedArrivalLegIndex] = useState<number | null>(null);
@@ -458,6 +466,16 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     [fullPolyline]
   );
   const showHomeBase = fullPolyline.length > 0;
+  const unresolvedAddressCount = useMemo(
+    () =>
+      appointments.filter((a) => !a.coordinates && (a.location?.trim() ?? '') !== '').length,
+    [appointments]
+  );
+  const waitingForAddressResolution =
+    coords.length === 0 &&
+    unresolvedAddressCount > 0 &&
+    (appointmentsLoading || appointmentsEnriching);
+  const showCompactLoader = waitingForAddressResolution || (embeddedInSchedule && routeLoading);
 
   if (appointments.length === 0) {
     return (
@@ -478,7 +496,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     );
   }
 
-  if (coords.length === 0) {
+  if (coords.length === 0 && !waitingForAddressResolution) {
     return (
       <View style={styles.container}>
         {!embeddedInSchedule && (
@@ -528,14 +546,24 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           <Text style={styles.loadingBarText}>Loading route…</Text>
         </View>
       )}
-      <TouchableOpacity
-        style={styles.detailsButton}
-        onPress={() => setShowDetails((s) => !s)}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.detailsButtonText}>{showDetails ? 'Hide details' : 'Show details'}</Text>
-      </TouchableOpacity>
-      {showDetails && (
+      {showCompactLoader && (
+        <View style={[styles.compactLoader, embeddedInSchedule && styles.compactLoaderEmbedded]}>
+          <ActivityIndicator size="small" color={MS_BLUE} />
+          <Text style={styles.compactLoaderText}>
+            {waitingForAddressResolution ? 'Loading addresses...' : 'Calculating route...'}
+          </Text>
+        </View>
+      )}
+      {coords.length > 0 && (
+        <TouchableOpacity
+          style={styles.detailsButton}
+          onPress={() => setShowDetails((s) => !s)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.detailsButtonText}>{showDetails ? 'Hide details' : 'Show details'}</Text>
+        </TouchableOpacity>
+      )}
+      {coords.length > 0 && showDetails && (
         <ScrollView style={styles.detailsOverlay} contentContainerStyle={styles.detailsOverlayContent}>
           {showHomeBase && (
             <View style={[styles.detailsCard, styles.detailsCardHome]}>
@@ -836,6 +864,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#fff',
+  },
+  compactLoader: {
+    position: 'absolute',
+    top: 12,
+    alignSelf: 'center',
+    zIndex: 1001,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    elevation: 4,
+    boxShadow: '0px 2px 6px rgba(0,0,0,0.2)',
+  },
+  compactLoaderEmbedded: {
+    top: 10,
+  },
+  compactLoaderText: {
+    marginLeft: 8,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1f2937',
   },
   detailsButton: {
     position: 'absolute',

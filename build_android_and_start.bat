@@ -1,6 +1,14 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
+:: If not running as Administrator, relaunch in elevated PowerShell
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+  echo Requesting Administrator elevation in PowerShell...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-Command','& \"%~f0\" %*'"
+  exit /b 0
+)
+
 if /I "%~1"=="/?" goto :usage
 if /I "%~1"=="-h" goto :usage
 if /I "%~1"=="--help" goto :usage

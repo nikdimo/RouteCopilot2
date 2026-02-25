@@ -45,6 +45,9 @@ type RouteContextValue = {
   appointments: CalendarEvent[];
   appointmentsLoading: boolean;
   setAppointmentsLoading: (loading: boolean) => void;
+  /** True while background enrichment (geocoding/contact hydration) is running for selected day. */
+  appointmentsEnriching: boolean;
+  setAppointmentsEnriching: (enriching: boolean) => void;
   setAppointments: (events: CalendarEvent[]) => void;
   addAppointment: (event: CalendarEvent) => void;
   updateAppointment: (eventId: string, patch: Partial<CalendarEvent>) => void;
@@ -78,6 +81,7 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
   const triggerRefresh = useCallback(() => setRefreshTrigger((n) => n + 1), []);
   const [appointments, setAppointmentsState] = useState<CalendarEvent[]>([]);
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsEnriching, setAppointmentsEnriching] = useState(false);
   const [pendingLocalEvent, setPendingLocalEvent] = useState<{ dayKey: string; event: CalendarEvent } | null>(null);
   const [highlightWaypointIndex, setHighlightWaypointIndex] = useState<number | null>(null);
   const [completedEventIds, setCompletedEventIds] = useState<string[]>([]);
@@ -252,6 +256,8 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     appointments,
     appointmentsLoading,
     setAppointmentsLoading,
+    appointmentsEnriching,
+    setAppointmentsEnriching,
     setAppointments,
     addAppointment,
     updateAppointment,
