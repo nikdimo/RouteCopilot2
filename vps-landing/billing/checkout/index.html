@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WisePlan Checkout</title>
+    <link rel="icon" href="/app/favicon.ico" />
+    <link rel="stylesheet" href="/billing/styles.css" />
+  </head>
+  <body data-page="checkout">
+    <main class="page">
+      <header class="header">
+        <div class="brand">WisePlan Billing</div>
+        <nav class="nav">
+          <a href="/billing/">Billing</a>
+          <a href="/account/billing/">Account Billing</a>
+        </nav>
+      </header>
+
+      <section class="card">
+        <h1 style="margin-top: 0">Checkout Processing</h1>
+        <p class="muted">
+          This page is used for mock/local checkout completion. Stripe-hosted checkout redirects
+          directly to success/cancel endpoints.
+        </p>
+        <div id="checkoutStatus" class="banner">Preparing checkout...</div>
+        <div class="row">
+          <a class="btn" href="/billing/">Back to Billing</a>
+          <a class="btn" href="/account/billing/">Go to Account Billing</a>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/billing/app.js"></script>
+  </body>
+</html>

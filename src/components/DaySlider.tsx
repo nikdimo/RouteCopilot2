@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useLayoutEffect, useState } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import {
   View,
   ScrollView,
@@ -37,21 +37,28 @@ type DaySliderProps = {
   onSelectDate: (date: Date) => void;
   /** Meeting count per day key (YYYY-MM-DD) for dot indicators */
   meetingCountByDay?: Record<string, number>;
+  /** Callback fired when the user scrolls the view, changing the visible month on the left edge */
+  onVisibleMonthChange?: (date: Date) => void;
 };
 
 type ScrollViewRef = React.ElementRef<typeof ScrollView> & { getScrollableNode?: () => HTMLElement | null };
 
-export default function DaySlider({
+export type DaySliderRef = {
+  scrollByDays: (offset: number) => void;
+};
+
+const DaySlider = forwardRef<DaySliderRef, DaySliderProps>(({
   selectedDate,
   onSelectDate,
   meetingCountByDay,
-}: DaySliderProps) {
+  onVisibleMonthChange,
+}, ref) => {
   const scrollRef = useRef<ScrollViewRef>(null);
   const wrapperRef = useRef<View>(null);
   const today = startOfDay(new Date());
   const isWeb = Platform.OS === 'web';
-  const startDate = isWeb ? addDays(today, -DAYS_BACK_WEB) : today;
-  const totalDays = isWeb ? DAYS_BACK_WEB + DAYS_AHEAD_WEB : DAYS_TO_SHOW;
+  const startDate = today;
+  const totalDays = isWeb ? DAYS_AHEAD_WEB : DAYS_TO_SHOW;
   const days = Array.from({ length: totalDays }, (_, i) =>
     addDays(startDate, i)
   );
@@ -63,9 +70,33 @@ export default function DaySlider({
   const [scrollMonthDate, setScrollMonthDate] = useState<Date>(selectedDate);
   const pillStep = PILL_WIDTH + PILL_GAP;
   const initialScrollDoneRef = useRef(false);
+
+  useImperativeHandle(ref, () => ({
+    scrollByDays: (offset: number) => {
+      if (!scrollRef.current) return;
+      if (isWeb) {
+        const node = scrollRef.current.getScrollableNode?.();
+        if (node) {
+          node.scrollBy({ left: offset * pillStep, behavior: 'smooth' });
+        }
+      } else {
+        // approximate generic scroll logic for native if needed
+        // but typically the buttons are only on the web desktop layout anyway
+      }
+    }
+  }));
   useEffect(() => {
     setScrollMonthDate(selectedDate);
-  }, [selectedDate]);
+    onVisibleMonthChange?.(selectedDate);
+  }, [selectedDate, onVisibleMonthChange]);
+
+  // Also push the new month to the parent when dragging/scrolling manually
+  useEffect(() => {
+    if (initialScrollDoneRef.current) {
+      onVisibleMonthChange?.(scrollMonthDate);
+    }
+  }, [scrollMonthDate, onVisibleMonthChange]);
+
   const containerPadding = 16;
 
   // Keep strip on selected day: set position immediately on first run (no animation),
@@ -124,49 +155,58 @@ export default function DaySlider({
       scrollEventThrottle={32}
       onMomentumScrollEnd={handleScroll}
     >
-      {days.map((date) => {
+      {days.map((date, i) => {
         const active = isSameDay(date, selectedDate);
         const dayKey = toLocalDayKey(date);
         const count = meetingCountByDay?.[dayKey] ?? 0;
         const dotColor = getDotColor(count);
+        const isFirstOfMonth = i > 0 && date.getDate() === 1;
 
         return (
-          <TouchableOpacity
-            key={date.getTime()}
-            style={[styles.pill, active && styles.pillActive]}
-            onPress={() => onSelectDate(date)}
-            activeOpacity={0.8}
-          >
-            {dotColor !== 'none' && (
-              <View
-                style={[
-                  styles.dot,
-                  { backgroundColor: DOT_COLOR[dotColor] },
-                  active && styles.dotOnActive,
-                ]}
-              />
+          <React.Fragment key={date.getTime()}>
+            {isFirstOfMonth && (
+              <View style={styles.monthDividerPill}>
+                <Text style={styles.monthDividerText}>{format(date, 'MMM')}</Text>
+                <View style={styles.monthDividerLine} />
+              </View>
             )}
-            <Text
-              style={[
-                styles.dayName,
-                active && styles.dayNameActive,
-                isWeb && styles.dayNameWeb,
-              ]}
-              numberOfLines={1}
+            <TouchableOpacity
+              key={date.getTime()}
+              style={[styles.pill, active && styles.pillActive]}
+              onPress={() => onSelectDate(date)}
+              activeOpacity={0.8}
             >
-              {format(date, 'EEE')}
-            </Text>
-            <Text
-              style={[
-                styles.dateNum,
-                active && styles.dateNumActive,
-                isWeb && styles.dateNumWeb,
-              ]}
-              numberOfLines={1}
-            >
-              {format(date, 'd')}
-            </Text>
-          </TouchableOpacity>
+              {dotColor !== 'none' && (
+                <View
+                  style={[
+                    styles.dot,
+                    { backgroundColor: DOT_COLOR[dotColor] },
+                    active && styles.dotOnActive,
+                  ]}
+                />
+              )}
+              <Text
+                style={[
+                  styles.dayName,
+                  active && styles.dayNameActive,
+                  isWeb && styles.dayNameWeb,
+                ]}
+                numberOfLines={1}
+              >
+                {format(date, 'EEE')}
+              </Text>
+              <Text
+                style={[
+                  styles.dateNum,
+                  active && styles.dateNumActive,
+                  isWeb && styles.dateNumWeb,
+                ]}
+                numberOfLines={1}
+              >
+                {format(date, 'd')}
+              </Text>
+            </TouchableOpacity>
+          </React.Fragment>
         );
       })}
     </ScrollView>
@@ -175,27 +215,18 @@ export default function DaySlider({
   if (isWeb) {
     return (
       <View ref={wrapperRef} style={styles.wrapper} collapsable={false}>
-        <Text style={styles.monthLabel}>{monthLabel}</Text>
         {scrollContent}
       </View>
     );
   }
   return scrollContent;
-}
+});
+
+export default DaySlider;
 
 const styles = StyleSheet.create({
   wrapper: {
-    backgroundColor: '#F3F2F1',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E1DFDD',
-  },
-  monthLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#323130',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
+    backgroundColor: 'transparent',
   },
   scroll: {
     maxHeight: 76,
@@ -207,16 +238,46 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
   },
   pill: {
-    width: PILL_WIDTH,
-    marginRight: PILL_GAP,
-    borderRadius: 9999,
-    backgroundColor: '#E1DFDD',
+    width: 48,
+    marginRight: 0,
+    borderRadius: 8,
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
+    paddingVertical: 8,
+    marginHorizontal: 2,
+    height: 54, // Consistent height
   },
   pillActive: {
-    backgroundColor: MS_BLUE,
+    backgroundColor: '#3B82F6', // Brighter mockup blue
+    height: 64, // stretches taller
+    marginTop: -5, // pop out effect
+    borderRadius: 12,
+    shadowColor: '#3B82F6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+  },
+  monthDividerPill: {
+    height: 54, // Matches the inactive pill height
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    marginHorizontal: 4,
+  },
+  monthDividerText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  monthDividerLine: {
+    width: 20,
+    height: 2,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 1,
   },
   dot: {
     position: 'absolute',
@@ -230,26 +291,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   dayName: {
-    fontSize: 12,
-    color: '#1a1a1a',
-    fontWeight: '500',
-    marginBottom: 4,
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '600',
+    marginBottom: 2,
+    textTransform: 'uppercase',
   },
   dayNameActive: {
-    color: '#fff',
+    color: '#E0E7FF',
   },
   dayNameWeb: {
-    fontSize: 11,
+    fontSize: 10,
   },
   dateNum: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: '#0F172A',
   },
   dateNumActive: {
-    color: '#fff',
+    color: '#FFFFFF',
+    fontSize: 18,
   },
   dateNumWeb: {
-    fontSize: 14,
+    fontSize: 15,
   },
 });

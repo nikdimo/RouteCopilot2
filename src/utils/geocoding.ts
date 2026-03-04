@@ -1,14 +1,24 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEFAULT_HOME_BASE } from '../types';
+import { backendGeocode } from '../services/backendApi';
 
-const CACHE_KEY_PREFIX = 'routecopilot_geocode_';
+const CACHE_KEY_PREFIX = 'wiseplan_geocode_';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
-const USER_AGENT = 'RouteCopilot/1.0 (field logistics MVP)';
+const USER_AGENT = 'WisePlan/1.0 (field logistics MVP)';
 
 export type GeocodeResult =
   | { success: true; lat: number; lon: number; displayName?: string; fromCache: boolean; usedFallback?: boolean }
   | { success: false; error: string };
+
+type GeocodeOptions = {
+  authToken?: string | null;
+};
+
+type AddressSuggestOptions = {
+  authToken?: string | null;
+  countryCode?: string;
+};
 
 export type AddressSuggestion = {
   displayName: string;
@@ -125,7 +135,10 @@ async function tryGeocode(q: string): Promise<GeocodeResult> {
  * Results are cached in AsyncStorage by normalized address.
  * Tries the address as-is, then with ", Denmark" if no result (for Nordic addresses).
  */
-export async function geocodeAddress(address: string): Promise<GeocodeResult> {
+export async function geocodeAddress(
+  address: string,
+  options?: GeocodeOptions
+): Promise<GeocodeResult> {
   const trimmed = normalizeForGeocode(address);
   if (!trimmed) {
     return { success: false, error: 'Address is empty' };
@@ -137,6 +150,19 @@ export async function geocodeAddress(address: string): Promise<GeocodeResult> {
   }
 
   try {
+    if (options?.authToken) {
+      const remote = await backendGeocode({ address: trimmed }, options.authToken);
+      if (remote) {
+        await setCached(trimmed, remote.lat, remote.lon);
+        return {
+          success: true,
+          lat: remote.lat,
+          lon: remote.lon,
+          fromCache: remote.source === 'cache',
+        };
+      }
+    }
+
     let result = await tryGeocode(trimmed);
     if (result.success) {
       await setCached(trimmed, result.lat, result.lon);
@@ -169,7 +195,8 @@ export async function geocodeAddress(address: string): Promise<GeocodeResult> {
  */
 export async function geocodeContactAddress(
   formattedAddress: string,
-  parts: PhysicalAddressParts | null
+  parts: PhysicalAddressParts | null,
+  options?: GeocodeOptions
 ): Promise<GeocodeResult> {
   const variations: string[] = [formattedAddress];
   if (parts) {
@@ -190,7 +217,7 @@ export async function geocodeContactAddress(
   for (const addr of variations) {
     const trimmed = normalizeForGeocode(addr);
     if (!trimmed) continue;
-    const result = await geocodeAddress(trimmed);
+    const result = await geocodeAddress(trimmed, options);
     if (result.success) return result;
   }
 
@@ -211,18 +238,62 @@ export type AddressSuggestResult =
  * Get address suggestions from Nominatim (for autocomplete).
  * Not cached per-suggestion; selection will trigger geocode (which is cached).
  */
-export async function getAddressSuggestions(query: string): Promise<AddressSuggestResult> {
+export async function getAddressSuggestions(
+  query: string,
+  options?: AddressSuggestOptions
+): Promise<AddressSuggestResult> {
   const trimmed = query.trim();
   if (trimmed.length < 3) {
     return { success: true, suggestions: [] };
   }
+  const normalizedCountryCode = options?.countryCode?.trim().toLowerCase();
+  const countryCode =
+    normalizedCountryCode && /^[a-z]{2}$/.test(normalizedCountryCode)
+      ? normalizedCountryCode
+      : undefined;
 
   const params = new URLSearchParams({
     q: trimmed,
     format: 'json',
-    limit: '5',
+    limit: '8',
     addressdetails: '1',
   });
+  if (countryCode) {
+    params.set('countrycodes', countryCode);
+  }
+
+  const fallbackFromBackend = async (): Promise<AddressSuggestion[] | null> => {
+    const authToken = options?.authToken?.trim();
+    if (!authToken) return null;
+    const candidates = [trimmed];
+    if (trimmed.length >= 5 && !/[,\d]/.test(trimmed)) {
+      candidates.push(`${trimmed}, Copenhagen`);
+      candidates.push(`${trimmed}, København`);
+      candidates.push(`${trimmed}, Denmark`);
+    }
+    const seen = new Set<string>();
+    const suggestions: AddressSuggestion[] = [];
+    for (const candidate of candidates) {
+      const remote = await backendGeocode(
+        {
+          address: candidate,
+          ...(countryCode ? { countryCode } : {}),
+        },
+        authToken
+      );
+      if (!remote) continue;
+      const key = `${remote.lat.toFixed(6)}:${remote.lon.toFixed(6)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      suggestions.push({
+        displayName: candidate,
+        lat: remote.lat,
+        lon: remote.lon,
+      });
+      if (suggestions.length >= 3) break;
+    }
+    return suggestions.length > 0 ? suggestions : null;
+  };
 
   try {
     const res = await fetch(`${NOMINATIM_URL}?${params.toString()}`, {
@@ -230,6 +301,10 @@ export async function getAddressSuggestions(query: string): Promise<AddressSugge
     });
 
     if (!res.ok) {
+      const backendSuggestions = await fallbackFromBackend();
+      if (backendSuggestions) {
+        return { success: true, suggestions: backendSuggestions };
+      }
       return { success: false, error: `Search failed: ${res.status}` };
     }
 
@@ -252,8 +327,21 @@ export async function getAddressSuggestions(query: string): Promise<AddressSugge
       }))
       .filter((s) => s.lat != null && s.lon != null && !Number.isNaN(s.lat) && !Number.isNaN(s.lon));
 
-    return { success: true, suggestions };
+    if (suggestions.length > 0) {
+      return { success: true, suggestions };
+    }
+
+    const backendSuggestions = await fallbackFromBackend();
+    if (backendSuggestions) {
+      return { success: true, suggestions: backendSuggestions };
+    }
+
+    return { success: true, suggestions: [] };
   } catch (err) {
+    const backendSuggestions = await fallbackFromBackend();
+    if (backendSuggestions) {
+      return { success: true, suggestions: backendSuggestions };
+    }
     return {
       success: false,
       error: err instanceof Error ? err.message : 'Network error',

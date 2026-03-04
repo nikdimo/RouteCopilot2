@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WisePlan Account Billing</title>
+    <link rel="icon" href="/app/favicon.ico" />
+    <link rel="stylesheet" href="/billing/styles.css" />
+  </head>
+  <body data-page="account-billing">
+    <main class="page">
+      <header class="header">
+        <div class="brand">WisePlan Account Billing</div>
+        <nav class="nav">
+          <a href="/billing/">Billing Plans</a>
+          <a href="/account/billing/" class="active">Account Billing</a>
+        </nav>
+      </header>
+
+      <section class="card">
+        <div class="row spacer">
+          <h1 style="margin: 0">Subscription Overview</h1>
+          <button id="accountManageBtn" class="btn" type="button">Manage Billing</button>
+        </div>
+        <div id="accountSnapshot"></div>
+      </section>
+
+      <section class="card">
+        <h2>Invoices</h2>
+        <div id="invoicesWrap" class="muted">Loading invoices...</div>
+      </section>
+    </main>
+
+    <script type="module" src="/billing/app.js"></script>
+  </body>
+</html>

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run this on the VPS (from RouteCopilot2 root) after git pull + setup-vps.sh
+# Run this on the VPS (from repo root) after git pull + setup-vps.sh
 
 set -e
 echo "=== VPS Deployment Verification ==="

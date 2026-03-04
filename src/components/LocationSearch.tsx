@@ -93,6 +93,7 @@ export default function LocationSearch({
   const cancelSelectRef = useRef(false);
   const [resolvingContact, setResolvingContact] = useState<ContactSearchResult | null>(null);
   const [resolvingPlaceId, setResolvingPlaceId] = useState(false);
+  const [clearPending, setClearPending] = useState(false);
 
   const propsRef = useRef({
     token,
@@ -185,6 +186,12 @@ export default function LocationSearch({
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [query, runSearch]);
+
+  useEffect(() => {
+    if (selection.type === 'none') {
+      setClearPending(false);
+    }
+  }, [selection.type]);
 
   const handleSelectContact = useCallback(async (contact: ContactSearchResult) => {
     if (!contact.hasAddress) {
@@ -297,6 +304,7 @@ export default function LocationSearch({
     cancelSelectRef.current = true;
     setResolvingContact(null);
     onSelectionChange({ type: 'none' });
+    setClearPending(true);
     setQuery('');
     setContacts([]);
     setAddressSuggestions([]);
@@ -305,35 +313,39 @@ export default function LocationSearch({
   };
 
   const hasSelection = selection.type !== 'none';
+  const effectiveHasSelection = hasSelection && !clearPending;
   const displayValue = resolvingContact
     ? `${resolvingContact.displayName} · Resolving…`
     : resolvingPlaceId
       ? 'Resolving location…'
-      : hasSelection
-      ? selection.type === 'contact'
-        ? selection.contact.displayName + (selection.contact.formattedAddress ? ` · ${selection.contact.formattedAddress}` : '')
-        : selection.address
-      : query;
+      : query.length > 0 || clearPending
+        ? query
+        : hasSelection
+          ? selection.type === 'contact'
+            ? selection.contact.displayName + (selection.contact.formattedAddress ? ` · ${selection.contact.formattedAddress}` : '')
+            : selection.address
+          : query;
 
-  const showDropdown = !hasSelection && (contacts.length > 0 || addressSuggestions.length > 0);
+  const showDropdown =
+    !effectiveHasSelection && (contacts.length > 0 || addressSuggestions.length > 0);
 
   return (
     <View style={styles.container}>
       <View style={styles.inputRow}>
         <TextInput
-          style={[styles.input, hasSelection && styles.inputSelected]}
+          style={[styles.input, effectiveHasSelection && styles.inputSelected]}
           placeholder={placeholder}
           placeholderTextColor="#605E5C"
           value={displayValue}
           onChangeText={(t) => {
-            if (hasSelection) handleClear();
+            if (hasSelection && !clearPending) handleClear();
             setQuery(t);
           }}
           autoCapitalize="none"
           autoCorrect={false}
           editable={true}
         />
-        {(hasSelection || resolvingContact || resolvingPlaceId) && (
+        {(effectiveHasSelection || query.length > 0 || resolvingContact || resolvingPlaceId) && (
           <TouchableOpacity
             style={styles.clearBtn}
             onPress={handleClear}
@@ -515,3 +527,4 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 });
+

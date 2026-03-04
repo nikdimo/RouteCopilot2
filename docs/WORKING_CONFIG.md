@@ -157,10 +157,12 @@ git push origin master
 ### Deploy to VPS
 
 **1. On PC – Build and upload**
+
+Build writes to **`wiseplan-release/`** (sibling of repo), then upload:
 ```powershell
 cd "c:\Users\Nikola Dimovski\RouteCopilot2"
 npm run prepare:vps
-scp -r vps-landing\app\* nikola@207.180.222.248:~/app-deploy/
+scp -r ..\wiseplan-release\app\* nikola@207.180.222.248:~/app-deploy/
 ```
 
 **2. On VPS – Copy to web root**
@@ -171,7 +173,7 @@ rm -r ~/app-deploy
 
 **Landing page + legal docs (index.html, privacy.html, terms.html):** Deploy separately if changed:
 ```powershell
-scp vps-landing\index.html vps-landing\privacy.html vps-landing\terms.html nikola@207.180.222.248:~/
+scp ..\wiseplan-release\index.html ..\wiseplan-release\privacy.html ..\wiseplan-release\terms.html nikola@207.180.222.248:~/
 ```
 ```bash
 # On VPS
@@ -183,7 +185,7 @@ sudo cp ~/index.html ~/privacy.html ~/terms.html /var/www/wiseplan-test/
 cd ~/RouteCopilot2
 git pull origin master
 ```
-**Note:** Pulling only updates the source. The live site is served from `/var/www/wiseplan-test/app/`. To update the live web app you must **build on PC** and **deploy** (steps 1–2 above), or use `Deploy_Web_2_VPS.bat` (see below).
+**Note:** Pulling only updates the source. The live site is served from `/var/www/wiseplan-test/app/`. To update the live web app you must **build on PC** (output goes to `wiseplan-release/`), then **deploy** (steps 1–2 above), or use `VPS_Deploy_Web.bat` (see below).
 
 ### One-click deploy: `Deploy_All.bat`
 
@@ -192,11 +194,11 @@ Runs in order: push to Git (with default or custom commit message) → pull on V
 1. **SSH key** – Use a key without passphrase, or store the passphrase in Windows Credential Manager so the script can load it:
    - PowerShell once: `Install-Module CredentialManager -Scope CurrentUser`
    - Control Panel → Credential Manager → Windows Credentials → Add generic credential: address **RouteCopilot2_VPS_SSH**, user (any), password = your SSH key passphrase.
-2. **VPS deploy script (one-time)** – `Deploy_All.bat` runs `sudo /usr/local/bin/wiseplan-deploy-app` on the VPS. Without this, sudo will ask for a password and fail (no TTY). Do this once on the VPS:
+2. **VPS deploy script (one-time)** – `Deploy_All.bat` runs `sudo /usr/local/bin/wiseplan-release-app` on the VPS. Without this, sudo will ask for a password and fail (no TTY). Do this once on the VPS:
 
    ```bash
    # On the VPS, as root or with sudo:
-   sudo tee /usr/local/bin/wiseplan-deploy-app << 'EOF'
+   sudo tee /usr/local/bin/wiseplan-release-app << 'EOF'
    #!/bin/bash
    set -e
    if [ -d /home/nikola/app-deploy ]; then
@@ -206,16 +208,85 @@ Runs in order: push to Git (with default or custom commit message) → pull on V
      rm -rf /home/nikola/app-deploy
    fi
    EOF
-   sudo chmod 755 /usr/local/bin/wiseplan-deploy-app
+   sudo chmod 755 /usr/local/bin/wiseplan-release-app
 
    # Allow nikola to run it without password:
-   echo 'nikola ALL=(ALL) NOPASSWD: /usr/local/bin/wiseplan-deploy-app' | sudo tee /etc/sudoers.d/wiseplan-deploy
-   sudo chmod 440 /etc/sudoers.d/wiseplan-deploy
+   echo 'nikola ALL=(ALL) NOPASSWD: /usr/local/bin/wiseplan-release-app' | sudo tee /etc/sudoers.d/wiseplan-release
+   sudo chmod 440 /etc/sudoers.d/wiseplan-release
    ```
 
    Then `Deploy_All.bat` can update the live site with no VPS password prompt.
 
 Usage: `Deploy_All.bat` (commit message = "Deploy date time") or `Deploy_All.bat "Your message"`.
+
+### Deploying to a new VPS (rebuild / migrate, no repo on server)
+
+**Principle:** Local repo is the single source of truth. Build locally, deploy only built artifacts. The new VPS never gets the full repo, `node_modules`, or `.expo`. No Telegram bot or other services—static site only.
+
+**1. Local – validate production build**
+
+```powershell
+cd "c:\Users\Nikola Dimovski\RouteCopilot2"
+npm run prepare:vps
+```
+
+This builds the web app and writes **only** to a separate folder **outside** the repo: `c:\Users\Nikola Dimovski\wiseplan-release\` (sibling of `RouteCopilot2`). No build output is written inside the repo. That folder contains: `app/` (built JS/CSS), `index.html`, `privacy.html`, `terms.html`, `assets/`, nginx configs. Optionally serve it locally to confirm:
+
+```powershell
+npx serve ..\wiseplan-release
+```
+
+Open http://localhost:3000 and http://localhost:3000/app/ (or the port shown); check sign-in if possible. **Deploy bundle = `wiseplan-release/`** (not inside the repo).
+
+**2. New VPS – minimal setup**
+
+- Fresh Ubuntu/Debian; install Nginx (and Certbot if using HTTPS).
+- Create web root, e.g. `sudo mkdir -p /var/www/wiseplan && sudo chown $USER:$USER /var/www/wiseplan` (or use `www-data` and deploy with sudo).
+- Do **not** clone the repo or run `npm install` on the VPS for the static app.
+
+**3. Deploy – copy only built output**
+
+From your PC, copy **only** the contents of **`wiseplan-release/`** (sibling folder of the repo – no source or repo files inside it).
+
+**Option A – rsync (Git Bash / WSL / Linux):**
+
+```bash
+cd "c:\Users\Nikola Dimovski\RouteCopilot2"
+npm run prepare:vps
+rsync -avz --delete ../wiseplan-release/ USER@NEW_VPS_IP:/var/www/wiseplan/
+```
+
+Then on the VPS: copy nginx config and enable site:
+
+```bash
+sudo cp /var/www/wiseplan/nginx-wiseplan-domain.conf /etc/nginx/sites-available/wiseplan
+# Edit if needed: change root path to /var/www/wiseplan (see below)
+sudo ln -sf /etc/nginx/sites-available/wiseplan /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+**Option B – SCP (PowerShell):**
+
+```powershell
+npm run prepare:vps
+scp -r ..\wiseplan-release\app\* USER@NEW_VPS_IP:~/app-deploy/
+scp ..\wiseplan-release\index.html ..\wiseplan-release\privacy.html ..\wiseplan-release\terms.html ..\wiseplan-release\nginx-wiseplan-domain.conf USER@NEW_VPS_IP:~/
+```
+
+On VPS: move files to `/var/www/wiseplan/`, install nginx config, reload nginx (same as above).
+
+**4. Nginx root path**
+
+The repo’s `vps-landing/nginx-wiseplan-domain.conf` uses `root /var/www/wiseplan-test`. For a new VPS using `/var/www/wiseplan`, either:
+
+- After copying the config to the VPS, run: `sudo sed -i 's|/var/www/wiseplan-test|/var/www/wiseplan|g' /etc/nginx/sites-available/wiseplan`, or  
+- Keep the config as-is and create `/var/www/wiseplan-test` and deploy there instead.
+
+**5. DNS and SSL**
+
+Point the domain A record to the new VPS IP. Reload Nginx; run Certbot if you use HTTPS. Cloudflare: set SSL to **Full** or **Full (strict)** (not Flexible).
+
+**Repeatable:** Same flow every time: `npm run prepare:vps` → rsync or scp **`wiseplan-release/`** → reload Nginx. You can use `vps-landing/deploy-to-new-vps.sh` to automate build + rsync (it uses `wiseplan-release/`).
 
 ---
 

@@ -11,17 +11,28 @@ import { useNavigation } from '@react-navigation/native';
 import { runFullQASuite, runTravelFeasibilityQA, runOverlapSanityCheck, runFakeMeetingsQA, getFakeQASchedule } from '../utils/scheduler';
 import { useRoute } from '../context/RouteContext';
 import { useQALog } from '../context/QALogContext';
+import { MS_SCOPES } from '../config/auth';
+import { BACKEND_API_BASE_URL, BACKEND_API_ENABLED } from '../config/backend';
 
 const MS_BLUE = '#0078D4';
 
-type Section = 'User Story' | 'Roadmap' | 'Architecture' | 'Logic Specs' | 'Telegram VPS' | 'QA' | 'QA Log';
+/** Human-readable purpose for each Microsoft OAuth scope used by the app */
+const SCOPE_PURPOSE: Record<string, string> = {
+  'User.Read': 'Read signed-in user profile (e.g. /me). Required for auth and display name.',
+  'offline_access': 'Refresh token so the app can get new access tokens without re-sign-in (session persistence).',
+  'Calendars.Read': 'Read user calendar events and free/busy. Used for schedule and map.',
+  'Calendars.ReadWrite': 'Create, update, delete calendar events. Used for Plan Visit booking and meeting edit/delete.',
+  'Contacts.ReadWrite': 'Read and create Outlook contacts. Used when saving a contact from Plan Visit Confirm sheet.',
+};
+
+type Section = 'User Story' | 'Roadmap' | 'Architecture' | 'Logic Specs' | 'Scopes' | 'QA' | 'QA Log';
 
 const SECTIONS: Section[] = [
   'User Story',
   'Roadmap',
   'Architecture',
   'Logic Specs',
-  'Telegram VPS',
+  'Scopes',
   'QA',
   'QA Log',
 ];
@@ -69,7 +80,7 @@ export default function DevDocsScreen() {
         {section === 'Roadmap' && <RoadmapSection />}
         {section === 'Architecture' && <ArchitectureSection />}
         {section === 'Logic Specs' && <LogicSpecsSection />}
-        {section === 'Telegram VPS' && <TelegramVpsSection />}
+        {section === 'Scopes' && <ScopesSection />}
         {section === 'QA' && <QASection />}
         {section === 'QA Log' && <QALogViewerSection />}
       </ScrollView>
@@ -88,7 +99,7 @@ function UserStorySection() {
         back and forth instead of batching visits by area.
       </Text>
       <Text style={styles.body}>
-        RouteCopilot doesn’t just look for “empty slots” in his calendar. It
+        WisePlan doesn’t just look for “empty slots” in his calendar. It
         scans the whole week to find geographic clusters: groups of existing
         meetings that are close to each other in location and time. When it
         finds a cluster (e.g. several commitments in or near Køge on Thursday),
@@ -195,24 +206,23 @@ function RoadmapSection() {
         <Text style={styles.stackItem}>OSRM debounce — 350 ms + 500 ms–2 s per reorder</Text>
       </View>
 
-      <Text style={styles.h2}>Phase 1: Quick Wins (No VPS) — ~1 day</Text>
-      <Text style={styles.body}>Priority order:</Text>
+      <Text style={styles.h2}>Phase 1: Quick Wins (No VPS) — ~1 day ✓</Text>
+      <Text style={styles.body}>Priority order (all done):</Text>
       <View style={styles.stackList}>
-        <Text style={styles.stackItem}>1. Remove duplicate today load — Delete RootNavigator useLoadAppointmentsForDate(undefined); let SelectedDateSync be single source. Impact: ~50% fewer Graph calls on startup.</Text>
-        <Text style={styles.stackItem}>2. Parallelize enrichment — services/graph.ts: Promise.all([geocode, contacts]) if still sequential. Impact: 2–3 s → ~1 s enrichment.</Text>
-        <Text style={styles.stackItem}>3. Skeleton loaders — ScheduleScreen: 3–5 card skeletons while loading; MapScreen: home marker + loading overlay. Impact: Perceived load time cut in half.</Text>
-        <Text style={styles.stackItem}>4. Cache tuning — Meeting counts TTL 4 h → 8 h; OSRM debounce 350 ms → 250 ms; ensure ±1 day prefetch on idle. Impact: Day switching feels instant for adjacent days.</Text>
+        <Text style={styles.stackItem}>1. Remove duplicate today load — SelectedDateSync is single source. ✓</Text>
+        <Text style={styles.stackItem}>2. Parallelize enrichment — Promise.all([geocode, contacts]) in graph.ts. ✓</Text>
+        <Text style={styles.stackItem}>3. Skeleton loaders — ScheduleScreen skeleton cards; MapScreen "Calculating route…" overlay. ✓</Text>
+        <Text style={styles.stackItem}>4. Cache tuning — Counts 8 h TTL, OSRM 250 ms debounce, ±1 day prefetch (yesterday + next 5). ✓</Text>
+        <Text style={styles.stackItem}>5. DaySlider dot fix — Delete meeting decrements count; Refresh forces refetch and clears stale dots (incl. web Refresh button). ✓</Text>
       </View>
-      <Text style={styles.body}>Estimated effort: 4–6 h. Risk: very low (all client-side).</Text>
 
-      <Text style={styles.h2}>Phase 2: Progressive Map Loading — ~0.5 day</Text>
+      <Text style={styles.h2}>Phase 2: Progressive Map Loading — ~0.5 day ✓</Text>
       <View style={styles.stackList}>
         <Text style={styles.stackItem}>Show home marker immediately (already done)</Text>
-        <Text style={styles.stackItem}>If previous session cached route in AsyncStorage → show faded polyline from last session</Text>
-        <Text style={styles.stackItem}>Calculate OSRM in background; replace with fresh route when resolved</Text>
-        <Text style={styles.stackItem}>Optional: haversine ETA estimates while OSRM loads</Text>
+        <Text style={styles.stackItem}>Last-session route cache in AsyncStorage → faded polyline while OSRM loads ✓</Text>
+        <Text style={styles.stackItem}>OSRM in background; replace with fresh route when resolved ✓</Text>
+        <Text style={styles.stackItem}>Haversine ETAs already used when OSRM not ready ✓</Text>
       </View>
-      <Text style={styles.body}>Impact: Map interactive in ~100 ms vs 600–2000 ms. Effort: 2–3 h. Risk: low.</Text>
 
       <Text style={styles.h2}>Phase 3: VPS Backend — Geocode + OSRM Cache — 2–3 days</Text>
       <Text style={styles.body}>Scope (explicitly NOT including Graph data):</Text>
@@ -237,7 +247,24 @@ function RoadmapSection() {
 
       <Text style={styles.h2}>Recommended Order</Text>
       <Text style={styles.body}>
-        Start with Phase 1 (quick wins): remove duplicate load, parallelize enrichment, skeleton loaders. Then choose: Phase 2 (progressive map), Phase 3 (VPS backend), or Phase 4 (sync) as needed.
+        Phase 1 and Phase 2 done. Next: Phase 3 (VPS backend + DB on new VPS). Then Phase 4 (multi-device sync) or Phase 5 (multi-calendar).
+      </Text>
+
+      <Text style={styles.h1}>SaaS & Backend Development Roadmap</Text>
+      <Text style={styles.body}>
+        Full schema and staged implementation (Option B). See docs/ROADMAP.md for the full roadmap and Decision Sheet.
+      </Text>
+      <Text style={styles.h2}>Phases (summary)</Text>
+      <View style={styles.stackList}>
+        <Text style={styles.stackItem}>Phase 3 — VPS backend: full schema, geocode + route + user state cache APIs (2–3 days)</Text>
+        <Text style={styles.stackItem}>Phase 4 — Auth + tenant + entitlements core (users, auth_identities, orgs, roles)</Text>
+        <Text style={styles.stackItem}>Phase 5 — Billing (Stripe, plans, subscriptions, webhooks, idempotency)</Text>
+        <Text style={styles.stackItem}>Phase 6 — Admin panel MVP (admin.wiseplan.dk: plans, subs, promos, audit)</Text>
+        <Text style={styles.stackItem}>Phase 7 — Multi-device sync (optional)</Text>
+        <Text style={styles.stackItem}>Phase 8 — Usage metering, observability, backups, restore drills</Text>
+      </View>
+      <Text style={styles.body}>
+        Locked: one org per user (v1); admin allowlist; email in DB (privacy policy + delete/export); geocode TTL 90d, route TTL 30d; paid status from webhooks only; entitlements enforced in backend.
       </Text>
     </View>
   );
@@ -452,30 +479,35 @@ function LogicSpecsSection() {
   );
 }
 
-function TelegramVpsSection() {
+function ScopesSection() {
   return (
     <View style={styles.section}>
-      <Text style={styles.h1}>Editing Code on the VPS via Telegram</Text>
+      <Text style={styles.h1}>Auth & API Scopes</Text>
       <Text style={styles.body}>
-        How we work on the repo from the VPS using the Telegram bot, and how secrets are stored. Full doc: docs/TELEGRAM_VPS_WORKFLOW.md
+        OAuth and API scopes requested by the app. These must match the app registration (e.g. Azure AD). Backend API scopes (api.wiseplan.dk) will be listed here once the VPS API is live.
       </Text>
 
-      <Text style={styles.h2}>How we edit code on the VPS via Telegram</Text>
+      <Text style={styles.h2}>Microsoft (Azure AD / Microsoft Graph)</Text>
+      <Text style={styles.body}>Used for sign-in and Outlook calendar/contacts. Defined in src/config/auth.ts (MS_SCOPES).</Text>
       <View style={styles.stackList}>
-        <Text style={styles.stackItem}>Bot lives in telegram-bot/. On the VPS: clone repo, cd telegram-bot && npm start. Bot runs tools from repo root (git, EAS, shell).</Text>
-        <Text style={styles.stackItem}>Send natural-language messages (e.g. "git status", "commit and push with message: fix map", "bump iOS build and submit to TestFlight"). LLM (default Gemini) picks tools and runs them; bot replies with outcome.</Text>
-        <Text style={styles.stackItem}>The bot does not edit source by itself — it runs shell, git, EAS. Edit locally or on GitHub; use the bot to pull, build, submit when away.</Text>
-        <Text style={styles.stackItem}>Flow when away: open Telegram → "Pull latest and run prepare:vps" or "Bump iOS build, EAS build, submit TestFlight" → bot runs tools and reports back.</Text>
+        {MS_SCOPES.map((scope) => (
+          <View key={scope} style={styles.scopeRow}>
+            <Text style={styles.scopeName}>{scope}</Text>
+            <Text style={styles.body}>{SCOPE_PURPOSE[scope] ?? '—'}</Text>
+          </View>
+        ))}
       </View>
 
-      <Text style={styles.h2}>How secrets are stored</Text>
-      <Text style={styles.body}>All bot/LLM secrets in telegram-bot/.env (not in git):</Text>
-      <View style={styles.ruleList}>
-        <Text style={styles.ruleItem}>TELEGRAM_BOT_TOKEN (from @BotFather), TELEGRAM_ALLOWED_CHAT_IDS (optional), LLM_PROVIDER, one of GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY</Text>
+      <Text style={styles.h2}>Backend API (api.wiseplan.dk)</Text>
+      <View style={styles.scopeRow}>
+        <Text style={styles.scopeName}>
+          Backend Integration: {BACKEND_API_ENABLED ? 'Enabled' : 'Disabled'}
+        </Text>
+        <Text style={styles.body}>
+          Base URL: {BACKEND_API_BASE_URL || '(not set)'}
+        </Text>
       </View>
-      <Text style={styles.body}>Git (GitHub): SSH key or personal access token on the VPS only; not in repo.</Text>
-      <Text style={styles.body}>EAS/Expo/Apple: eas login or EXPO_TOKEN on VPS; Apple ID / app-specific password in EAS or EXPO_APPLE_APP_SPECIFIC_PASSWORD. All on VPS only.</Text>
-      <Text style={styles.body}>Nothing secret is committed; everything stays on the VPS (and EAS where applicable).</Text>
+      <Text style={styles.body}>When the VPS backend is deployed, expected scope(s) for authenticated calls (e.g. Bearer token validation, optional scope for geocode/route/user-state endpoints). TBD in backend implementation.</Text>
     </View>
   );
 }
@@ -737,6 +769,18 @@ const styles = StyleSheet.create({
     paddingLeft: 8,
     borderLeftWidth: 3,
     borderLeftColor: MS_BLUE,
+  },
+  scopeRow: {
+    marginBottom: 16,
+    paddingLeft: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: MS_BLUE,
+  },
+  scopeName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: MS_BLUE,
+    marginBottom: 4,
   },
   ruleList: {
     marginBottom: 12,

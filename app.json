@@ -1,7 +1,7 @@
-﻿{
+{
   "expo": {
     "name": "WisePlan",
-    "slug": "routecopilot2",
+    "slug": "wiseplan",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",

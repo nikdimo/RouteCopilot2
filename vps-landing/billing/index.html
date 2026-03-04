@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WisePlan Billing</title>
+  <meta name="description" content="Compare plans, validate promo codes, and manage subscriptions for WisePlan." />
+  <link rel="icon" href="/app/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/billing/styles.css" />
+</head>
+
+<body data-page="billing">
+
+  <header class="header">
+    <a href="/" class="back-link">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+      </svg>
+      Back to Home
+    </a>
+    <div class="header-actions">
+      <!-- Optional portal link for direct web visitors -->
+      <button id="manageBillingBtn" class="btn outline" style="display: none;">Manage Billing</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <div id="featureHint"></div>
+    <div id="snapshotWrap" class="status-banner-container"></div>
+
+    <section class="hero text-center">
+      <div class="badge-blue">PRICING & PLANS</div>
+      <h1>Built for <span class="text-blue">high-performers</span></h1>
+      <p class="subtitle">
+        Scale your efficiency with the world's most intelligent route planning assistant.
+      </p>
+
+      <div class="billing-toggle-container">
+        <div class="toggle-wrap">
+          <button id="intervalMonthly" class="toggle-btn active" type="button">Monthly</button>
+          <button id="intervalAnnual" class="toggle-btn" type="button">
+            Annual
+            <span class="badge-green">2 MONTHS FREE</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="promo-container">
+        <button id="showPromoBtn" class="promo-link" type="button">Have a promo code?</button>
+        <div id="promoInputWrap" class="promo-input-wrap hidden">
+          <input id="promoInput" class="input" type="text" placeholder="Enter promo code" />
+          <button id="promoValidateBtn" class="btn primary" type="button">Apply</button>
+        </div>
+        <div id="promoResult"></div>
+      </div>
+    </section>
+
+    <section class="pricing-cards">
+      <div id="plansGrid" class="grid plans"></div>
+    </section>
+
+    <section class="footer-features">
+      <div class="grid feature-grid">
+        <div class="feature-item">
+          <div class="feature-icon shield">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+          </div>
+          <h3>Military Grade Privacy</h3>
+          <p>Your client data and route history are encrypted with industry-leading standards.</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon globe">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z">
+              </path>
+            </svg>
+          </div>
+          <h3>Multi-Region Support</h3>
+          <p>Optimized routing and geocoding across North America, Europe, and Asia-Pacific.</p>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon sync">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path
+                d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.21l-5.42 5.42M2.5 22v-6h6M2.66 8.43a10 10 0 1 1 .59 9.21l5.42-5.42">
+              </path>
+            </svg>
+          </div>
+          <h3>Real-Time Sync</h3>
+          <p>Instantly updates your Outlook, Google, and Apple calendars across all devices.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script type="module" src="/billing/app.js"></script>
+</body>
+
+</html>

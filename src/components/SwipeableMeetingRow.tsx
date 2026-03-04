@@ -1,27 +1,28 @@
 import React, { useRef, memo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform, Linking } from 'react-native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
-import { Trash2, Check } from 'lucide-react-native';
+import { Trash2, Edit2, PhoneCall, Navigation } from 'lucide-react-native';
 import MeetingCard, { type MeetingCardProps } from './MeetingCard';
 
-const RED = '#D13438';
-const GREEN = '#107C10';
+const RED = '#EF4444'; // Modern Red
+const BLUE = '#2563EB'; // Vibrant Blue
 
 export type SwipeableMeetingRowProps = MeetingCardProps & {
   /** Called when user confirms delete */
   onDelete: () => void;
-  /** Toggles done state; swipe left to reveal Complete action */
-  onToggleDone?: () => void;
+  /** Toggles edit screen; swipe right to reveal Edit action */
+  onEdit?: () => void;
 };
 
 function SwipeableMeetingRow({
   onDelete,
-  onToggleDone,
+  onEdit,
   onPress,
   ...cardProps
 }: SwipeableMeetingRowProps) {
   const didDragRef = useRef(false);
 
+  // When card is tapped, if we weren't just dragging, fire the tap (which now Highlights on map!)
   const handleCardPress = () => {
     if (didDragRef.current) {
       didDragRef.current = false;
@@ -42,41 +43,84 @@ function SwipeableMeetingRow({
     );
   };
 
-  const handleCompletePress = (swipeable: { close: () => void }) => {
+  const handleEditPress = (swipeable: { close: () => void }) => {
     swipeable.close();
-    onToggleDone?.();
+    onEdit?.();
   };
 
+  // Right Swipe = Delete (Red)
   const renderRightActions = (
     _progress: unknown,
     _drag: unknown,
     swipeable: { close: () => void }
   ) => (
-    <TouchableOpacity
-      style={styles.deleteAction}
-      onPress={() => handleDeletePress(swipeable)}
-      activeOpacity={0.8}
-    >
-      <Trash2 color="#fff" size={22} />
-      <Text style={styles.deleteActionText}>Delete</Text>
-    </TouchableOpacity>
+    <View style={styles.actionContainerRight}>
+      <TouchableOpacity
+        style={styles.deleteAction}
+        onPress={() => handleDeletePress(swipeable)}
+        activeOpacity={0.8}
+      >
+        <Trash2 color="#fff" size={24} />
+        <Text style={styles.actionText}>Delete</Text>
+      </TouchableOpacity>
+    </View>
   );
 
+  // Left Swipe = Contact, Navigate, Edit Details menu
   const renderLeftActions = (
     _progress: unknown,
     _drag: unknown,
     swipeable: { close: () => void }
-  ) =>
-    onToggleDone ? (
-      <TouchableOpacity
-        style={styles.completeAction}
-        onPress={() => handleCompletePress(swipeable)}
-        activeOpacity={0.8}
-      >
-        <Check color="#fff" size={22} strokeWidth={3} />
-        <Text style={styles.completeActionText}>Complete</Text>
-      </TouchableOpacity>
-    ) : null;
+  ) => {
+    if (!onEdit) return null;
+    const hasPhone = cardProps.phone != null && cardProps.phone.trim() !== '';
+
+    return (
+      <View style={styles.actionContainerLeft}>
+        {cardProps.onNavigate && (
+          <TouchableOpacity
+            style={[styles.leftMenuAction, { backgroundColor: '#E2E8F0' }]}
+            onPress={() => {
+              swipeable.close();
+              cardProps.onNavigate?.();
+            }}
+            activeOpacity={0.8}
+          >
+            <Navigation color="#1E293B" size={24} />
+            <Text style={[styles.actionText, { color: '#1E293B' }]}>Route</Text>
+          </TouchableOpacity>
+        )}
+
+        {hasPhone && (
+          <TouchableOpacity
+            style={[styles.leftMenuAction, { backgroundColor: '#E2E8F0' }]}
+            onPress={() => {
+              swipeable.close();
+              Linking.openURL(`tel:${cardProps.phone!.trim()}`);
+            }}
+            activeOpacity={0.8}
+          >
+            <PhoneCall color="#1E293B" size={24} />
+            <Text style={[styles.actionText, { color: '#1E293B' }]}>Call</Text>
+          </TouchableOpacity>
+        )}
+
+        <TouchableOpacity
+          style={[styles.leftMenuAction, { backgroundColor: BLUE }]}
+          onPress={() => handleEditPress(swipeable)}
+          activeOpacity={0.8}
+        >
+          <Edit2 color="#fff" size={24} />
+          <Text style={styles.actionText}>Edit</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // On web, Swipeable breaks all click events - use regular card instead
+  if (Platform.OS === 'web') {
+    return <MeetingCard {...cardProps} onPress={handleCardPress} />;
+  }
 
   return (
     <Swipeable
@@ -100,34 +144,37 @@ function SwipeableMeetingRow({
 export default memo(SwipeableMeetingRow);
 
 const styles = StyleSheet.create({
+  actionContainerRight: {
+    paddingLeft: 74, // Matches the timelineCol + nodeCol width offset from MeetingCard
+    marginBottom: 8,
+  },
+  actionContainerLeft: {
+    paddingLeft: 74,
+    marginBottom: 8,
+    flexDirection: 'row',
+    gap: 8,
+    marginRight: 12,
+  },
   deleteAction: {
     backgroundColor: RED,
     justifyContent: 'center',
     alignItems: 'center',
     width: 90,
-    marginBottom: 12,
-    borderTopRightRadius: 8,
-    borderBottomRightRadius: 8,
+    height: '100%',
+    borderRadius: 16,
+    marginLeft: 12,
   },
-  deleteActionText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  completeAction: {
-    backgroundColor: GREEN,
+  leftMenuAction: {
     justifyContent: 'center',
     alignItems: 'center',
-    width: 90,
-    marginBottom: 12,
-    borderTopLeftRadius: 8,
-    borderBottomLeftRadius: 8,
+    width: 70,
+    height: '100%',
+    borderRadius: 16,
   },
-  completeActionText: {
+  actionText: {
     color: '#fff',
     fontSize: 13,
-    fontWeight: '600',
-    marginTop: 4,
+    fontWeight: '700',
+    marginTop: 6,
   },
 });

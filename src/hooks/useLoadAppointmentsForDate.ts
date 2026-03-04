@@ -2,8 +2,12 @@ import { useCallback } from 'react';
 import { startOfDay, endOfDay } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
+import { useUserPreferences } from '../context/UserPreferencesContext';
 import { getCalendarEvents, GraphUnauthorizedError } from '../services/graph';
+import { getLocalMeetingsForDay } from '../services/localMeetings';
 import { sortAppointmentsByTime } from '../utils/optimization';
+import { toLocalDayKey } from '../utils/dateUtils';
+import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
 
 /**
  * Hook to load appointments for a given date into RouteContext.
@@ -14,14 +18,31 @@ import { sortAppointmentsByTime } from '../utils/optimization';
 export function useLoadAppointmentsForDate(date: Date | undefined) {
   const { userToken, signOut, getValidToken } = useAuth();
   const { setAppointments, setAppointmentsLoading } = useRoute();
+  const { preferences } = useUserPreferences();
+  const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
+  const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
 
   const load = useCallback(async () => {
+    const targetDate = date ?? startOfDay(new Date());
+    if (!canSyncCalendar) {
+      setAppointmentsLoading(true);
+      const dayKey = toLocalDayKey(targetDate);
+      getLocalMeetingsForDay(dayKey)
+        .then((events) => {
+          const sorted = sortAppointmentsByTime(events);
+          setAppointments(sorted);
+        })
+        .catch(() => {
+          setAppointments([]);
+        })
+        .finally(() => setAppointmentsLoading(false));
+      return;
+    }
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
     if (!token) {
       setAppointments([]);
       return;
     }
-    const targetDate = date ?? startOfDay(new Date());
     const start = startOfDay(targetDate);
     const end = endOfDay(targetDate);
     setAppointmentsLoading(true);
@@ -37,7 +58,7 @@ export function useLoadAppointmentsForDate(date: Date | undefined) {
         }
       })
       .finally(() => setAppointmentsLoading(false));
-  }, [userToken, getValidToken, setAppointments, setAppointmentsLoading, signOut, date]);
+  }, [canSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsLoading, signOut, date]);
 
   return { load };
 }

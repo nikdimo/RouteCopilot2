@@ -1,11 +1,11 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
-import Svg, { Polygon } from 'react-native-svg';
-import { Navigation, Phone, Mail, MessageCircle } from 'lucide-react-native';
+import { Navigation, Phone, Mail, MessageCircle, MapPin, Briefcase, Home } from 'lucide-react-native';
 
-const MS_BLUE = '#0078D4';
-const DEFAULT_STATUS_COLOR = '#107C10';
-const CHAMFER_SIZE = 36;
+const MS_BLUE = '#2563EB'; // Vibrant Blue
+const LIGHT_BLUE = '#EFF6FF';
+const TEXT_DARK = '#0F172A';
+const TEXT_MUTED = '#64748B';
 
 export type MeetingCardProps = {
   timeRange: string;
@@ -16,15 +16,14 @@ export type MeetingCardProps = {
   variantBooked?: boolean;
   /** Opens native directions (Apple/Google Maps) to this meeting */
   onNavigate?: () => void;
-  /** When user taps the waypoint number in the corner: same as tapping that route point on the map (switch to Map + highlight) */
-  onWaypointNumberPress?: () => void;
-  /** Waypoint number (1-based) in blue chamfered top-right corner */
-  waypointNumber?: number;
+  /** Waypoint number or 'HOME' identifier rendered inside the timeline circle */
+  waypointNumber?: number | 'HOME';
   /** Contact phone number; when set, shows a tappable phone icon to call */
   phone?: string;
   /** Contact email; when set, shows a tappable mail icon to send email */
   email?: string;
   isCompleted?: boolean;
+  /** Replaces old default action: now Tapping highlights it on map */
   onPress?: () => void;
 };
 
@@ -32,10 +31,9 @@ export default function MeetingCard({
   timeRange,
   client,
   address,
-  statusColor = DEFAULT_STATUS_COLOR,
+  statusColor = MS_BLUE,
   variantBooked,
   onNavigate,
-  onWaypointNumberPress,
   waypointNumber,
   phone,
   email,
@@ -44,79 +42,68 @@ export default function MeetingCard({
 }: MeetingCardProps) {
   const hasPhone = phone != null && phone.trim() !== '';
   const hasEmail = email != null && email.trim() !== '';
+
+  const [startTime, endTime] = timeRange.split('-').map(s => s.trim());
+
   const content = (
-    <View style={[styles.card, variantBooked && styles.cardBooked, isCompleted && styles.cardCompleted]}>
-      {waypointNumber != null && (
-        <TouchableOpacity
-          style={styles.chamferWrap}
-          onPress={(e) => {
-            e?.stopPropagation?.();
-            onWaypointNumberPress?.();
-          }}
-          activeOpacity={0.8}
-          disabled={onWaypointNumberPress == null}
+    <View style={styles.container}>
+      {/* Left Timeline Section */}
+      <View style={styles.timelineCol}>
+        <Text style={[styles.timeText, isCompleted && styles.strikeThrough]}>{startTime}</Text>
+        <Text style={[styles.timeSubtext, isCompleted && styles.strikeThrough]}>{endTime}</Text>
+      </View>
+
+      {/* Center Line & Node */}
+      <View style={styles.nodeCol}>
+        <View
+          style={[
+            styles.timelineNode,
+            { backgroundColor: waypointNumber === 'HOME' ? TEXT_DARK : isCompleted ? '#10B981' : statusColor }
+          ]}
         >
-          <Svg width={CHAMFER_SIZE} height={CHAMFER_SIZE} style={styles.chamferSvg}>
-            <Polygon points={`0,0 ${CHAMFER_SIZE},0 ${CHAMFER_SIZE},${CHAMFER_SIZE}`} fill={MS_BLUE} />
-          </Svg>
-          <View style={[styles.chamferNumberWrap, { pointerEvents: 'none' }]}>
-            <Text style={styles.chamferNumber} allowFontScaling={false}>{waypointNumber}</Text>
-          </View>
-        </TouchableOpacity>
-      )}
-      <View style={[styles.content, waypointNumber != null && styles.contentWithChamfer]}>
-        <View style={styles.main}>
-          <Text style={[styles.time, isCompleted && styles.strikeThrough]}>{timeRange}</Text>
-          <Text style={[styles.client, isCompleted && styles.strikeThrough]}>{client}</Text>
-          <Text style={[styles.address, isCompleted && styles.strikeThrough]}>{address}</Text>
+          {waypointNumber === 'HOME' ? (
+            <Home color="#fff" size={10} />
+          ) : (
+            <Briefcase color="#fff" size={10} />
+          )}
         </View>
-        {hasPhone && (
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => Linking.openURL(`tel:${phone!.trim()}`)}
-            activeOpacity={0.7}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <Phone color={MS_BLUE} size={22} />
-          </TouchableOpacity>
-        )}
-        {hasPhone && (
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => Linking.openURL(`sms:${phone!.trim()}`)}
-            activeOpacity={0.7}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <MessageCircle color={MS_BLUE} size={22} />
-          </TouchableOpacity>
-        )}
-        {hasEmail && (
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => Linking.openURL(`mailto:${email!.trim()}`)}
-            activeOpacity={0.7}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <Mail color={MS_BLUE} size={22} />
-          </TouchableOpacity>
-        )}
-        {onNavigate != null && (
-          <TouchableOpacity
-            style={styles.navButton}
-            onPress={onNavigate}
-            activeOpacity={0.7}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <Navigation color={MS_BLUE} size={22} />
-          </TouchableOpacity>
-        )}
+      </View>
+
+      {/* Right Content Card */}
+      <View style={[
+        styles.cardBox,
+        variantBooked && styles.cardBooked,
+        isCompleted && styles.cardCompleted
+      ]}>
+        {/* Type Badge from Mockup */}
+        <View style={styles.typeBadge}>
+          <Text style={styles.typeBadgeText}>
+            {waypointNumber === 'HOME' ? 'HOME' : 'MEETING'}
+          </Text>
+        </View>
+
+        {/* Main Text */}
+        <View style={styles.main}>
+          <Text style={[styles.client, isCompleted && styles.strikeThrough]} numberOfLines={1}>
+            {client}
+          </Text>
+          <View style={styles.addressRow}>
+            <MapPin color={TEXT_MUTED} size={14} style={styles.addressIcon} />
+            <Text style={[styles.address, isCompleted && styles.strikeThrough]} numberOfLines={2}>
+              {address}
+            </Text>
+          </View>
+        </View>
+
+
+
       </View>
     </View>
   );
 
   if (onPress) {
     return (
-      <TouchableOpacity onPress={onPress} activeOpacity={0.95}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.9}>
         {content}
       </TouchableOpacity>
     );
@@ -126,94 +113,142 @@ export default function MeetingCard({
 }
 
 const styles = StyleSheet.create({
-  card: {
+  container: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    borderTopRightRadius: 0,
-    marginBottom: 12,
-    minHeight: 72,
+    marginBottom: 8,
+    minHeight: 100,
+  },
+  timelineCol: {
+    width: 50,
+    alignItems: 'flex-end',
+    paddingTop: 16,
+    paddingRight: 10,
+  },
+  timeText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: TEXT_DARK,
+  },
+  timeSubtext: {
+    fontSize: 11,
+    color: TEXT_MUTED,
+    marginTop: 2,
+  },
+  nodeCol: {
+    width: 24,
+    alignItems: 'center',
+    paddingTop: 16,
+    position: 'relative',
+    marginRight: 10,
+  },
+  timelineNode: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  nodeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  cardBox: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    padding: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.03,
     shadowRadius: 4,
     elevation: 2,
-    overflow: 'hidden',
-    position: 'relative',
   },
   cardBooked: {
-    backgroundColor: '#E8F4FC',
+    backgroundColor: LIGHT_BLUE,
+    borderColor: '#DBEAFE',
   },
   cardCompleted: {
-    opacity: 0.5,
+    opacity: 0.6,
+    backgroundColor: '#F8FAFC',
   },
   strikeThrough: {
     textDecorationLine: 'line-through',
-    color: '#808080',
-  },
-  chamferWrap: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: CHAMFER_SIZE,
-    height: CHAMFER_SIZE,
-    zIndex: 1,
-  },
-  chamferSvg: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-  },
-  chamferNumberWrap: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: CHAMFER_SIZE,
-    height: CHAMFER_SIZE,
-    alignItems: 'center',
-    justifyContent: 'center',
-    transform: [{ translateX: 6 }, { translateY: -6 }],
-  },
-  chamferNumber: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  content: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-  },
-  contentWithChamfer: {
-    paddingRight: CHAMFER_SIZE + 6,
+    color: '#94A3B8',
   },
   main: {
-    flex: 1,
-  },
-  time: {
-    fontSize: 12,
-    color: '#605E5C',
-    marginBottom: 4,
-    fontWeight: '500',
+    marginBottom: 8,
   },
   client: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
-    color: '#1a1a1a',
-    marginBottom: 2,
+    color: '#0F172A', // darker text for main details
+  },
+  typeBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: '#F1F5F9', // light grey 
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  typeBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#64748B',
+    letterSpacing: 0.8,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingRight: 10,
+  },
+  addressIcon: {
+    marginTop: 2,
+    marginRight: 6,
   },
   address: {
     fontSize: 13,
-    color: '#605E5C',
+    color: TEXT_MUTED,
+    lineHeight: 18,
+    flex: 1,
   },
-  iconButton: {
-    padding: 8,
-    marginLeft: 4,
+  actionsFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
   },
-  navButton: {
-    padding: 8,
-    marginLeft: 8,
+  iconPill: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: LIGHT_BLUE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
   },
+  navPill: {
+    flexDirection: 'row',
+    width: 'auto',
+    paddingHorizontal: 16,
+    gap: 6,
+  },
+  navPillText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: MS_BLUE,
+  }
 });

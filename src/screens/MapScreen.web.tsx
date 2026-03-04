@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -23,6 +23,8 @@ import {
   type TipCorner,
   type LatLng,
 } from '../utils/routeBubbles';
+import { EmptyStateScanner } from '../components/emptyState/EmptyStateScanner';
+import { MockMap } from '../components/emptyState/MockMap';
 
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.webpack.css';
@@ -352,9 +354,9 @@ function openDirectionsWeb(lat: number, lon: number) {
 
 const FOCUSED_ZOOM = 17;
 
-type MapScreenProps = { embeddedInSchedule?: boolean };
+type MapScreenProps = { embeddedInSchedule?: boolean; emptyAnimationState?: number };
 
-export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
+export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: MapScreenProps = {}) {
   const navigation = useNavigation();
   const {
     selectedDate: ctxSelectedDate,
@@ -364,6 +366,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     setHighlightWaypointIndex,
     appointmentsLoading,
     appointmentsEnriching,
+    triggerRefresh,
   } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const [showDetails, setShowDetails] = useState(false);
@@ -403,11 +406,19 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   const today = useMemo(() => startOfDay(new Date()), []);
 
+  const appointmentsLengthRef = useRef(appointments.length);
+  const embeddedRef = useRef(embeddedInSchedule);
+
+  useEffect(() => {
+    appointmentsLengthRef.current = appointments.length;
+    embeddedRef.current = embeddedInSchedule;
+  }, [appointments.length, embeddedInSchedule]);
+
   useFocusEffect(
     useCallback(() => {
-      if (appointments.length === 0 && isSameDay(ctxSelectedDate, today)) load();
-      if (!embeddedInSchedule) ensureMeetingCountsForDate(ctxSelectedDate);
-    }, [load, appointments.length, embeddedInSchedule, ensureMeetingCountsForDate, ctxSelectedDate, today])
+      if (appointmentsLengthRef.current === 0 && isSameDay(ctxSelectedDate, today)) load();
+      if (!embeddedRef.current) ensureMeetingCountsForDate(ctxSelectedDate);
+    }, [load, ensureMeetingCountsForDate, ctxSelectedDate, today])
   );
   const headerTitle = isSameDay(ctxSelectedDate, today) ? "Today's Route" : format(ctxSelectedDate, 'EEE, MMM d');
 
@@ -487,10 +498,12 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
             meetingCountByDay={meetingCountByDay}
           />
         )}
-        <View style={styles.placeholderContainer}>
-          <Text style={styles.placeholderText}>
-            No meetings loaded. Go to Schedule to load your route.
-          </Text>
+        <View style={{ flex: 1, width: '100%', height: '100%' }}>
+          {embeddedInSchedule ? (
+            <MockMap animationState={emptyAnimationState ?? 0} />
+          ) : (
+            <EmptyStateScanner />
+          )}
         </View>
       </View>
     );
@@ -510,19 +523,24 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           <Text style={styles.placeholderText}>
             No locations with addresses. Add addresses to your meetings to see them on the map.
           </Text>
+          {unresolvedAddressCount > 0 && (
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() => triggerRefresh()}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.retryButtonText}>Retry resolving addresses</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     );
   }
 
   const mapWrapperStyle: React.CSSProperties = {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    flex: 1,
+    position: 'relative',
     width: '100%',
-    height: '100%',
     minHeight: 400,
   };
 
@@ -655,73 +673,73 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
           />
           {osrmRoute?.legs
             ? (() => {
-                const LEG_OFFSET_DEG = 0.00025;
-                const HIGHLIGHT_WEIGHT = 7;
-                const LATE_LEG_WEIGHT = 9;
-                const legs = osrmRoute.legs;
-                const toPositions = (coords: LatLng[]): [number, number][] =>
-                  coords.map((c) => [c.latitude, c.longitude]);
-                const elements: React.ReactNode[] = [];
-                for (let idx = 1; idx < legs.length; idx++) {
-                  const leg = legs[idx]!;
-                  if (leg.coordinates.length < 2) continue;
-                  if (idx === selectedArrivalLegIndex) continue;
-                  if (legStress[idx] === 'late') continue;
-                  const offsetSign = idx % 2 === 1 ? (1 as const) : (-1 as const);
-                  const offsetCoords = offsetPolyline(leg.coordinates, LEG_OFFSET_DEG, offsetSign);
-                  elements.push(
-                    <Polyline
-                      key={idx}
-                      positions={toPositions(offsetCoords)}
-                      pathOptions={{ color: legStrokeColor(idx), weight: 4 }}
-                    />
-                  );
-                }
-                for (let idx = 1; idx < legs.length; idx++) {
-                  const leg = legs[idx]!;
-                  if (leg.coordinates.length < 2) continue;
-                  if (idx === selectedArrivalLegIndex) continue;
-                  if (legStress[idx] !== 'late') continue;
-                  const offsetSign = idx % 2 === 1 ? (1 as const) : (-1 as const);
-                  const offsetCoords = offsetPolyline(leg.coordinates, LEG_OFFSET_DEG, offsetSign);
-                  elements.push(
-                    <Polyline
-                      key={`late-${idx}`}
-                      positions={toPositions(offsetCoords)}
-                      pathOptions={{ color: legStrokeColor(idx), weight: LATE_LEG_WEIGHT }}
-                    />
-                  );
-                }
-                const isArrivalLeg = selectedArrivalLegIndex !== null && selectedArrivalLegIndex < legs.length - 1;
-                if (isArrivalLeg && legs[selectedArrivalLegIndex!]?.coordinates.length >= 2) {
-                  const idx = selectedArrivalLegIndex!;
-                  const leg = legs[idx]!;
-                  const positions =
-                    idx === 0
-                      ? toPositions(leg.coordinates)
-                      : toPositions(
-                          offsetPolyline(
-                            leg.coordinates,
-                            LEG_OFFSET_DEG,
-                            idx % 2 === 1 ? (1 as const) : (-1 as const)
-                          )
-                        );
-                  elements.push(
-                    <Polyline
-                      key={`highlight-${idx}`}
-                      positions={positions}
-                      pathOptions={{
-                        color: HOME_GREEN,
-                        weight: HIGHLIGHT_WEIGHT,
-                      }}
-                    />
-                  );
-                }
-                return elements;
-              })()
+              const LEG_OFFSET_DEG = 0.00025;
+              const HIGHLIGHT_WEIGHT = 7;
+              const LATE_LEG_WEIGHT = 9;
+              const legs = osrmRoute.legs;
+              const toPositions = (coords: LatLng[]): [number, number][] =>
+                coords.map((c) => [c.latitude, c.longitude]);
+              const elements: React.ReactNode[] = [];
+              for (let idx = 1; idx < legs.length; idx++) {
+                const leg = legs[idx]!;
+                if (leg.coordinates.length < 2) continue;
+                if (idx === selectedArrivalLegIndex) continue;
+                if (legStress[idx] === 'late') continue;
+                const offsetSign = idx % 2 === 1 ? (1 as const) : (-1 as const);
+                const offsetCoords = offsetPolyline(leg.coordinates, LEG_OFFSET_DEG, offsetSign);
+                elements.push(
+                  <Polyline
+                    key={idx}
+                    positions={toPositions(offsetCoords)}
+                    pathOptions={{ color: legStrokeColor(idx), weight: 4 }}
+                  />
+                );
+              }
+              for (let idx = 1; idx < legs.length; idx++) {
+                const leg = legs[idx]!;
+                if (leg.coordinates.length < 2) continue;
+                if (idx === selectedArrivalLegIndex) continue;
+                if (legStress[idx] !== 'late') continue;
+                const offsetSign = idx % 2 === 1 ? (1 as const) : (-1 as const);
+                const offsetCoords = offsetPolyline(leg.coordinates, LEG_OFFSET_DEG, offsetSign);
+                elements.push(
+                  <Polyline
+                    key={`late-${idx}`}
+                    positions={toPositions(offsetCoords)}
+                    pathOptions={{ color: legStrokeColor(idx), weight: LATE_LEG_WEIGHT }}
+                  />
+                );
+              }
+              const isArrivalLeg = selectedArrivalLegIndex !== null && selectedArrivalLegIndex < legs.length - 1;
+              if (isArrivalLeg && legs[selectedArrivalLegIndex!]?.coordinates.length >= 2) {
+                const idx = selectedArrivalLegIndex!;
+                const leg = legs[idx]!;
+                const positions =
+                  idx === 0
+                    ? toPositions(leg.coordinates)
+                    : toPositions(
+                      offsetPolyline(
+                        leg.coordinates,
+                        LEG_OFFSET_DEG,
+                        idx % 2 === 1 ? (1 as const) : (-1 as const)
+                      )
+                    );
+                elements.push(
+                  <Polyline
+                    key={`highlight-${idx}`}
+                    positions={positions}
+                    pathOptions={{
+                      color: HOME_GREEN,
+                      weight: HIGHLIGHT_WEIGHT,
+                    }}
+                  />
+                );
+              }
+              return elements;
+            })()
             : fullPolylineLatLon.length >= 2 && (
-                <Polyline positions={fullPolylineLatLon} pathOptions={{ color: '#00B0FF', weight: 4 }} />
-              )}
+              <Polyline positions={fullPolylineLatLon} pathOptions={{ color: '#00B0FF', weight: 4 }} />
+            )}
           {osrmRoute?.legs && osrmRoute.legs.length > 0 && (
             <SegmentBubblesLayer
               legs={osrmRoute.legs}
@@ -733,101 +751,101 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
       {selectedWaypointIndices &&
         selectedWaypointIndices.length > 0 &&
         selectedWaypointIndices.every((i) => coords[i] != null) && (
-        <View style={[styles.bottomCardContainer, { pointerEvents: 'box-none' }]}>
-          <View style={[styles.bottomCard]}>
-            {selectedWaypointIndices.length === 1 ? (
-              (() => {
-                const idx = selectedWaypointIndices[0]!;
-                const appt = coords[idx];
-                if (!appt) return null;
-                const eta = etas[idx];
-                return (
-                  <>
-                    <Text style={styles.bottomCardTitle}>{appt.title ?? 'Meeting'}</Text>
-                    {appt.location ? (
-                      <Text style={styles.bottomCardAddress}>{appt.location}</Text>
-                    ) : null}
-                    {eta != null && (
-                      <Text style={styles.bottomCardTime}>
-                        Arrive ~{formatTime(eta)}
-                      </Text>
-                    )}
-                    <TouchableOpacity
-                      style={styles.bottomCardButton}
-                      onPress={() =>
-                        openDirectionsWeb(
-                          appt.coordinates.latitude,
-                          appt.coordinates.longitude
-                        )
-                      }
-                    >
-                      <Text style={styles.bottomCardButtonText}>Open in Google Maps</Text>
-                    </TouchableOpacity>
-                    {appt.phone ? (
-                      <a
-                        href={`tel:${appt.phone}`}
-                        style={bottomCardAnchorStyle}
-                      >
-                        Call
-                      </a>
-                    ) : null}
-                    <TouchableOpacity
-                      style={styles.bottomCardClose}
-                      onPress={clearSelection}
-                    >
-                      <Text style={styles.bottomCardCloseText}>Close</Text>
-                    </TouchableOpacity>
-                  </>
-                );
-              })()
-            ) : (
-              <>
-                <Text style={styles.bottomCardClusterTitle}>
-                  {selectedWaypointIndices.length} waypoints at this location
-                </Text>
-                <ScrollView style={styles.bottomCardScroll}>
-                  {selectedWaypointIndices.map((idx) => {
-                    const appt = coords[idx];
-                    if (!appt) return null;
-                    const apptEta = etas[idx];
-                    return (
-                      <View key={appt.id} style={styles.bottomCardItem}>
-                        <Text style={styles.bottomCardTitle}>{idx + 1}. {appt.title ?? 'Meeting'}</Text>
-                        {appt.location ? (
-                          <Text style={styles.bottomCardAddress}>{appt.location}</Text>
-                        ) : null}
+          <View style={[styles.bottomCardContainer, { pointerEvents: 'box-none' }]}>
+            <View style={[styles.bottomCard]}>
+              {selectedWaypointIndices.length === 1 ? (
+                (() => {
+                  const idx = selectedWaypointIndices[0]!;
+                  const appt = coords[idx];
+                  if (!appt) return null;
+                  const eta = etas[idx];
+                  return (
+                    <>
+                      <Text style={styles.bottomCardTitle}>{appt.title ?? 'Meeting'}</Text>
+                      {appt.location ? (
+                        <Text style={styles.bottomCardAddress}>{appt.location}</Text>
+                      ) : null}
+                      {eta != null && (
                         <Text style={styles.bottomCardTime}>
-                          {appt.time}
-                          {apptEta != null && ` · Arrive ~${formatTime(apptEta)}`}
+                          Arrive ~{formatTime(eta)}
                         </Text>
-                        <TouchableOpacity
-                          style={styles.bottomCardButton}
-                          onPress={() =>
-                            openDirectionsWeb(
-                              appt.coordinates.latitude,
-                              appt.coordinates.longitude
-                            )
-                          }
+                      )}
+                      <TouchableOpacity
+                        style={styles.bottomCardButton}
+                        onPress={() =>
+                          openDirectionsWeb(
+                            appt.coordinates.latitude,
+                            appt.coordinates.longitude
+                          )
+                        }
+                      >
+                        <Text style={styles.bottomCardButtonText}>Open in Google Maps</Text>
+                      </TouchableOpacity>
+                      {appt.phone ? (
+                        <a
+                          href={`tel:${appt.phone}`}
+                          style={bottomCardAnchorStyle}
                         >
-                          <Text style={styles.bottomCardButtonText}>Open in Google Maps</Text>
-                        </TouchableOpacity>
-                        {appt.phone ? (
-                          <a href={`tel:${appt.phone}`} style={bottomCardAnchorStyle}>
-                            Call
-                          </a>
-                        ) : null}
-                      </View>
-                    );
-                  })}
-                </ScrollView>
-                <TouchableOpacity style={styles.bottomCardClose} onPress={clearSelection}>
-                  <Text style={styles.bottomCardCloseText}>Close</Text>
-                </TouchableOpacity>
-              </>
-            )}
+                          Call
+                        </a>
+                      ) : null}
+                      <TouchableOpacity
+                        style={styles.bottomCardClose}
+                        onPress={clearSelection}
+                      >
+                        <Text style={styles.bottomCardCloseText}>Close</Text>
+                      </TouchableOpacity>
+                    </>
+                  );
+                })()
+              ) : (
+                <>
+                  <Text style={styles.bottomCardClusterTitle}>
+                    {selectedWaypointIndices.length} waypoints at this location
+                  </Text>
+                  <ScrollView style={styles.bottomCardScroll}>
+                    {selectedWaypointIndices.map((idx) => {
+                      const appt = coords[idx];
+                      if (!appt) return null;
+                      const apptEta = etas[idx];
+                      return (
+                        <View key={appt.id} style={styles.bottomCardItem}>
+                          <Text style={styles.bottomCardTitle}>{idx + 1}. {appt.title ?? 'Meeting'}</Text>
+                          {appt.location ? (
+                            <Text style={styles.bottomCardAddress}>{appt.location}</Text>
+                          ) : null}
+                          <Text style={styles.bottomCardTime}>
+                            {appt.time}
+                            {apptEta != null && ` · Arrive ~${formatTime(apptEta)}`}
+                          </Text>
+                          <TouchableOpacity
+                            style={styles.bottomCardButton}
+                            onPress={() =>
+                              openDirectionsWeb(
+                                appt.coordinates.latitude,
+                                appt.coordinates.longitude
+                              )
+                            }
+                          >
+                            <Text style={styles.bottomCardButtonText}>Open in Google Maps</Text>
+                          </TouchableOpacity>
+                          {appt.phone ? (
+                            <a href={`tel:${appt.phone}`} style={bottomCardAnchorStyle}>
+                              Call
+                            </a>
+                          ) : null}
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                  <TouchableOpacity style={styles.bottomCardClose} onPress={clearSelection}>
+                    <Text style={styles.bottomCardCloseText}>Close</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
           </View>
-        </View>
-      )}
+        )}
     </View>
   );
 }
@@ -835,6 +853,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    position: 'relative',
     minHeight: 400,
   },
   placeholderContainer: {
@@ -848,6 +867,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#64748b',
     textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: MS_BLUE,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
   },
   loadingBar: {
     position: 'absolute',

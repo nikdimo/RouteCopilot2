@@ -66,9 +66,9 @@ const FOCUSED_MARKER_SPREAD_PX = 64;
 
 type MapScreenNavParams = { triggerLoadWhenEmpty?: boolean };
 
-type MapScreenProps = { embeddedInSchedule?: boolean };
+type MapScreenProps = { embeddedInSchedule?: boolean; emptyAnimationState?: number };
 
-export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
+export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: MapScreenProps = {}) {
   const mapRef = useRef<MapView>(null);
   const ignoreNextMapPressRef = useRef(false);
   const mapReadyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -105,6 +105,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     returnByMs,
     allCoordsForFit,
     fullPolyline,
+    cachedPolylineFromSession,
     etas,
     meetingDurations,
     legStress,
@@ -122,13 +123,25 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
 
   const today = useMemo(() => startOfDay(new Date()), []);
 
+  const refetchRef = useRef(refetchRouteIfNeeded);
+  const triggerLoadRef = useRef(triggerLoadWhenEmpty);
+  const appointmentsLengthRef = useRef(appointments.length);
+  const embeddedRef = useRef(embeddedInSchedule);
+
+  useEffect(() => {
+    refetchRef.current = refetchRouteIfNeeded;
+    triggerLoadRef.current = triggerLoadWhenEmpty;
+    appointmentsLengthRef.current = appointments.length;
+    embeddedRef.current = embeddedInSchedule;
+  }, [refetchRouteIfNeeded, triggerLoadWhenEmpty, appointments.length, embeddedInSchedule]);
+
   useFocusEffect(
     useCallback(() => {
-      if (triggerLoadWhenEmpty && appointments.length === 0 && isSameDay(ctxSelectedDate, today)) load();
-      if (!embeddedInSchedule && appointments.length === 0) triggerRefresh();
-      if (!embeddedInSchedule) ensureMeetingCountsForDate(ctxSelectedDate);
-      refetchRouteIfNeeded();
-    }, [triggerLoadWhenEmpty, load, appointments.length, refetchRouteIfNeeded, embeddedInSchedule, ensureMeetingCountsForDate, ctxSelectedDate, today, triggerRefresh])
+      if (triggerLoadRef.current && appointmentsLengthRef.current === 0 && isSameDay(ctxSelectedDate, today)) load();
+      if (!embeddedRef.current && appointmentsLengthRef.current === 0) triggerRefresh();
+      if (!embeddedRef.current) ensureMeetingCountsForDate(ctxSelectedDate);
+      refetchRef.current();
+    }, [load, ensureMeetingCountsForDate, ctxSelectedDate, today, triggerRefresh])
   );
 
   const headerTitle = isSameDay(ctxSelectedDate, today) ? "Today's Route" : format(ctxSelectedDate, 'EEE, MMM d');
@@ -412,12 +425,12 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
         onLayout={
           Platform.OS === 'android'
             ? () => {
-                if (mapReadyTimeoutRef.current) return;
-                mapReadyTimeoutRef.current = setTimeout(() => {
-                  setMapReady(true);
-                  mapReadyTimeoutRef.current = null;
-                }, 600);
-              }
+              if (mapReadyTimeoutRef.current) return;
+              mapReadyTimeoutRef.current = setTimeout(() => {
+                setMapReady(true);
+                mapReadyTimeoutRef.current = null;
+              }, 600);
+            }
             : undefined
         }
         onMapLoaded={() => setMapReady(true)}
@@ -432,351 +445,306 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
       >
         {mapReady && (
           <>
-        {/* DEV + Android: 2-point test line to confirm Polyline renders at all (bright red, thick) */}
-        {__DEV__ && Platform.OS === 'android' && waypointsForPolylineTest.length === 2 && (
-          <Polyline
-            key="route-test-2pt"
-            coordinates={waypointsForPolylineTest}
-            strokeColor="#E53935"
-            strokeWidth={12}
-            zIndex={999}
-            geodesic
-            tappable={false}
-          />
-        )}
-        {/* Single full-route polyline so the route always shows on Android (per-leg polylines may not render) */}
-        {mainPolylineCoords.length >= 2 && (
-          <Polyline
-            key="route-main"
-            coordinates={mainPolylineCoords}
-            strokeColor="#00B0FF"
-            strokeWidth={6}
-            zIndex={1}
-            geodesic
-            tappable={false}
-          />
-        )}
-        {osrmRoute?.legs && (() => {
-          const LEG_OFFSET_DEG = 0.00025;
-          const HIGHLIGHT_WIDTH = 7;
-          const LATE_LEG_WIDTH = 9;
-          const legs = osrmRoute.legs;
-          const out: React.ReactNode[] = [];
-          for (let i = 1; i < legs.length; i++) {
-            const leg = legs[i]!;
-            if (leg.coordinates.length < 2) continue;
-            if (i === selectedArrivalLegIndex) continue;
-            if (legStress[i] === 'late') continue;
-            const sign = i % 2 === 1 ? (1 as const) : (-1 as const);
-            const coords = offsetPolyline(leg.coordinates, LEG_OFFSET_DEG, sign);
-            out.push(
+            {/* DEV + Android: 2-point test line to confirm Polyline renders at all (bright red, thick) */}
+            {__DEV__ && Platform.OS === 'android' && waypointsForPolylineTest.length === 2 && (
               <Polyline
-                key={`poly-${i}`}
-                coordinates={coords}
-                strokeColor={legStrokeColor(i)}
+                key="route-test-2pt"
+                coordinates={waypointsForPolylineTest}
+                strokeColor="#E53935"
+                strokeWidth={12}
+                zIndex={999}
+                geodesic
+                tappable={false}
+              />
+            )}
+            {/* Single full-route polyline so the route always shows on Android (per-leg polylines may not render) */}
+            {/* Faded cached route from last session while OSRM loads (Phase 2 progressive map) */}
+            {routeLoading && cachedPolylineFromSession && cachedPolylineFromSession.length >= 2 && (
+              <Polyline
+                key="route-cached"
+                coordinates={cachedPolylineFromSession}
+                strokeColor="rgba(0, 176, 255, 0.4)"
                 strokeWidth={5}
+                zIndex={0}
+                geodesic
+                tappable={false}
               />
-            );
-          }
-          for (let i = 1; i < legs.length; i++) {
-            const leg = legs[i]!;
-            if (leg.coordinates.length < 2) continue;
-            if (i === selectedArrivalLegIndex) continue;
-            if (legStress[i] !== 'late') continue;
-            const sign = i % 2 === 1 ? (1 as const) : (-1 as const);
-            const coords = offsetPolyline(leg.coordinates, LEG_OFFSET_DEG, sign);
-            out.push(
+            )}
+            {mainPolylineCoords.length >= 2 && (
               <Polyline
-                key={`poly-late-${i}`}
-                coordinates={coords}
-                strokeColor={legStrokeColor(i)}
-                strokeWidth={LATE_LEG_WIDTH}
-                zIndex={50}
+                key="route-main"
+                coordinates={mainPolylineCoords}
+                strokeColor="#00B0FF"
+                strokeWidth={6}
+                zIndex={1}
+                geodesic
+                tappable={false}
               />
-            );
-          }
-          if (selectedArrivalLegIndex !== null && selectedArrivalLegIndex < legs.length - 1 && legs[selectedArrivalLegIndex]?.coordinates.length >= 2) {
-            const leg = legs[selectedArrivalLegIndex]!;
-            const coords =
-              selectedArrivalLegIndex === 0
-                ? leg.coordinates
-                : offsetPolyline(
-                    leg.coordinates,
-                    LEG_OFFSET_DEG,
-                    selectedArrivalLegIndex % 2 === 1 ? (1 as const) : (-1 as const)
-                  );
-            out.push(
-              <Polyline
-                key={`poly-highlight-${selectedArrivalLegIndex}`}
-                coordinates={coords}
-                strokeColor={HOME_GREEN}
-                strokeWidth={HIGHLIGHT_WIDTH}
-                zIndex={100}
-              />
-            );
-          }
-          return out;
-        })()}
-        {osrmRoute && routeCoordinates.length >= 2 && osrmRoute.legs.every((l) => l.coordinates.length < 2) && (
-          <Polyline coordinates={routeCoordinates} strokeColor="#00B0FF" strokeWidth={5} />
-        )}
-        {!osrmRoute && routeCoordinates.length >= 2 && (
-          <Polyline coordinates={routeCoordinates} strokeColor="#00B0FF" strokeWidth={5} />
-        )}
-        {showHomeBase && (() => {
-          const targetIndex = selectedArrivalLegIndex != null ? selectedArrivalLegIndex : 0;
-          const rootEta = coords.length > 0 && targetIndex < etas.length ? etas[targetIndex] : undefined;
-          const rootMeetingTime = coords.length > 0 && coords[targetIndex] ? formatMeetingTimeRange(coords[targetIndex]) : '';
-          const onRootPress = () => {
-            ignoreNextMapPressRef.current = true;
-            setFocusedClusterKey(null);
-            setFocusedClusterCoord(null);
-            setSelectedArrivalLegIndex(0);
-            setSelectedWaypointIndices([0]);
-            setHighlightWaypointIndex(0);
-          };
-          // Android: use default pin only (custom Marker views often don't render)
-          if (Platform.OS === 'android') {
-            return (
-              <Marker
-                key="home-base"
-                coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
-                pinColor={HOME_GREEN}
-                title="H"
-                description={homeBaseLabel ?? 'Home Base'}
-                onPress={onRootPress}
-              />
-            );
-          }
-          // On Android, custom Marker children often don't render with tracksViewChanges={false}
-          const homeTracksView = !isWide;
-          return (
-            <Marker
-              coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
-              pinColor={isWide ? HOME_GREEN : undefined}
-              anchor={isWide ? undefined : { x: 0.5, y: 0.5 }}
-              tracksViewChanges={homeTracksView}
-              onPress={onRootPress}
-            >
-              {isWide ? (
-                <Callout tooltip={false}>
-                  <View style={styles.calloutBubble}>
-                    <Text style={[styles.calloutBadge, { color: HOME_GREEN }]}>Home Base</Text>
-                    <Text style={styles.calloutTitle}>{homeBaseLabel ?? 'Home Base'}</Text>
-                    {typeof departByMs === 'number' && !Number.isNaN(departByMs) && (
-                      <Text style={styles.calloutDescription}>Depart by {formatTime(departByMs)}</Text>
-                    )}
-                    {typeof returnByMs === 'number' && !Number.isNaN(returnByMs) && (
-                      <Text style={styles.calloutDescription}>Return ~{formatTime(returnByMs)}</Text>
-                    )}
-                  </View>
-                </Callout>
-              ) : (
-                <View style={styles.markerWithEta}>
-                  {(rootEta != null || rootMeetingTime) && (
-                    <View style={[styles.markerEtaBadge, styles.markerRootLabel]}>
-                      {rootEta != null && (
-                        <Text style={styles.markerEtaText}>{formatTime(rootEta)}</Text>
+            )}
+            {osrmRoute?.legs && (() => {
+              const LEG_OFFSET_DEG = 0.00025;
+              const HIGHLIGHT_WIDTH = 7;
+              const LATE_LEG_WIDTH = 9;
+              const legs = osrmRoute.legs;
+              const out: React.ReactNode[] = [];
+              for (let i = 1; i < legs.length; i++) {
+                const leg = legs[i]!;
+                if (leg.coordinates.length < 2) continue;
+                if (i === selectedArrivalLegIndex) continue;
+                if (legStress[i] === 'late') continue;
+                const sign = i % 2 === 1 ? (1 as const) : (-1 as const);
+                const coords = offsetPolyline(leg.coordinates, LEG_OFFSET_DEG, sign);
+                out.push(
+                  <Polyline
+                    key={`poly-${i}`}
+                    coordinates={coords}
+                    strokeColor={legStrokeColor(i)}
+                    strokeWidth={5}
+                  />
+                );
+              }
+              for (let i = 1; i < legs.length; i++) {
+                const leg = legs[i]!;
+                if (leg.coordinates.length < 2) continue;
+                if (i === selectedArrivalLegIndex) continue;
+                if (legStress[i] !== 'late') continue;
+                const sign = i % 2 === 1 ? (1 as const) : (-1 as const);
+                const coords = offsetPolyline(leg.coordinates, LEG_OFFSET_DEG, sign);
+                out.push(
+                  <Polyline
+                    key={`poly-late-${i}`}
+                    coordinates={coords}
+                    strokeColor={legStrokeColor(i)}
+                    strokeWidth={LATE_LEG_WIDTH}
+                    zIndex={50}
+                  />
+                );
+              }
+              if (selectedArrivalLegIndex !== null && selectedArrivalLegIndex < legs.length - 1 && legs[selectedArrivalLegIndex]?.coordinates.length >= 2) {
+                const leg = legs[selectedArrivalLegIndex]!;
+                const coords =
+                  selectedArrivalLegIndex === 0
+                    ? leg.coordinates
+                    : offsetPolyline(
+                      leg.coordinates,
+                      LEG_OFFSET_DEG,
+                      selectedArrivalLegIndex % 2 === 1 ? (1 as const) : (-1 as const)
+                    );
+                out.push(
+                  <Polyline
+                    key={`poly-highlight-${selectedArrivalLegIndex}`}
+                    coordinates={coords}
+                    strokeColor={HOME_GREEN}
+                    strokeWidth={HIGHLIGHT_WIDTH}
+                    zIndex={100}
+                  />
+                );
+              }
+              return out;
+            })()}
+            {osrmRoute && routeCoordinates.length >= 2 && osrmRoute.legs.every((l) => l.coordinates.length < 2) && (
+              <Polyline coordinates={routeCoordinates} strokeColor="#00B0FF" strokeWidth={5} />
+            )}
+            {!osrmRoute && routeCoordinates.length >= 2 && (
+              <Polyline coordinates={routeCoordinates} strokeColor="#00B0FF" strokeWidth={5} />
+            )}
+            {showHomeBase && (() => {
+              const targetIndex = selectedArrivalLegIndex != null ? selectedArrivalLegIndex : 0;
+              const rootEta = coords.length > 0 && targetIndex < etas.length ? etas[targetIndex] : undefined;
+              const rootMeetingTime = coords.length > 0 && coords[targetIndex] ? formatMeetingTimeRange(coords[targetIndex]) : '';
+              const onRootPress = () => {
+                ignoreNextMapPressRef.current = true;
+                setFocusedClusterKey(null);
+                setFocusedClusterCoord(null);
+                setSelectedArrivalLegIndex(0);
+                setSelectedWaypointIndices([0]);
+                setHighlightWaypointIndex(0);
+              };
+              // Android: use default pin only (custom Marker views often don't render)
+              if (Platform.OS === 'android') {
+                return (
+                  <Marker
+                    key="home-base"
+                    coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
+                    pinColor={HOME_GREEN}
+                    title="H"
+                    description={homeBaseLabel ?? 'Home Base'}
+                    onPress={onRootPress}
+                  />
+                );
+              }
+              // On Android, custom Marker children often don't render with tracksViewChanges={false}
+              const homeTracksView = !isWide;
+              return (
+                <Marker
+                  coordinate={{ latitude: homeBase.lat, longitude: homeBase.lon }}
+                  pinColor={isWide ? HOME_GREEN : undefined}
+                  anchor={isWide ? undefined : { x: 0.5, y: 0.5 }}
+                  tracksViewChanges={homeTracksView}
+                  onPress={onRootPress}
+                >
+                  {isWide ? (
+                    <Callout tooltip={false}>
+                      <View style={styles.calloutBubble}>
+                        <Text style={[styles.calloutBadge, { color: HOME_GREEN }]}>Home Base</Text>
+                        <Text style={styles.calloutTitle}>{homeBaseLabel ?? 'Home Base'}</Text>
+                        {typeof departByMs === 'number' && !Number.isNaN(departByMs) && (
+                          <Text style={styles.calloutDescription}>Depart by {formatTime(departByMs)}</Text>
+                        )}
+                        {typeof returnByMs === 'number' && !Number.isNaN(returnByMs) && (
+                          <Text style={styles.calloutDescription}>Return ~{formatTime(returnByMs)}</Text>
+                        )}
+                      </View>
+                    </Callout>
+                  ) : (
+                    <View style={styles.markerWithEta}>
+                      {(rootEta != null || rootMeetingTime) && (
+                        <View style={[styles.markerEtaBadge, styles.markerRootLabel]}>
+                          {rootEta != null && (
+                            <Text style={styles.markerEtaText}>{formatTime(rootEta)}</Text>
+                          )}
+                          {rootMeetingTime ? (
+                            <Text style={styles.markerMeetingTimeText}>{rootMeetingTime}</Text>
+                          ) : null}
+                        </View>
                       )}
-                      {rootMeetingTime ? (
-                        <Text style={styles.markerMeetingTimeText}>{rootMeetingTime}</Text>
-                      ) : null}
+                      <View style={[styles.markerPin, { backgroundColor: HOME_GREEN }]}>
+                        <Text style={styles.markerPinNumber}>H</Text>
+                      </View>
                     </View>
                   )}
-                  <View style={[styles.markerPin, { backgroundColor: HOME_GREEN }]}>
-                    <Text style={styles.markerPinNumber}>H</Text>
-                  </View>
-                </View>
-              )}
-            </Marker>
-          );
-        })()}
-        {markerPositions.map(
-          ({ index, coordinate, realCoordinate }) =>
-            realCoordinate != null && (
-              <Polyline
-                key={`connector-${index}`}
-                coordinates={[coordinate, realCoordinate]}
-                strokeColor="#64748b"
-                strokeWidth={2}
-                lineDashPattern={[4, 4]}
-              />
-            )
-        )}
-        {markerPositions.map(({ index, coordinate, realCoordinate, clusterKey, isCluster }) => {
-          const appointment = coords[index];
-          if (!appointment) return null;
-          const anyCompleted = appointment.status === 'completed';
-          const isLate = legStress[index] === 'late';
-          const bgColor = anyCompleted ? '#808080' : isLate ? '#D13438' : MS_BLUE;
-          const eta = etas[index];
-          const isFocused = isCluster && clusterKey != null && clusterKey === focusedClusterKey;
-          // Android: use default pin only (custom Marker views often don't render)
-          if (Platform.OS === 'android') {
-            return (
-              <Marker
-                key={`waypoint-${index}`}
-                coordinate={coordinate}
-                pinColor={anyCompleted ? '#808080' : isLate ? '#D13438' : MS_BLUE}
-                title={String(index + 1)}
-                description={appointment.title ?? appointment.location ?? ''}
-                onPress={() => {
-                  handleWaypointPress(index, realCoordinate ?? coordinate, clusterKey, isCluster);
-                }}
-              />
-            );
-          }
-          const waypointTracksView = true;
-          return (
-            <Marker
-              key={`waypoint-${index}`}
-              coordinate={coordinate}
-              anchor={{ x: 0.5, y: 0.5 }}
-              tracksViewChanges={waypointTracksView}
-              onPress={() => {
-                handleWaypointPress(index, realCoordinate ?? coordinate, clusterKey, isCluster);
-              }}
-            >
-              <View style={styles.markerWithEta}>
-                {eta != null && (
-                  <View style={styles.markerEtaBadge}>
-                    <Text style={styles.markerEtaText}>{formatTime(eta)}</Text>
-                  </View>
-                )}
-                <View
-                  style={[
-                    styles.markerPin,
-                    styles.markerPinCluster,
-                    isFocused && styles.markerPinFocused,
-                    { backgroundColor: bgColor },
-                  ]}
+                </Marker>
+              );
+            })()}
+            {markerPositions.map(
+              ({ index, coordinate, realCoordinate }) =>
+                realCoordinate != null && (
+                  <Polyline
+                    key={`connector-${index}`}
+                    coordinates={[coordinate, realCoordinate]}
+                    strokeColor="#64748b"
+                    strokeWidth={2}
+                    lineDashPattern={[4, 4]}
+                  />
+                )
+            )}
+            {markerPositions.map(({ index, coordinate, realCoordinate, clusterKey, isCluster }) => {
+              const appointment = coords[index];
+              if (!appointment) return null;
+              const anyCompleted = appointment.status === 'completed';
+              const isLate = legStress[index] === 'late';
+              const bgColor = anyCompleted ? '#808080' : isLate ? '#D13438' : MS_BLUE;
+              const eta = etas[index];
+              const isFocused = isCluster && clusterKey != null && clusterKey === focusedClusterKey;
+              // Android: use default pin only (custom Marker views often don't render)
+              if (Platform.OS === 'android') {
+                return (
+                  <Marker
+                    key={`waypoint-${index}`}
+                    coordinate={coordinate}
+                    pinColor={anyCompleted ? '#808080' : isLate ? '#D13438' : MS_BLUE}
+                    title={String(index + 1)}
+                    description={appointment.title ?? appointment.location ?? ''}
+                    onPress={() => {
+                      handleWaypointPress(index, realCoordinate ?? coordinate, clusterKey, isCluster);
+                    }}
+                  />
+                );
+              }
+              const waypointTracksView = true;
+              return (
+                <Marker
+                  key={`waypoint-${index}`}
+                  coordinate={coordinate}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={waypointTracksView}
+                  onPress={() => {
+                    handleWaypointPress(index, realCoordinate ?? coordinate, clusterKey, isCluster);
+                  }}
                 >
-                  <Text style={[styles.markerPinNumber, isFocused && styles.markerPinNumberFocused]}>
-                    {index + 1}
-                  </Text>
-                </View>
-              </View>
-            </Marker>
-          );
-        })}
-        {selectedArrivalLegIndex != null &&
-          osrmRoute?.legs[selectedArrivalLegIndex] && (
-            <Marker
-              key={`leg-${selectedArrivalLegIndex}`}
-              coordinate={osrmRoute.legs[selectedArrivalLegIndex]!.labelPoint}
-              anchor={{ x: 0.5, y: 1 }}
-              tracksViewChanges={Platform.OS === 'android'}
-            >
-              <View style={styles.segmentBubble}>
-                <View style={styles.segmentBubbleContent}>
-                  <Car size={14} color="#3c3c3c" style={styles.segmentBubbleIcon} />
-                  <View>
-                    <Text style={styles.segmentLabelTime}>
-                      {Math.round(osrmRoute.legs[selectedArrivalLegIndex]!.duration / 60)} min
-                    </Text>
-                    <Text style={styles.segmentLabelDist}>
-                      {formatDistance(osrmRoute.legs[selectedArrivalLegIndex]!.distance)}
-                    </Text>
+                  <View style={styles.markerWithEta}>
+                    {eta != null && (
+                      <View style={styles.markerEtaBadge}>
+                        <Text style={styles.markerEtaText}>{formatTime(eta)}</Text>
+                      </View>
+                    )}
+                    <View
+                      style={[
+                        styles.markerPin,
+                        styles.markerPinCluster,
+                        isFocused && styles.markerPinFocused,
+                        { backgroundColor: bgColor },
+                      ]}
+                    >
+                      <Text style={[styles.markerPinNumber, isFocused && styles.markerPinNumberFocused]}>
+                        {index + 1}
+                      </Text>
+                    </View>
                   </View>
-                </View>
-                <View style={styles.segmentBubblePointer}>
-                  <Svg width={24} height={12} viewBox="0 0 24 12">
-                    <Path d="M 0 0 L 18 0 L 12 12 Z" fill="#fff" />
-                  </Svg>
-                </View>
-              </View>
-            </Marker>
-          )}
+                </Marker>
+              );
+            })}
+            {selectedArrivalLegIndex != null &&
+              osrmRoute?.legs[selectedArrivalLegIndex] && (
+                <Marker
+                  key={`leg-${selectedArrivalLegIndex}`}
+                  coordinate={osrmRoute.legs[selectedArrivalLegIndex]!.labelPoint}
+                  anchor={{ x: 0.5, y: 1 }}
+                  tracksViewChanges={Platform.OS === 'android'}
+                >
+                  <View style={styles.segmentBubble}>
+                    <View style={styles.segmentBubbleContent}>
+                      <Car size={14} color="#3c3c3c" style={styles.segmentBubbleIcon} />
+                      <View>
+                        <Text style={styles.segmentLabelTime}>
+                          {Math.round(osrmRoute.legs[selectedArrivalLegIndex]!.duration / 60)} min
+                        </Text>
+                        <Text style={styles.segmentLabelDist}>
+                          {formatDistance(osrmRoute.legs[selectedArrivalLegIndex]!.distance)}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.segmentBubblePointer}>
+                      <Svg width={24} height={12} viewBox="0 0 24 12">
+                        <Path d="M 0 0 L 18 0 L 12 12 Z" fill="#fff" />
+                      </Svg>
+                    </View>
+                  </View>
+                </Marker>
+              )}
           </>
         )}
       </MapView>
       {selectedWaypointIndices &&
         selectedWaypointIndices.length > 0 &&
         selectedWaypointIndices.every((i) => coords[i] != null) && (
-        <View style={[styles.bottomCardContainer, { pointerEvents: 'box-none' }]}>
-          <View style={[styles.selectedCalloutCard, styles.bottomCard]}>
-            {selectedWaypointIndices.length === 1 ? (
-              <ScrollView
-                style={styles.bottomCardScroll}
-                contentContainerStyle={styles.bottomCardScrollContent}
-                showsVerticalScrollIndicator={true}
-                nestedScrollEnabled
-              >
-                {(() => {
-                  const idx = selectedWaypointIndices[0]!;
-                  const appt = coords[idx];
-                  if (!appt) return null;
-                  const eta = etas[idx];
-                  const duration = meetingDurations[idx];
-                  return (
-                    <>
-                      <Text style={styles.calloutTitle}>{appt.title ?? 'Meeting'}</Text>
-                      {appt.location ? (
-                        <Text style={styles.calloutAddress}>{appt.location}</Text>
-                      ) : null}
-                      {eta != null && (
-                        <Text style={styles.calloutDescription}>
-                          ETA {formatTime(eta)}
-                          {duration ? ` · ${duration}` : ''}
-                        </Text>
-                      )}
-                      <View style={styles.calloutActions}>
-                        <TouchableOpacity
-                          style={styles.calloutAction}
-                          onPress={() =>
-                            openNativeDirections(
-                              appt.coordinates.latitude,
-                              appt.coordinates.longitude,
-                              appt.title
-                            )
-                          }
-                        >
-                          <Text style={styles.calloutLink}>Open in Maps</Text>
-                        </TouchableOpacity>
-                        {appt.phone ? (
-                          <TouchableOpacity
-                            style={[styles.calloutAction, styles.calloutActionCall]}
-                            onPress={() => Linking.openURL(`tel:${appt.phone}`)}
-                          >
-                            <Phone size={20} color={MS_BLUE} />
-                            <Text style={[styles.calloutLink, styles.calloutLinkPhone]}>Call</Text>
-                          </TouchableOpacity>
-                        ) : null}
-                      </View>
-                      <TouchableOpacity
-                        style={styles.calloutAction}
-                        onPress={clearSelection}
-                      >
-                        <Text style={styles.calloutLink}>Close</Text>
-                      </TouchableOpacity>
-                    </>
-                  );
-                })()}
-              </ScrollView>
-            ) : (
-              <>
-                <Text style={styles.clusterSheetTitle}>
-                  {selectedWaypointIndices.length} waypoints at this location
-                </Text>
-                <ScrollView style={styles.clusterSheetList} nestedScrollEnabled>
-                  {selectedWaypointIndices.map((idx) => {
+          <View style={[styles.bottomCardContainer, { pointerEvents: 'box-none' }]}>
+            <View style={[styles.selectedCalloutCard, styles.bottomCard]}>
+              {selectedWaypointIndices.length === 1 ? (
+                <ScrollView
+                  style={styles.bottomCardScroll}
+                  contentContainerStyle={styles.bottomCardScrollContent}
+                  showsVerticalScrollIndicator={true}
+                  nestedScrollEnabled
+                >
+                  {(() => {
+                    const idx = selectedWaypointIndices[0]!;
                     const appt = coords[idx];
                     if (!appt) return null;
-                    const apptEta = etas[idx];
+                    const eta = etas[idx];
                     const duration = meetingDurations[idx];
                     return (
-                      <View key={appt.id} style={styles.clusterSheetItem}>
-                        <Text style={styles.calloutTitle}>
-                          {idx + 1}. {appt.title ?? 'Meeting'}
-                        </Text>
+                      <>
+                        <Text style={styles.calloutTitle}>{appt.title ?? 'Meeting'}</Text>
                         {appt.location ? (
                           <Text style={styles.calloutAddress}>{appt.location}</Text>
                         ) : null}
-                        <Text style={styles.calloutDescription}>
-                          {appt.time}
-                          {apptEta != null && ` · ETA ${formatTime(apptEta)}`}
-                          {duration ? ` · ${duration}` : ''}
-                        </Text>
+                        {eta != null && (
+                          <Text style={styles.calloutDescription}>
+                            ETA {formatTime(eta)}
+                            {duration ? ` · ${duration}` : ''}
+                          </Text>
+                        )}
                         <View style={styles.calloutActions}>
                           <TouchableOpacity
                             style={styles.calloutAction}
@@ -800,21 +768,78 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
                             </TouchableOpacity>
                           ) : null}
                         </View>
-                      </View>
+                        <TouchableOpacity
+                          style={styles.calloutAction}
+                          onPress={clearSelection}
+                        >
+                          <Text style={styles.calloutLink}>Close</Text>
+                        </TouchableOpacity>
+                      </>
                     );
-                  })}
+                  })()}
                 </ScrollView>
-                <TouchableOpacity
-                  style={styles.calloutAction}
-                  onPress={clearSelection}
-                >
-                  <Text style={styles.calloutLink}>Close</Text>
-                </TouchableOpacity>
-              </>
-            )}
+              ) : (
+                <>
+                  <Text style={styles.clusterSheetTitle}>
+                    {selectedWaypointIndices.length} waypoints at this location
+                  </Text>
+                  <ScrollView style={styles.clusterSheetList} nestedScrollEnabled>
+                    {selectedWaypointIndices.map((idx) => {
+                      const appt = coords[idx];
+                      if (!appt) return null;
+                      const apptEta = etas[idx];
+                      const duration = meetingDurations[idx];
+                      return (
+                        <View key={appt.id} style={styles.clusterSheetItem}>
+                          <Text style={styles.calloutTitle}>
+                            {idx + 1}. {appt.title ?? 'Meeting'}
+                          </Text>
+                          {appt.location ? (
+                            <Text style={styles.calloutAddress}>{appt.location}</Text>
+                          ) : null}
+                          <Text style={styles.calloutDescription}>
+                            {appt.time}
+                            {apptEta != null && ` · ETA ${formatTime(apptEta)}`}
+                            {duration ? ` · ${duration}` : ''}
+                          </Text>
+                          <View style={styles.calloutActions}>
+                            <TouchableOpacity
+                              style={styles.calloutAction}
+                              onPress={() =>
+                                openNativeDirections(
+                                  appt.coordinates.latitude,
+                                  appt.coordinates.longitude,
+                                  appt.title
+                                )
+                              }
+                            >
+                              <Text style={styles.calloutLink}>Open in Maps</Text>
+                            </TouchableOpacity>
+                            {appt.phone ? (
+                              <TouchableOpacity
+                                style={[styles.calloutAction, styles.calloutActionCall]}
+                                onPress={() => Linking.openURL(`tel:${appt.phone}`)}
+                              >
+                                <Phone size={20} color={MS_BLUE} />
+                                <Text style={[styles.calloutLink, styles.calloutLinkPhone]}>Call</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                  <TouchableOpacity
+                    style={styles.calloutAction}
+                    onPress={clearSelection}
+                  >
+                    <Text style={styles.calloutLink}>Close</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
           </View>
-        </View>
-      )}
+        )}
     </View>
   );
 }

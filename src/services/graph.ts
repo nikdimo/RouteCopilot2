@@ -1,6 +1,8 @@
 import * as Location from 'expo-location';
 import { Platform } from 'react-native';
+import { MS_CLIENT_ID } from '../config/auth';
 import type { EventStatus } from '../types';
+import { getValidGraphToken, isGraphAccessToken } from './graphAuth';
 import { geocodeAddress, geocodeContactAddress } from '../utils/geocoding';
 
 /** Thrown when Graph API returns 401 Unauthorized - token is expired or invalid */
@@ -193,12 +195,15 @@ function mapEventSync(ev: GraphEvent): CalendarEvent {
 }
 
 /** Geocode all events in parallel that have an address but no coordinates. */
-async function geocodeEventsAsync(events: CalendarEvent[]): Promise<CalendarEvent[]> {
+async function geocodeEventsAsync(
+  events: CalendarEvent[],
+  authToken?: string
+): Promise<CalendarEvent[]> {
   const needGeocode = events.filter((ev) => !ev.coordinates && (ev.location?.trim() ?? '') !== '');
   if (needGeocode.length === 0) return events;
 
   if (Platform.OS !== 'web') {
-    await Location.requestForegroundPermissionsAsync().catch(() => {});
+    await Location.requestForegroundPermissionsAsync().catch(() => { });
   }
 
   const enriched = await Promise.all(
@@ -207,7 +212,7 @@ async function geocodeEventsAsync(events: CalendarEvent[]): Promise<CalendarEven
       if (!addr) return ev;
       let coordinates: { latitude: number; longitude: number } | undefined;
       if (Platform.OS === 'web') {
-        const result = await geocodeAddress(addr);
+        const result = await geocodeAddress(addr, { authToken });
         if (result.success) coordinates = { latitude: result.lat, longitude: result.lon };
       } else {
         try {
@@ -217,7 +222,7 @@ async function geocodeEventsAsync(events: CalendarEvent[]): Promise<CalendarEven
           }
         } catch { /* native failed */ }
         if (!coordinates) {
-          const fallback = await geocodeAddress(addr);
+          const fallback = await geocodeAddress(addr, { authToken });
           if (fallback.success) coordinates = { latitude: fallback.lat, longitude: fallback.lon };
         }
       }
@@ -230,11 +235,18 @@ async function geocodeEventsAsync(events: CalendarEvent[]): Promise<CalendarEven
 }
 
 /** Full single-event mapping with geocoding (used by create/update flows). */
-async function mapEventAsync(ev: GraphEvent): Promise<CalendarEvent> {
+async function mapEventAsync(ev: GraphEvent, authToken?: string): Promise<CalendarEvent> {
   const raw = mapEventSync(ev);
   if (raw.coordinates) return raw;
-  const [withCoords] = await geocodeEventsAsync([raw]);
+  const [withCoords] = await geocodeEventsAsync([raw], authToken);
   return withCoords ?? raw;
+}
+
+async function resolveGraphToken(candidateToken: string | null | undefined) {
+  if (candidateToken && isGraphAccessToken(candidateToken)) {
+    return candidateToken;
+  }
+  return getValidGraphToken(MS_CLIENT_ID);
 }
 
 /** Fetch raw Graph calendar events and map them synchronously (no geocoding, no enrichment). */
@@ -264,6 +276,11 @@ async function _fetchGraphEventsInternal(
   startDate: Date,
   endDate: Date
 ): Promise<CalendarEvent[]> {
+  const graphToken = await resolveGraphToken(token);
+  if (!graphToken) {
+    return [];
+  }
+
   const start = startDate.toISOString();
   const end = endDate.toISOString();
   const params = new URLSearchParams({
@@ -275,7 +292,7 @@ async function _fetchGraphEventsInternal(
   const baseUrl = `https://graph.microsoft.com/v1.0/me/calendarview?${params.toString()}`;
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${graphToken}`,
     Prefer: `outlook.timezone="${tz}"`,
   };
 
@@ -316,7 +333,7 @@ export async function enrichCalendarEventsAll(
   token: string,
   events: CalendarEvent[]
 ): Promise<CalendarEvent[]> {
-  const geocoded = await geocodeEventsAsync(events);
+  const geocoded = await geocodeEventsAsync(events, token);
   try {
     const [withAddresses, withInfo] = await Promise.all([
       enrichCalendarEventsWithContactAddresses(token, geocoded),
@@ -435,8 +452,13 @@ export async function enrichCalendarEventsWithContactAddresses(
       const contact = exactMatch ?? result.contacts.find((c) => c.hasAddress);
       if (!contact?.hasAddress || !contact.formattedAddress) return;
 
-      const geocodeResult = await geocodeContactAddress(contact.formattedAddress, contact.bestAddress);
-      if (!geocodeResult.success) return;
+      const geocodeResult = await geocodeContactAddress(
+        contact.formattedAddress,
+        contact.bestAddress,
+        { authToken: token }
+      );
+      // Don't use home fallback for calendar enrichment — avoids clustering all points at home when geocoding fails (e.g. on first load on mobile).
+      if (!geocodeResult.success || geocodeResult.usedFallback) return;
 
       locationToEnriched.set(loc, {
         location: contact.formattedAddress,
@@ -492,6 +514,14 @@ export async function createCalendarEvent(
   token: string,
   input: CreateEventInput
 ): Promise<CreateEventResult> {
+  const graphToken = await resolveGraphToken(token);
+  if (!graphToken) {
+    return {
+      success: false,
+      error: 'Connect Outlook to enable calendar sync.',
+    };
+  }
+
   const url = 'https://graph.microsoft.com/v1.0/me/events';
   const start = toGraphDateTime(input.startIso);
   const end = toGraphDateTime(input.endIso);
@@ -505,7 +535,7 @@ export async function createCalendarEvent(
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${graphToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -525,7 +555,7 @@ export async function createCalendarEvent(
     return { success: false, error: txt || `HTTP ${res.status}` };
   }
   const graphEv = (await res.json()) as GraphEvent;
-  const event = await mapEventAsync(graphEv);
+  const event = await mapEventAsync(graphEv, graphToken);
   return { success: true, event };
 }
 
@@ -542,6 +572,14 @@ export async function updateCalendarEvent(
   if (eventId.startsWith('local-')) {
     return { success: false, error: 'Cannot sync local-only event to Outlook' };
   }
+  const graphToken = await resolveGraphToken(token);
+  if (!graphToken) {
+    return {
+      success: false,
+      error: 'Connect Outlook to enable calendar sync.',
+    };
+  }
+
   const url = `https://graph.microsoft.com/v1.0/me/events/${eventId}`;
   const body: Record<string, unknown> = {};
   if (patch.subject != null) body.subject = patch.subject;
@@ -554,7 +592,7 @@ export async function updateCalendarEvent(
   const res = await fetch(url, {
     method: 'PATCH',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${graphToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -568,7 +606,7 @@ export async function updateCalendarEvent(
     return { success: false, error: txt || `HTTP ${res.status}` };
   }
   const graphEv = (await res.json()) as GraphEvent;
-  const event = await mapEventAsync(graphEv);
+  const event = await mapEventAsync(graphEv, graphToken);
   return { success: true, event };
 }
 
@@ -584,8 +622,19 @@ export async function deleteCalendarEvent(
   if (eventId.startsWith('local-')) {
     return { success: false, error: 'Cannot delete local-only event from Outlook' };
   }
+  const graphToken = await resolveGraphToken(token);
+  if (!graphToken) {
+    return {
+      success: false,
+      error: 'Connect Outlook to enable calendar sync.',
+    };
+  }
+
   const url = `https://graph.microsoft.com/v1.0/me/events/${eventId}`;
-  const res = await fetch(url, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${graphToken}` },
+  });
   if (res.status === 401) throw new GraphUnauthorizedError();
   if (res.status === 403) {
     return { success: false, error: 'Calendar write permission denied', needsConsent: true };
@@ -612,6 +661,14 @@ export async function createContact(
   token: string,
   input: CreateContactInput
 ): Promise<CreateContactResult> {
+  const graphToken = await resolveGraphToken(token);
+  if (!graphToken) {
+    return {
+      success: false,
+      error: 'Connect Outlook to enable contact sync.',
+    };
+  }
+
   const url = 'https://graph.microsoft.com/v1.0/me/contacts';
   const body: Record<string, unknown> = {};
   if (input.givenName) body.givenName = input.givenName;
@@ -619,16 +676,17 @@ export async function createContact(
   if (input.displayName) body.displayName = input.displayName;
   if (input.companyName) body.companyName = input.companyName;
   if (input.businessPhones?.length) body.businessPhones = input.businessPhones;
-  if (input.emailAddresses?.length)
+  if (input.emailAddresses?.length) {
     body.emailAddresses = input.emailAddresses.map((e) => ({
       address: e.address,
       name: e.name ?? e.address,
     }));
+  }
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${graphToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -767,31 +825,36 @@ async function _doSearchContacts(
   token: string,
   q: string
 ): Promise<SearchContactsResult> {
+  const graphToken = await resolveGraphToken(token);
+  if (!graphToken) {
+    return {
+      success: false,
+      error:
+        'Connect Outlook to sync contacts. You can still search by address.',
+    };
+  }
+
   const select =
     'id,displayName,givenName,surname,companyName,businessPhones,homePhones,mobilePhone,emailAddresses,homeAddress,businessAddress,otherAddress';
 
-  // Fast path: server-side $search (returns top 25, avoids downloading 500 contacts)
   const searchUrl = `https://graph.microsoft.com/v1.0/me/contacts?$search="${encodeURIComponent(q)}"&$top=25&$select=${encodeURIComponent(select)}`;
   try {
     const searchRes = await fetchWithRetry(searchUrl, {
-      headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' },
+      headers: { Authorization: `Bearer ${graphToken}`, ConsistencyLevel: 'eventual' },
     });
     if (searchRes.ok) {
       const searchData = (await searchRes.json()) as { value?: GraphContact[] };
       const contacts = _mapGraphContacts(searchData.value ?? [], q);
       if (contacts.length > 0) return { success: true, contacts };
-      // $search returned empty — fall through to full fetch for partial matches
     }
-    // $search not supported or returned nothing — fall through
   } catch {
-    // network error on fast path — fall through
+    // Fall through to full fetch path.
   }
 
-  // Fallback: full fetch + client-side filter
   const url = `https://graph.microsoft.com/v1.0/me/contacts?$top=500&$select=${encodeURIComponent(select)}`;
   try {
     const res = await fetchWithRetry(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${graphToken}` },
     });
 
     if (res.status === 401) {

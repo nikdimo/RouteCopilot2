@@ -1,0 +1,864 @@
+import React, { useState, useEffect, useMemo } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TextInput,
+  TouchableOpacity,
+  Switch,
+  Alert,
+} from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import Slider from "@react-native-community/slider";
+import { useAuth } from "../context/AuthContext";
+import { useUserPreferences } from "../context/UserPreferencesContext";
+import LocationSearch, {
+  type LocationSelection,
+} from "../components/LocationSearch";
+import { searchContacts } from "../services/graph";
+import AuthPromptModal from "../components/AuthPromptModal";
+import {
+  getEffectiveSubscriptionTier,
+  getTierEntitlements,
+} from "../utils/subscription";
+import {
+  geocodeAddress,
+  geocodeContactAddress,
+  getAddressSuggestions,
+  getAddressSuggestionsGoogle,
+  getCoordsForPlaceId,
+  geocodeAddressGoogle,
+} from "../utils/geocoding";
+import {
+  DEFAULT_WORKING_DAYS,
+  DEFAULT_USER_PREFERENCES,
+  type WorkingDays,
+} from "../types";
+
+const LOCAL_DATA_EXACT_KEYS = new Set([
+  "wiseplanAuthToken",
+  "wiseplan_userPreferences",
+  "routeCopilot_userPreferences",
+  "wiseplan_localMeetings_v1",
+  "wiseplan_meetingCounts",
+  "wiseplan_completedEventIds",
+  "wiseplan.billing.token",
+]);
+
+const LOCAL_DATA_PREFIXES = [
+  "wiseplan_dayOrder_",
+  "wiseplan_geocode_",
+  "wiseplan_osrm_",
+  "routecopilot_geocode_",
+];
+
+function isLocalDataKey(key: string): boolean {
+  if (LOCAL_DATA_EXACT_KEYS.has(key)) return true;
+  return LOCAL_DATA_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+function parseNumber(s: string, min: number, max: number): number {
+  const n = parseInt(s, 10);
+  if (isNaN(n)) return min;
+  return Math.min(max, Math.max(min, n));
+}
+
+/** 5-min slot index 0–287: 0 = 00:00, 287 = 23:55 */
+const SLOTS_PER_HOUR = 12; // 60/5
+const MAX_SLOT = 24 * SLOTS_PER_HOUR - 1; // 287
+
+function timeToSlot(time: string): number {
+  const m = time.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return 96; // default 08:00
+  const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+  const min = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+  const slot = h * SLOTS_PER_HOUR + Math.round(min / 5);
+  return Math.min(MAX_SLOT, Math.max(0, slot));
+}
+
+function slotToTime(slot: number): string {
+  const s = Math.min(MAX_SLOT, Math.max(0, Math.round(slot)));
+  const totalMin = s * 5;
+  const h = Math.floor(totalMin / 60);
+  const min = totalMin % 60;
+  return `${h.toString().padStart(2, "0")}:${min.toString().padStart(2, "0")}`;
+}
+
+export default function ProfileScreen() {
+  const { userToken, getValidToken, signOut } = useAuth();
+  const { preferences, updatePreferences } = useUserPreferences();
+  const [preBuffer, setPreBuffer] = useState(
+    (preferences.preMeetingBuffer ?? 15).toString(),
+  );
+  const [postBuffer, setPostBuffer] = useState(
+    (preferences.postMeetingBuffer ?? 15).toString(),
+  );
+  const [distanceThreshold, setDistanceThreshold] = useState(
+    () =>
+      Math.round(
+        Math.min(100, Math.max(0, preferences.distanceThresholdKm ?? 30)) / 10,
+      ) * 10,
+  );
+  const [workStartSlot, setWorkStartSlot] = useState(() =>
+    timeToSlot(preferences.workingHours?.start ?? "08:00"),
+  );
+  const [workEndSlot, setWorkEndSlot] = useState(() =>
+    timeToSlot(preferences.workingHours?.end ?? "17:00"),
+  );
+  const [googleApiKeyInput, setGoogleApiKeyInput] = useState(
+    preferences.googleMapsApiKey ?? "",
+  );
+  const [authModalVisible, setAuthModalVisible] = useState(false);
+  const [authModalTitle, setAuthModalTitle] = useState("Sync your data");
+  const [authModalSubtitle, setAuthModalSubtitle] = useState(
+    "Sign in to keep your routes synced across devices and back up your data.",
+  );
+
+  const subscriptionTier = getEffectiveSubscriptionTier(
+    preferences,
+    Boolean(userToken),
+  );
+  const { canUseBetterGeocoding, canSyncCalendar, canUseTrafficAwareRouting } =
+    getTierEntitlements(subscriptionTier);
+
+  const workingDays = preferences.workingDays ?? DEFAULT_WORKING_DAYS;
+  const useGoogle =
+    canUseBetterGeocoding && preferences.useGoogleGeocoding === true;
+  const googleApiKey = (preferences.googleMapsApiKey ?? "").trim();
+  const useGoogleWithKey = useGoogle && googleApiKey.length > 0;
+
+  const token = canSyncCalendar ? (userToken ?? null) : null;
+
+  const promptSignIn = (title: string, subtitle: string) => {
+    setAuthModalTitle(title);
+    setAuthModalSubtitle(subtitle);
+    setAuthModalVisible(true);
+  };
+
+  const homeBaseSelection: LocationSelection = useMemo(() => {
+    const hb = preferences.homeBase;
+    const label = preferences.homeBaseLabel?.trim();
+    if (hb && label) {
+      return {
+        type: "address",
+        address: label,
+        coords: { lat: hb.lat, lon: hb.lon },
+      };
+    }
+    return { type: "none" };
+  }, [preferences.homeBase, preferences.homeBaseLabel]);
+
+  const handleHomeBaseChange = (sel: LocationSelection) => {
+    if (sel.type === "contact" && sel.contact.hasAddress) {
+      updatePreferences({
+        homeBase: { lat: sel.coords.lat, lon: sel.coords.lon },
+        homeBaseLabel: sel.contact.formattedAddress || sel.contact.displayName,
+      });
+    } else if (sel.type === "address") {
+      updatePreferences({
+        homeBase: { lat: sel.coords.lat, lon: sel.coords.lon },
+        homeBaseLabel: sel.address,
+      });
+    } else if (sel.type === "none") {
+      updatePreferences({
+        homeBase: undefined,
+        homeBaseLabel: undefined,
+      });
+    }
+  };
+
+  useEffect(() => {
+    const pre = Math.round((preferences.preMeetingBuffer ?? 15) / 5) * 5;
+    const post = Math.round((preferences.postMeetingBuffer ?? 15) / 5) * 5;
+    setPreBuffer(pre.toString());
+    setPostBuffer(post.toString());
+    setDistanceThreshold(
+      Math.round(
+        Math.min(100, Math.max(0, preferences.distanceThresholdKm ?? 30)) / 10,
+      ) * 10,
+    );
+    setWorkStartSlot(timeToSlot(preferences.workingHours?.start ?? "08:00"));
+    setWorkEndSlot(timeToSlot(preferences.workingHours?.end ?? "17:00"));
+    setGoogleApiKeyInput(preferences.googleMapsApiKey ?? "");
+  }, [preferences]);
+
+  const savePreBuffer = () => {
+    const n = Math.round(parseNumber(preBuffer, 0, 60) / 5) * 5;
+    updatePreferences({ preMeetingBuffer: n });
+    setPreBuffer(n.toString());
+  };
+
+  const savePostBuffer = () => {
+    const n = Math.round(parseNumber(postBuffer, 0, 60) / 5) * 5;
+    updatePreferences({ postMeetingBuffer: n });
+    setPostBuffer(n.toString());
+  };
+
+  const saveDistanceThreshold = (value: number) => {
+    const n = Math.round(Math.min(100, Math.max(0, value)) / 10) * 10;
+    updatePreferences({ distanceThresholdKm: n });
+    setDistanceThreshold(n);
+  };
+
+  const handleForceSignOut = () => {
+    setAuthModalVisible(false);
+    signOut();
+    Alert.alert("Signed out", "Session token cleared on this device.");
+  };
+
+  const clearLocalDataNow = async () => {
+    setAuthModalVisible(false);
+    signOut();
+
+    try {
+      const keys = await AsyncStorage.getAllKeys();
+      const keysToRemove = keys.filter((key) => isLocalDataKey(key));
+      if (keysToRemove.length > 0) {
+        await AsyncStorage.multiRemove(keysToRemove);
+      }
+    } catch {
+      // ignore async-storage cleanup failures
+    }
+
+    if (typeof window !== "undefined" && window.localStorage) {
+      try {
+        const webKeys: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i += 1) {
+          const key = window.localStorage.key(i);
+          if (key && isLocalDataKey(key)) {
+            webKeys.push(key);
+          }
+        }
+        for (const key of webKeys) {
+          window.localStorage.removeItem(key);
+        }
+      } catch {
+        // ignore web localStorage cleanup failures
+      }
+    }
+
+    updatePreferences(DEFAULT_USER_PREFERENCES);
+    Alert.alert(
+      "Local data cleared",
+      "Local routes, preferences, caches, and session data were removed from this device.",
+    );
+  };
+
+  const handleClearLocalData = () => {
+    Alert.alert(
+      "Clear local data?",
+      "This removes local meetings, preferences, caches, and local session data on this device.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: () => {
+            clearLocalDataNow().catch(() => {
+              Alert.alert(
+                "Clear failed",
+                "Could not clear all local data. Try again.",
+              );
+            });
+          },
+        },
+      ],
+    );
+  };
+
+  const saveWorkingHours = (startSlot: number, endSlot: number) => {
+    const start = slotToTime(startSlot);
+    const end = slotToTime(endSlot);
+    // Ensure start < end; if not, clamp end to start + 1 slot
+    const startVal = startSlot;
+    const endVal =
+      endSlot <= startVal ? Math.min(MAX_SLOT, startVal + 1) : endSlot;
+    updatePreferences({
+      workingHours: { start: slotToTime(startVal), end: slotToTime(endVal) },
+    });
+    setWorkStartSlot(startVal);
+    setWorkEndSlot(endVal);
+  };
+
+  const toggleWorkingDay = (dayIndex: number) => {
+    const next: WorkingDays = [...workingDays] as WorkingDays;
+    next[dayIndex] = !next[dayIndex];
+    updatePreferences({ workingDays: next });
+  };
+
+  const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {userToken ? (
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Account</Text>
+          <Text style={styles.hint}>
+            You are signed in to your Wiseplan account.
+          </Text>
+          <TouchableOpacity
+            style={styles.signOutButton}
+            onPress={signOut}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.signOutButtonText}>Sign out</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Guest Mode</Text>
+          <Text style={styles.hint}>
+            Sign in to sync your routes across your devices and keep your data
+            safely backed up.
+          </Text>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={() =>
+              promptSignIn(
+                "Sync your data",
+                "Sign in to keep your routes synced across devices and back up your data.",
+              )
+            }
+            activeOpacity={0.8}
+          >
+            <Text style={styles.primaryButtonText}>
+              Sign In / Create Account
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <Text style={styles.sectionTitle}>Smart Scheduling</Text>
+      <Text style={styles.sectionSubtitle}>
+        These settings drive how the app suggests visit times.
+      </Text>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Home Base (Start/End Address)</Text>
+        <Text style={styles.hint}>
+          Search contacts or addresses, same as when creating meetings. Tap the
+          X to clear, or tap the field and type to change.
+        </Text>
+        <LocationSearch
+          token={token}
+          searchContacts={async (t, q) => {
+            const r = await searchContacts(t, q);
+            return {
+              success: r.success,
+              contacts: r.success ? r.contacts : undefined,
+              error: !r.success ? r.error : undefined,
+              needsConsent: !r.success ? r.needsConsent : undefined,
+            };
+          }}
+          getAddressSuggestions={async (q) => {
+            if (useGoogleWithKey) {
+              const r = await getAddressSuggestionsGoogle(q, googleApiKey);
+              return {
+                success: r.success,
+                suggestions: r.success ? r.suggestions : undefined,
+                error: !r.success ? r.error : undefined,
+              };
+            }
+            const r = await getAddressSuggestions(q);
+            return {
+              success: r.success,
+              suggestions: r.success ? r.suggestions : undefined,
+              error: !r.success ? r.error : undefined,
+            };
+          }}
+          geocodeAddress={async (addr) => {
+            if (useGoogleWithKey) {
+              const r = await geocodeAddressGoogle(addr, googleApiKey);
+              return {
+                success: r.success,
+                lat: r.success ? r.lat : undefined,
+                lon: r.success ? r.lon : undefined,
+                fromCache: r.success ? r.fromCache : undefined,
+                error: !r.success ? r.error : undefined,
+              };
+            }
+            const r = await geocodeAddress(addr);
+            return {
+              success: r.success,
+              lat: r.success ? r.lat : undefined,
+              lon: r.success ? r.lon : undefined,
+              fromCache: r.success ? r.fromCache : undefined,
+              error: !r.success ? r.error : undefined,
+            };
+          }}
+          getCoordsForPlaceId={
+            useGoogleWithKey
+              ? async (placeId) => {
+                  const r = await getCoordsForPlaceId(placeId, googleApiKey);
+                  return r.success
+                    ? { lat: r.lat, lon: r.lon }
+                    : { error: r.error };
+                }
+              : undefined
+          }
+          geocodeContactAddress={async (addr, parts) => {
+            if (useGoogleWithKey) {
+              const r = await geocodeAddressGoogle(addr, googleApiKey);
+              return {
+                success: r.success,
+                lat: r.success ? r.lat : undefined,
+                lon: r.success ? r.lon : undefined,
+                fromCache: r.success ? r.fromCache : undefined,
+                error: !r.success ? r.error : undefined,
+              };
+            }
+            const r = await geocodeContactAddress(addr, parts);
+            return {
+              success: r.success,
+              lat: r.success ? r.lat : undefined,
+              lon: r.success ? r.lon : undefined,
+              fromCache: r.success ? r.fromCache : undefined,
+              error: !r.success ? r.error : undefined,
+            };
+          }}
+          selection={homeBaseSelection}
+          onSelectionChange={handleHomeBaseChange}
+          placeholder="Search contacts or address (e.g. Copenhagen, Office)"
+        />
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Start and end from home base</Text>
+        <Text style={styles.hint}>
+          {preferences.alwaysStartFromHomeBase !== false
+            ? "On — the app assumes you drive from home to your first meeting and back home after your last meeting each day. Travel time to and from home is counted when calculating available slots."
+            : "Off — field travel mode. Your first meeting can start exactly at your work start time and your last can end at work end time. Use this when you stay overnight in the field and are not driving home each evening."}
+        </Text>
+        <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>
+            {preferences.alwaysStartFromHomeBase !== false
+              ? "On (commute daily)"
+              : "Off (staying in field)"}
+          </Text>
+          <Switch
+            value={preferences.alwaysStartFromHomeBase !== false}
+            onValueChange={(value) =>
+              updatePreferences({ alwaysStartFromHomeBase: value })
+            }
+            trackColor={{ false: "#E1DFDD", true: "#0078D4" }}
+            thumbColor="#fff"
+          />
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Use Google for address search</Text>
+        <Text style={styles.hint}>
+          {useGoogle
+            ? "When on, address search (above and when adding meetings) uses Google Places and Geocoding APIs. You need a Google Cloud API key with Places API (New) and Geocoding API enabled. Google gives more accurate suggestions and geocoding; the free option uses OpenStreetMap (Nominatim) and requires no key."
+            : "When off, address search uses the free OpenStreetMap (Nominatim) service—no API key needed. Turn on to use Google instead for more accurate suggestions and geocoding (requires a Google API key below)."}
+        </Text>
+        <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>
+            {useGoogle ? "On (Google)" : "Off (free OSM)"}
+          </Text>
+          <Switch
+            value={useGoogle}
+            onValueChange={(value) => {
+              if (value && !canUseBetterGeocoding) {
+                promptSignIn(
+                  "Premium Feature",
+                  "This is a Pro feature. If you already have a subscription, sign in to sync your access.",
+                );
+                return;
+              }
+              updatePreferences({ useGoogleGeocoding: value });
+            }}
+            trackColor={{ false: "#E1DFDD", true: "#0078D4" }}
+            thumbColor="#fff"
+          />
+        </View>
+        {useGoogle && (
+          <>
+            <Text style={[styles.hint, styles.apiKeyHint]}>
+              Create a key in Google Cloud Console: APIs & Services →
+              Credentials → Create credentials → API key. Enable “Places API
+              (New)” and “Geocoding API” for the key Billing must be enabled on
+              the project (free tier available). If suggestions don't appear,
+              check the error under the search field.
+            </Text>
+            <TextInput
+              style={[styles.input, styles.fullInput]}
+              value={googleApiKeyInput}
+              onChangeText={setGoogleApiKeyInput}
+              onBlur={() =>
+                updatePreferences({
+                  googleMapsApiKey: googleApiKeyInput.trim(),
+                })
+              }
+              placeholder="Paste your Google API key here"
+              placeholderTextColor="#94a3b8"
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry={false}
+            />
+          </>
+        )}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Pre-Meeting Buffer</Text>
+        <Text style={styles.hint}>
+          Minutes reserved before a meeting start (parking, check-in).
+        </Text>
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderValue}>
+            {parseInt(preBuffer, 10) || 0} min
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={60}
+            step={5}
+            value={Math.round((parseInt(preBuffer, 10) || 0) / 5) * 5}
+            onValueChange={(v) => setPreBuffer(String(Math.round(v / 5) * 5))}
+            onSlidingComplete={() => savePreBuffer()}
+            minimumTrackTintColor="#0078D4"
+            maximumTrackTintColor="#E1DFDD"
+            thumbTintColor="#0078D4"
+          />
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Post-Meeting Buffer</Text>
+        <Text style={styles.hint}>
+          Minutes reserved after a meeting end (overrun, wrap-up).
+        </Text>
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderValue}>
+            {parseInt(postBuffer, 10) || 0} min
+          </Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={60}
+            step={5}
+            value={Math.round((parseInt(postBuffer, 10) || 0) / 5) * 5}
+            onValueChange={(v) => setPostBuffer(String(Math.round(v / 5) * 5))}
+            onSlidingComplete={() => savePostBuffer()}
+            minimumTrackTintColor="#0078D4"
+            maximumTrackTintColor="#E1DFDD"
+            thumbTintColor="#0078D4"
+          />
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Max Detour Distance</Text>
+        <Text style={styles.hint}>
+          Same-day slot skipped when detour &gt; threshold km; empty day
+          suggested instead.
+        </Text>
+        <View style={styles.sliderRow}>
+          <Text style={styles.sliderValue}>{distanceThreshold} km</Text>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={100}
+            step={10}
+            value={distanceThreshold}
+            onValueChange={(v) => {
+              const n = Math.round(v / 10) * 10;
+              setDistanceThreshold(n);
+              saveDistanceThreshold(n);
+            }}
+            minimumTrackTintColor="#0078D4"
+            maximumTrackTintColor="#E1DFDD"
+            thumbTintColor="#0078D4"
+          />
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Working Days</Text>
+        <Text style={styles.hint}>
+          Non-working days are excluded from slot suggestions (e.g. Sun/Sat
+          off).
+        </Text>
+        <View style={styles.workingDaysRow}>
+          {DAY_LABELS.map((label, i) => (
+            <TouchableOpacity
+              key={label}
+              style={[styles.dayPill, workingDays[i] && styles.dayPillActive]}
+              onPress={() => toggleWorkingDay(i)}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.dayPillText,
+                  workingDays[i] && styles.dayPillTextActive,
+                ]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Working Hours</Text>
+        <Text style={styles.hint}>
+          No travel or meeting can extend beyond end time. Steps in 5-minute
+          intervals.
+        </Text>
+        <View style={styles.workingHoursSliders}>
+          <View style={styles.sliderBlock}>
+            <Text style={styles.sliderLabel}>Start</Text>
+            <Text style={styles.sliderValue}>{slotToTime(workStartSlot)}</Text>
+            <Slider
+              style={styles.slider}
+              minimumValue={0}
+              maximumValue={MAX_SLOT}
+              step={1}
+              value={workStartSlot}
+              onValueChange={(v) => {
+                const s = Math.round(v);
+                setWorkStartSlot(s);
+                saveWorkingHours(s, workEndSlot);
+              }}
+              minimumTrackTintColor="#0078D4"
+              maximumTrackTintColor="#E1DFDD"
+              thumbTintColor="#0078D4"
+            />
+          </View>
+          <View style={styles.sliderBlock}>
+            <Text style={styles.sliderLabel}>End</Text>
+            <Text style={styles.sliderValue}>{slotToTime(workEndSlot)}</Text>
+            <Slider
+              style={styles.slider}
+              minimumValue={0}
+              maximumValue={MAX_SLOT}
+              step={1}
+              value={workEndSlot}
+              onValueChange={(v) => {
+                const s = Math.round(v);
+                setWorkEndSlot(s);
+                saveWorkingHours(workStartSlot, s);
+              }}
+              minimumTrackTintColor="#0078D4"
+              maximumTrackTintColor="#E1DFDD"
+              thumbTintColor="#0078D4"
+            />
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Session and Data</Text>
+        <Text style={styles.hint}>
+          Recover from stale state or fully reset this device.
+        </Text>
+        <TouchableOpacity
+          style={styles.forceSignOutButton}
+          onPress={handleForceSignOut}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.forceSignOutButtonText}>Force Sign Out</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.signOutButton}
+          onPress={handleClearLocalData}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.signOutButtonText}>Clear Local Data</Text>
+        </TouchableOpacity>
+      </View>
+      <AuthPromptModal
+        visible={authModalVisible}
+        onClose={() => setAuthModalVisible(false)}
+        title={authModalTitle}
+        subtitle={authModalSubtitle}
+      />
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#F3F2F1",
+  },
+  content: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    marginBottom: 4,
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    color: "#605E5C",
+    marginBottom: 20,
+  },
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    marginBottom: 6,
+  },
+  hint: {
+    fontSize: 13,
+    color: "#605E5C",
+    marginBottom: 12,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  sliderRow: {
+    marginTop: 4,
+  },
+  sliderValue: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1a1a1a",
+    marginBottom: 4,
+  },
+  slider: {
+    width: "100%",
+    height: 32,
+  },
+  workingHoursSliders: {
+    marginTop: 8,
+    gap: 16,
+  },
+  sliderBlock: {
+    marginBottom: 8,
+  },
+  sliderLabel: {
+    fontSize: 13,
+    color: "#605E5C",
+    marginBottom: 2,
+  },
+  rowMargin: {
+    marginTop: 8,
+  },
+  input: {
+    backgroundColor: "#E1DFDD",
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: "#1a1a1a",
+    minWidth: 80,
+  },
+  timeInput: {
+    minWidth: 70,
+  },
+  fullInput: {
+    minWidth: "100%",
+  },
+  unit: {
+    fontSize: 14,
+    color: "#605E5C",
+    marginLeft: 10,
+  },
+  dash: {
+    fontSize: 16,
+    color: "#605E5C",
+    marginHorizontal: 10,
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginVertical: 8,
+  },
+  toggleLabel: {
+    fontSize: 15,
+    color: "#1a1a1a",
+    fontWeight: "500",
+  },
+  apiKeyHint: {
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  workingDaysRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 8,
+  },
+  dayPill: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: "#E1DFDD",
+    minWidth: 44,
+    alignItems: "center",
+  },
+  dayPillActive: {
+    backgroundColor: "#0078D4",
+  },
+  dayPillText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#605E5C",
+  },
+  dayPillTextActive: {
+    color: "#fff",
+  },
+  signOutButton: {
+    backgroundColor: "#D13438",
+    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  signOutButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff",
+  },
+  forceSignOutButton: {
+    backgroundColor: "#fff",
+    borderColor: "#D13438",
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  forceSignOutButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#D13438",
+  },
+  primaryButton: {
+    backgroundColor: "#0078D4",
+    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  primaryButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff",
+  },
+});

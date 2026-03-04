@@ -10,7 +10,8 @@
       "Bash(rd /s /q appbuild)",
       "Bash(tasklist:*)",
       "Bash(taskkill:*)",
-      "Bash(dir /b:*)"
+      "Bash(dir /b:*)",
+      "Bash(dir:*)"
     ]
   }
 }

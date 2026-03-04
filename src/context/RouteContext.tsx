@@ -2,19 +2,23 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { startOfDay } from 'date-fns';
+import { useAuth } from './AuthContext';
 import type { CalendarEvent } from '../services/graph';
+import { patchLocalMeeting, removeLocalMeeting, upsertLocalMeeting } from '../services/localMeetings';
 import { optimizeRoute } from '../utils/optimization';
 import { toLocalDayKey } from '../utils/dateUtils';
+import { BACKEND_API_ENABLED } from '../config/backend';
+import { backendGetUserState, backendUpsertUserState } from '../services/backendApi';
 
 export type UserLocation = { latitude: number; longitude: number };
 
-const COMPLETED_IDS_KEY = 'routeCopilot_completedEventIds';
-const DAY_ORDER_PREFIX = 'routeCopilot_dayOrder_';
+const COMPLETED_IDS_KEY = 'wiseplan_completedEventIds';
+const DAY_ORDER_PREFIX = 'wiseplan_dayOrder_';
 
 // ─── Meeting counts cache ─────────────────────────────────────────────────────
 // Persists meetingCountByDay so DaySlider dots appear instantly on every launch
 // instead of waiting for the ±30 day Graph API fetch to complete.
-const COUNTS_CACHE_KEY = 'routeCopilot_meetingCounts';
+const COUNTS_CACHE_KEY = 'wiseplan_meetingCounts';
 const COUNTS_CACHE_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 type CountsCache = { counts: Record<string, number>; savedAt: number };
@@ -68,11 +72,14 @@ type RouteContextValue = {
   /** When set from schedule (e.g. tap waypoint number), map highlights that waypoint/leg. Map consumes and clears. */
   highlightWaypointIndex: number | null;
   setHighlightWaypointIndex: (index: number | null) => void;
+  /** Hard reset in-memory route state (used when clearing/deleting account data). */
+  resetRouteState: () => void;
 };
 
 const RouteContext = createContext<RouteContextValue | null>(null);
 
 export function RouteProvider({ children }: { children: React.ReactNode }) {
+  const { userToken, getValidToken } = useAuth();
   const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
   // Initialised from localStorage synchronously on web → dots appear on first paint with no flash.
   // On native, AsyncStorage read happens in the effect below (fast, but async).
@@ -88,6 +95,13 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
   const [completedEventIds, setCompletedEventIds] = useState<string[]>([]);
   const completedIdsRef = useRef<string[]>([]);
   completedIdsRef.current = completedEventIds;
+
+  const getBackendToken = useCallback(async (): Promise<string | null> => {
+    if (!BACKEND_API_ENABLED) return null;
+    if (userToken) return userToken;
+    if (!getValidToken) return null;
+    return getValidToken();
+  }, [userToken, getValidToken]);
 
   useEffect(() => {
     AsyncStorage.getItem(COMPLETED_IDS_KEY)
@@ -130,6 +144,41 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     }
   }, [meetingCountByDay]);
 
+  const mergeCompletedIds = useCallback((incoming: string[]) => {
+    if (incoming.length === 0) return;
+    setCompletedEventIds((prev) => {
+      const set = new Set(prev);
+      let changed = false;
+      for (const id of incoming) {
+        if (!set.has(id)) {
+          set.add(id);
+          changed = true;
+        }
+      }
+      if (!changed) return prev;
+      const merged = Array.from(set);
+      AsyncStorage.setItem(COMPLETED_IDS_KEY, JSON.stringify(merged)).catch(() => {});
+      return merged;
+    });
+  }, []);
+
+  const pushDayStateToBackend = useCallback(
+    async (dayKey: string, nextCompletedIds: string[], nextDayOrder: string[]) => {
+      if (!BACKEND_API_ENABLED) return;
+      const token = await getBackendToken();
+      if (!token) return;
+      await backendUpsertUserState(
+        {
+          dayKey,
+          completedEventIds: nextCompletedIds.filter((id) => nextDayOrder.includes(id)),
+          dayOrder: nextDayOrder,
+        },
+        token
+      );
+    },
+    [getBackendToken]
+  );
+
   const setAppointments = useCallback((events: CalendarEvent[]) => {
     const completedSet = new Set(completedIdsRef.current);
     const merged = events.map((ev) => ({
@@ -140,25 +189,68 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const addAppointment = useCallback((event: CalendarEvent) => {
-    setAppointmentsState((prev) => [...prev, { ...event, status: 'pending' as const }]);
+    const nextEvent = { ...event, status: 'pending' as const };
+    setAppointmentsState((prev) => [...prev, nextEvent]);
+    if (nextEvent.id.startsWith('local-')) {
+      upsertLocalMeeting(nextEvent).catch(() => {});
+    }
+    if (nextEvent.startIso) {
+      try {
+        const dayKey = toLocalDayKey(new Date(nextEvent.startIso));
+        setMeetingCountByDay((prev) => ({ ...prev, [dayKey]: (prev[dayKey] ?? 0) + 1 }));
+      } catch {
+        // ignore invalid ISO
+      }
+    }
   }, []);
 
   const updateAppointment = useCallback((eventId: string, patch: Partial<CalendarEvent>) => {
     setAppointmentsState((prev) =>
       prev.map((ev) => (ev.id === eventId ? { ...ev, ...patch } : ev))
     );
+    if (eventId.startsWith('local-')) {
+      patchLocalMeeting(eventId, patch).catch(() => {});
+    }
   }, []);
 
   const removeAppointment = useCallback((eventId: string) => {
+    const removed = appointments.find((ev) => ev.id === eventId);
+    const nextCompletedSnapshot = completedIdsRef.current.filter((id) => id !== eventId);
+    if (eventId.startsWith('local-')) {
+      removeLocalMeeting(eventId).catch(() => {});
+    }
     setCompletedEventIds((prev) => {
       const next = prev.filter((id) => id !== eventId);
       AsyncStorage.setItem(COMPLETED_IDS_KEY, JSON.stringify(next)).catch(() => {});
       return next;
     });
-    setAppointmentsState((prev) => prev.filter((ev) => ev.id !== eventId));
-    // Update day-slider dot: deleted meeting was on selectedDate, so decrement that day's count
+    setAppointmentsState((prev) => {
+      const nextAppointments = prev.filter((ev) => ev.id !== eventId);
+      let dayKeyForSync = toLocalDayKey(selectedDate);
+      if (removed?.startIso) {
+        try {
+          dayKeyForSync = toLocalDayKey(new Date(removed.startIso));
+        } catch {
+          // keep selected day fallback
+        }
+      }
+      pushDayStateToBackend(
+        dayKeyForSync,
+        nextCompletedSnapshot,
+        nextAppointments.map((ev) => ev.id)
+      ).catch(() => {});
+      return nextAppointments;
+    });
+    // Update day-slider dot based on removed event day.
     setMeetingCountByDay((prev) => {
-      const dayKey = toLocalDayKey(selectedDate);
+      let dayKey = toLocalDayKey(selectedDate);
+      if (removed?.startIso) {
+        try {
+          dayKey = toLocalDayKey(new Date(removed.startIso));
+        } catch {
+          // keep selected day fallback
+        }
+      }
       const count = prev[dayKey] ?? 0;
       const nextCount = Math.max(0, count - 1);
       if (nextCount === 0) {
@@ -167,7 +259,7 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
       }
       return { ...prev, [dayKey]: nextCount };
     });
-  }, [selectedDate]);
+  }, [appointments, selectedDate, pushDayStateToBackend]);
 
   useEffect(() => {
     if (completedEventIds.length === 0) return;
@@ -195,10 +287,13 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const markEventAsDone = useCallback((eventId: string) => {
+    const dayKey = toLocalDayKey(selectedDate);
+    const dayOrder = appointments.map((a) => a.id);
     setCompletedEventIds((prev) => {
       if (prev.includes(eventId)) return prev;
       const next = [...prev, eventId];
       AsyncStorage.setItem(COMPLETED_IDS_KEY, JSON.stringify(next)).catch(() => {});
+      pushDayStateToBackend(dayKey, next, dayOrder).catch(() => {});
       return next;
     });
     setAppointmentsState((current) =>
@@ -206,13 +301,19 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
         ev.id === eventId ? { ...ev, status: 'completed' as const } : ev
       )
     );
-  }, []);
+    if (eventId.startsWith('local-')) {
+      patchLocalMeeting(eventId, { status: 'completed' }).catch(() => {});
+    }
+  }, [selectedDate, appointments, pushDayStateToBackend]);
 
   const unmarkEventAsDone = useCallback((eventId: string) => {
+    const dayKey = toLocalDayKey(selectedDate);
+    const dayOrder = appointments.map((a) => a.id);
     setCompletedEventIds((prev) => {
       if (!prev.includes(eventId)) return prev;
       const next = prev.filter((id) => id !== eventId);
       AsyncStorage.setItem(COMPLETED_IDS_KEY, JSON.stringify(next)).catch(() => {});
+      pushDayStateToBackend(dayKey, next, dayOrder).catch(() => {});
       return next;
     });
     setAppointmentsState((current) =>
@@ -220,22 +321,46 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
         ev.id === eventId ? { ...ev, status: 'pending' as const } : ev
       )
     );
-  }, []);
-
-  const saveDayOrder = useCallback(async (dayKey: string, eventIds: string[]) => {
-    await AsyncStorage.setItem(DAY_ORDER_PREFIX + dayKey, JSON.stringify(eventIds));
-  }, []);
-
-  const getDayOrder = useCallback(async (dayKey: string): Promise<string[] | null> => {
-    try {
-      const raw = await AsyncStorage.getItem(DAY_ORDER_PREFIX + dayKey);
-      if (!raw) return null;
-      const arr = JSON.parse(raw) as unknown;
-      return Array.isArray(arr) ? (arr as string[]) : null;
-    } catch {
-      return null;
+    if (eventId.startsWith('local-')) {
+      patchLocalMeeting(eventId, { status: 'pending' }).catch(() => {});
     }
-  }, []);
+  }, [selectedDate, appointments, pushDayStateToBackend]);
+
+  const saveDayOrder = useCallback(
+    async (dayKey: string, eventIds: string[]) => {
+      await AsyncStorage.setItem(DAY_ORDER_PREFIX + dayKey, JSON.stringify(eventIds));
+      pushDayStateToBackend(dayKey, completedIdsRef.current, eventIds).catch(() => {});
+    },
+    [pushDayStateToBackend]
+  );
+
+  const getDayOrder = useCallback(
+    async (dayKey: string): Promise<string[] | null> => {
+      const token = await getBackendToken();
+      if (token) {
+        const remote = await backendGetUserState(dayKey, token);
+        if (remote) {
+          const safeOrder = Array.isArray(remote.dayOrder) ? remote.dayOrder : [];
+          const safeCompleted = Array.isArray(remote.completedEventIds)
+            ? remote.completedEventIds
+            : [];
+          mergeCompletedIds(safeCompleted);
+          await AsyncStorage.setItem(DAY_ORDER_PREFIX + dayKey, JSON.stringify(safeOrder));
+          return safeOrder;
+        }
+      }
+
+      try {
+        const raw = await AsyncStorage.getItem(DAY_ORDER_PREFIX + dayKey);
+        if (!raw) return null;
+        const arr = JSON.parse(raw) as unknown;
+        return Array.isArray(arr) ? (arr as string[]) : null;
+      } catch {
+        return null;
+      }
+    },
+    [getBackendToken, mergeCompletedIds]
+  );
 
   const applyDayOrder = useCallback(
     async (events: CalendarEvent[], dayKey: string): Promise<CalendarEvent[]> => {
@@ -255,6 +380,19 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     },
     [getDayOrder]
   );
+
+  const resetRouteState = useCallback(() => {
+    setAppointmentsState([]);
+    setAppointmentsLoading(false);
+    setAppointmentsEnriching(false);
+    setMeetingCountByDay({});
+    setLoadedRange(null);
+    setPendingLocalEvent(null);
+    setHighlightWaypointIndex(null);
+    setCompletedEventIds([]);
+    completedIdsRef.current = [];
+    setRefreshTrigger((n) => n + 1);
+  }, []);
 
   const value: RouteContextValue = {
     selectedDate,
@@ -284,6 +422,7 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     setPendingLocalEvent,
     highlightWaypointIndex,
     setHighlightWaypointIndex,
+    resetRouteState,
   };
 
   return (

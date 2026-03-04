@@ -59,6 +59,11 @@
             transition: all 0.3s ease;
         }
         .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 30px rgba(0, 144, 255, 0.5); }
+        .btn-subscribe {
+            background: linear-gradient(135deg, #ef4444 0%, #f59e0b 100%);
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.35);
+        }
+        .btn-subscribe:hover { box-shadow: 0 0 30px rgba(239, 68, 68, 0.5); }
         
         .store-badge {
             display: inline-flex; align-items: center; gap: 10px; padding: 10px 18px;
@@ -286,9 +291,11 @@
             <p>See your Outlook calendar on a map. Find the best times for new visits. Mark them done.</p>
             
             <div style="display:flex; gap:16px; justify-content:center; margin-bottom:40px; flex-wrap:wrap;">
-                <a href="https://wiseplan.dk/app/" class="btn-primary">Open in Browser</a>
-                <a href="#" class="store-badge" id="ios-link">App Store</a>
-                <a href="#" class="store-badge" id="android-link">Google Play</a>
+                <a href="/app/" class="btn-primary">Open in Browser</a>
+                <a href="/billing/" class="btn-primary btn-subscribe">Subscribe</a>
+                <a href="/account/billing/" class="store-badge">My Billing</a>
+                <a href="#" class="store-badge" id="ios-link">iOS Beta</a>
+                <a href="#" class="store-badge" id="android-link">Android APK</a>
             </div>
 
             <div class="phone-mockup-container">
@@ -412,9 +419,11 @@
         <footer class="final-cta">
             <h2 style="font-size: 2rem; margin-bottom: 24px;">Ready for your routes?</h2>
             <div style="display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
-                <a href="https://wiseplan.dk/app/" class="btn-primary">Try in Browser</a>
-                <a href="#" class="store-badge" id="ios-link-2">App Store</a>
-                <a href="#" class="store-badge" id="android-link-2">Google Play</a>
+                <a href="/app/" class="btn-primary">Try in Browser</a>
+                <a href="/billing/" class="btn-primary btn-subscribe">Subscribe</a>
+                <a href="/account/billing/" class="store-badge">My Billing</a>
+                <a href="#" class="store-badge" id="ios-link-2">iOS Beta</a>
+                <a href="#" class="store-badge" id="android-link-2">Android APK</a>
             </div>
             <p style="margin-top:40px; color:var(--text-secondary); font-size:0.9rem;">
                 &copy; 2026 WisePlan &middot;
@@ -427,10 +436,10 @@
     </div>
 
     <script>
-        // Replace with your actual links from App Store Connect & Google Play Console
+        // Apple: TestFlight beta; Android: direct APK (Google Drive)
         var STORE = {
             ios: 'https://testflight.apple.com/join/RQGCGUq3',
-            android: '#'   // Add Play Store link when available
+            android: 'https://drive.google.com/file/d/1liW3oYcvgQOFczXBi__sXl7b8i-ejj7H/view?usp=sharing'
         };
         document.querySelectorAll('[id^="ios-link"]').forEach(function(el){ el.href = STORE.ios; });
         document.querySelectorAll('[id^="android-link"]').forEach(function(el){ el.href = STORE.android; });

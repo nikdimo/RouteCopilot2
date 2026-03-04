@@ -19,6 +19,12 @@ export type LegBetweenRowProps = {
   label?: string;
 };
 
+const BLUE = '#2563EB';
+const LIGHT_BLUE = '#EFF6FF';
+const RED = '#EF4444';
+const YELLOW = '#F59E0B';
+const GRAY = '#94A3B8';
+
 function LegBetweenRow({
   durationSec,
   distanceM,
@@ -27,9 +33,10 @@ function LegBetweenRow({
   stress = 'ok',
   label,
 }: LegBetweenRowProps) {
-  const driveMin = Math.round(durationSec / 60);
+  const driveMin = Math.max(1, Math.round(durationSec / 60));
   const etaStr = formatTime(etaAtNextMs);
   const isToHome = label === 'To home';
+
   const waitStr = isToHome
     ? null
     : waitMin < 0
@@ -37,30 +44,40 @@ function LegBetweenRow({
       : waitMin < 1
         ? 'No wait'
         : `Wait ${Math.round(waitMin)} min`;
-  const stressColor =
-    stress === 'late' ? '#D13438' : stress === 'tight' ? '#C19C00' : '#605E5C';
 
-  const borderColor = stress === 'late' ? '#D13438' : stress === 'tight' ? '#C19C00' : undefined;
-  const stressStyle =
-    stress !== 'ok'
-      ? [
-          styles.containerStress,
-          borderColor && { borderLeftColor: borderColor },
-          stress === 'late' && { backgroundColor: '#FDE7E9' },
-        ]
-      : [];
+  // Determine colors based on status
+  let stressColor = BLUE;
+  let bgColor = 'transparent';
+
+  if (stress === 'late') {
+    stressColor = RED;
+  } else if (stress === 'tight') {
+    stressColor = YELLOW;
+  }
+
   return (
-    <View style={[styles.container, ...stressStyle]}>
-      <View style={styles.iconWrap}>
-        <Car size={16} color={stressColor} />
+    <View style={styles.container}>
+      {/* Visual Linking Line matches MeetingCard timeline node col */}
+      <View style={styles.lineCol}>
+        <View style={styles.verticalLine} />
       </View>
-      <View style={styles.content}>
-        {label ? <Text style={styles.label}>{label}</Text> : null}
-        <Text style={styles.line1}>
-          {driveMin} min · {formatDistance(distanceM)}
-        </Text>
-        <Text style={[styles.line2, { color: stressColor }]}>
-          {isToHome ? `Arrive ~${etaStr}` : `Arrive ${etaStr} · ${waitStr}`}
+
+      <View style={styles.contentCol}>
+        <View style={[styles.pill, { backgroundColor: bgColor, borderColor: stressColor + '40' }]}>
+          <Car size={12} color={stressColor} style={styles.icon} />
+
+          <Text style={[styles.pillText, { color: stressColor }]}>
+            {driveMin} min · {formatDistance(distanceM)}
+          </Text>
+
+          {waitStr ? (
+            <Text style={[styles.waitText, { color: stress === 'late' ? RED : GRAY }]}>
+              · {waitStr}
+            </Text>
+          ) : null}
+        </View>
+        <Text style={styles.etaText}>
+          {isToHome ? `Arrive ~${etaStr}` : `Expected ETA: ${etaStr}`}
         </Text>
       </View>
     </View>
@@ -72,38 +89,53 @@ export default memo(LegBetweenRow);
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
+    minHeight: 40,
+    marginTop: -8, // Pulls the line up to connect to the card above
+    marginBottom: 0,
+  },
+  lineCol: {
+    width: 50 + 24 + 10, // Match the exact offset from MeetingCard (timelineCol + node radius)
     alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    marginHorizontal: 16,
-    marginBottom: 8,
-    backgroundColor: '#E8E8E8',
-    borderRadius: 8,
+    paddingRight: 12,
   },
-  containerStress: {
-    backgroundColor: '#FFF4CE',
-    borderLeftWidth: 4,
-  },
-  iconWrap: {
-    marginRight: 12,
-  },
-  content: {
+  verticalLine: {
+    width: 0,
     flex: 1,
+    borderLeftWidth: 2,
+    borderColor: '#DBEAFE', // Light blue line
+    borderStyle: 'dashed',
+    marginLeft: 32, // Adjust to center directly under the TimelineNode circle
   },
-  label: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#64748b',
-    marginBottom: 2,
-    textTransform: 'uppercase',
+  contentCol: {
+    flex: 1,
+    paddingVertical: 12,
   },
-  line1: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#323130',
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
   },
-  line2: {
+  icon: {
+    marginRight: 6,
+  },
+  pillText: {
     fontSize: 12,
-    marginTop: 2,
+    fontWeight: '700',
   },
+  waitText: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  etaText: {
+    fontSize: 10,
+    color: '#94A3B8',
+    marginTop: 4,
+    marginLeft: 2,
+    fontWeight: '500',
+  }
 });

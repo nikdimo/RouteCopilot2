@@ -26,13 +26,13 @@ import { useQALog } from '../context/QALogContext';
 import { toLocalDayKey } from '../utils/dateUtils';
 import {
   geocodeAddress,
+  geocodeAddressGoogle,
   geocodeContactAddress,
   getAddressSuggestions,
   getAddressSuggestionsGoogle,
   getCoordsForPlaceId,
-  geocodeAddressGoogle,
 } from '../utils/geocoding';
-import { searchContacts } from '../services/graph';
+import { searchContacts as searchContactsGraph } from '../services/graph';
 import TimeframeSelector, {
   getSearchWindow,
   type TimeframeSelection,
@@ -56,8 +56,10 @@ import {
   GraphUnauthorizedError,
   type CalendarEvent,
 } from '../services/graph';
+import { getLocalMeetingsInRange } from '../services/localMeetings';
 import { sortAppointmentsByTime } from '../utils/optimization';
 import { DEFAULT_HOME_BASE } from '../types';
+import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
 
 const MS_BLUE = '#0078D4';
 const MS_PER_MIN = 60_000;
@@ -97,6 +99,16 @@ function eventsForDay(events: CalendarEvent[], dayIso: string): CalendarEvent[] 
     }
     return startOfDay(new Date(startMs)).getTime() === dayStartMs;
   });
+}
+
+function inferCountryCodeFromHomeBase(homeBase?: { lat: number; lon: number } | null) {
+  if (!homeBase) return undefined;
+  const { lat, lon } = homeBase;
+  // Denmark bounding box (approx), used only as a search bias.
+  if (lat >= 54.4 && lat <= 57.9 && lon >= 7.8 && lon <= 15.4) {
+    return 'dk';
+  }
+  return undefined;
 }
 
 /** Appointments whose start falls within [windowStart, windowEnd]. Events filtered by day start. */
@@ -183,10 +195,16 @@ export default function AddMeetingScreen() {
   const { userToken, getValidToken, signOut } = useAuth();
   const { appointments, addAppointment, setSelectedDate, setPendingLocalEvent } = useRoute();
   const { preferences } = useUserPreferences();
-  const useGoogleWithKey =
-    preferences.useGoogleGeocoding === true &&
-    (preferences.googleMapsApiKey ?? '').trim().length > 0;
+  const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
+  const { canSyncCalendar, canCreateContacts, canUseBetterGeocoding } = getTierEntitlements(subscriptionTier);
+  const canUseContactLookup = canSyncCalendar;
+  const useGoogleGeocoding = canUseBetterGeocoding && preferences.useGoogleGeocoding === true;
   const googleApiKey = (preferences.googleMapsApiKey ?? '').trim();
+  const useGoogleWithKey = useGoogleGeocoding && googleApiKey.length > 0;
+  const preferredCountryCode = useMemo(
+    () => inferCountryCodeFromHomeBase(preferences.homeBase),
+    [preferences.homeBase]
+  );
 
   const [locationSelection, setLocationSelection] = useState<LocationSelection>({ type: 'none' });
   const [durationMinutes, setDurationMinutes] = useState(60);
@@ -220,10 +238,10 @@ export default function AddMeetingScreen() {
     () =>
       hasSearched
         ? filterAppointmentsByWindow(
-            scheduleForSearch,
-            searchWindow.start,
-            searchWindow.end
-          )
+          scheduleForSearch,
+          searchWindow.start,
+          searchWindow.end
+        )
         : [],
     [hasSearched, scheduleForSearch, searchWindow]
   );
@@ -305,6 +323,15 @@ export default function AddMeetingScreen() {
     setHasSearched(true);
     setSearchLoading(true);
     setSearchAppointments(null);
+
+    if (!canSyncCalendar) {
+      const { start, end } = searchWindow;
+      const localEvents = await getLocalMeetingsInRange(start, end);
+      setSearchAppointments(sortAppointmentsByTime(localEvents));
+      setSearchLoading(false);
+      return;
+    }
+
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
     if (!token) {
       setSearchLoading(false);
@@ -314,7 +341,7 @@ export default function AddMeetingScreen() {
       const { start, end } = searchWindow;
       const events = await getCalendarEvents(token, start, end);
       const enriched = await enrichAppointmentsWithCoords(events, async (addr) => {
-        const r = await geocodeAddress(addr);
+        const r = await geocodeAddress(addr, { authToken: token });
         return { success: r.success, lat: r.success ? r.lat : undefined, lon: r.success ? r.lon : undefined };
       });
       const sorted = sortAppointmentsByTime(enriched);
@@ -370,6 +397,8 @@ export default function AddMeetingScreen() {
     event: CalendarEvent,
     contactInput?: ContactInput
   ) => {
+    const guestSave = !userToken;
+
     let finalEvent = { ...event };
     if (!finalEvent.startIso || !finalEvent.endIso) {
       if (confirmSlot) {
@@ -389,7 +418,7 @@ export default function AddMeetingScreen() {
     /** We propose only feasible, optimal slots. No save-time checks—trust the proposals. */
     const isLocalId = finalEvent.id.startsWith('local-');
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
-    if (token && isLocalId) {
+    if (canSyncCalendar && token && isLocalId) {
       const proposedStartIso = finalEvent.startIso!;
       const proposedEndIso = finalEvent.endIso!;
       const proposedTime = finalEvent.time;
@@ -400,11 +429,13 @@ export default function AddMeetingScreen() {
         location: finalEvent.location,
         body: finalEvent.notes,
       });
-      if (result.success) {
+      if (result.success && 'event' in result) {
         // Preserve proposed times; Graph may return different format causing display shift
         finalEvent = { ...result.event, startIso: proposedStartIso, endIso: proposedEndIso, time: proposedTime };
       } else {
-        if (result.needsConsent) {
+        const needsConsent = 'needsConsent' in result ? Boolean(result.needsConsent) : false;
+        const errorMessage = 'error' in result ? result.error : 'Calendar sync failed';
+        if (needsConsent) {
           Alert.alert(
             'Permission needed',
             'Grant Calendars.ReadWrite in your Microsoft account to sync to Outlook. Saved locally for now.',
@@ -413,7 +444,7 @@ export default function AddMeetingScreen() {
         } else {
           Alert.alert(
             'Calendar sync failed',
-            result.error,
+            errorMessage,
             [{ text: 'OK' }]
           );
         }
@@ -479,7 +510,22 @@ export default function AddMeetingScreen() {
     }
     navigation.goBack();
 
-    if (token && contactInput && (contactInput.displayName || contactInput.email)) {
+    if (guestSave) {
+      Alert.alert(
+        'Saved locally',
+        'This meeting is saved on this device. Sign in any time to back up and sync across devices.'
+      );
+    }
+
+    if (!canCreateContacts && contactInput && (contactInput.displayName || contactInput.email)) {
+      Alert.alert(
+        'Contact not saved',
+        'Contact sync requires Basic or higher. The meeting was saved locally.'
+      );
+      return;
+    }
+
+    if (canCreateContacts && token && contactInput && (contactInput.displayName || contactInput.email)) {
       const contactResult = await createContact(token, {
         displayName: contactInput.displayName ?? contactInput.email,
         companyName: contactInput.companyName,
@@ -489,18 +535,20 @@ export default function AddMeetingScreen() {
       if (contactResult.success) {
         Alert.alert('Contact saved', 'Contact saved to Outlook.');
       } else {
+        const needsConsent = 'needsConsent' in contactResult ? Boolean(contactResult.needsConsent) : false;
+        const errorMessage = 'error' in contactResult ? contactResult.error : 'Unknown error';
         Alert.alert(
           'Meeting saved',
-          contactResult.needsConsent
+          needsConsent
             ? 'Could not save contact (permission needed). Grant Contacts.ReadWrite to sync contacts to Outlook.'
-            : `Could not save contact: ${contactResult.error ?? 'Unknown error'}. Meeting was saved.`,
+            : `Could not save contact: ${errorMessage}. Meeting was saved.`,
           [{ text: 'OK' }]
         );
       }
     }
   };
 
-  const token = userToken ?? null;
+  const token = canUseContactLookup ? userToken ?? null : null;
   const isWide = useIsWideScreen();
   const insets = useSafeAreaInsets();
 
@@ -510,307 +558,318 @@ export default function AddMeetingScreen() {
   return (
     <View style={[styles.container, isWide && styles.splitContainer]}>
       <View style={[styles.formPane, isWide && styles.formPaneWide, isWide && { paddingLeft: insets.left }]}>
-      <ScrollView
-        style={styles.formScroll}
-        contentContainerStyle={styles.formScrollContent}
-        showsVerticalScrollIndicator={true}
-        keyboardShouldPersistTaps="handled"
-      >
-      <LocationSearch
-        token={token}
-        searchContacts={async (t, q) => {
-          const r = await searchContacts(t, q);
-          return {
-            success: r.success,
-            contacts: r.success ? r.contacts : undefined,
-            error: !r.success ? r.error : undefined,
-            needsConsent: !r.success ? r.needsConsent : undefined,
-          };
-        }}
-        getAddressSuggestions={async (q) => {
-          if (useGoogleWithKey) {
-            const r = await getAddressSuggestionsGoogle(q, googleApiKey);
-            return {
-              success: r.success,
-              suggestions: r.success ? r.suggestions : undefined,
-              error: !r.success ? r.error : undefined,
-            };
-          }
-          const r = await getAddressSuggestions(q);
-          return {
-            success: r.success,
-            suggestions: r.success ? r.suggestions : undefined,
-            error: !r.success ? r.error : undefined,
-          };
-        }}
-        geocodeAddress={async (addr) => {
-          if (useGoogleWithKey) {
-            const r = await geocodeAddressGoogle(addr, googleApiKey);
-            return {
-              success: r.success,
-              lat: r.success ? r.lat : undefined,
-              lon: r.success ? r.lon : undefined,
-              fromCache: r.success ? r.fromCache : undefined,
-              error: !r.success ? r.error : undefined,
-            };
-          }
-          const r = await geocodeAddress(addr);
-          return {
-            success: r.success,
-            lat: r.success ? r.lat : undefined,
-            lon: r.success ? r.lon : undefined,
-            fromCache: r.success ? r.fromCache : undefined,
-            error: !r.success ? r.error : undefined,
-          };
-        }}
-        getCoordsForPlaceId={
-          useGoogleWithKey
-            ? async (placeId) => {
-                const r = await getCoordsForPlaceId(placeId, googleApiKey);
-                return r.success ? { lat: r.lat, lon: r.lon } : { error: r.error };
+        <ScrollView
+          style={styles.formScroll}
+          contentContainerStyle={styles.formScrollContent}
+          showsVerticalScrollIndicator={true}
+          keyboardShouldPersistTaps="handled"
+        >
+          <LocationSearch
+            token={token}
+            searchContacts={async (t, q) => {
+              if (!canUseContactLookup) {
+                return { success: true, contacts: [] };
               }
-            : undefined
-        }
-        geocodeContactAddress={async (addr, parts) => {
-          if (useGoogleWithKey) {
-            const r = await geocodeAddressGoogle(addr, googleApiKey);
-            return {
-              success: r.success,
-              lat: r.success ? r.lat : undefined,
-              lon: r.success ? r.lon : undefined,
-              fromCache: r.success ? r.fromCache : undefined,
-              error: !r.success ? r.error : undefined,
-            };
-          }
-          const r = await geocodeContactAddress(addr, parts);
-          return {
-            success: r.success,
-            lat: r.success ? r.lat : undefined,
-            lon: r.success ? r.lon : undefined,
-            fromCache: r.success ? r.fromCache : undefined,
-            error: !r.success ? r.error : undefined,
-          };
-        }}
-        selection={locationSelection}
-        onSelectionChange={setLocationSelection}
-        onGraphError={handleGraphError}
-        placeholder="Search Client or Address (e.g. Nikola, Køge)"
-        onDebug={__DEV__ ? handleLocationDebug : undefined}
-      />
+              const r = await searchContactsGraph(t, q);
+              return {
+                success: r.success,
+                contacts: r.success ? r.contacts : undefined,
+                error: 'error' in r ? r.error : undefined,
+                needsConsent: 'needsConsent' in r ? r.needsConsent : undefined,
+              };
+            }}
+            getAddressSuggestions={async (q) => {
+              if (useGoogleWithKey) {
+                const r = await getAddressSuggestionsGoogle(q, googleApiKey);
+                return {
+                  success: r.success,
+                  suggestions: r.success ? r.suggestions : undefined,
+                  error: 'error' in r ? r.error : undefined,
+                };
+              }
+              const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
+              const r = await getAddressSuggestions(q, {
+                authToken,
+                ...(preferredCountryCode ? { countryCode: preferredCountryCode } : {}),
+              });
+              return {
+                success: r.success,
+                suggestions: r.success ? r.suggestions : undefined,
+                error: 'error' in r ? r.error : undefined,
+              };
+            }}
+            geocodeAddress={async (addr) => {
+              if (useGoogleWithKey) {
+                const r = await geocodeAddressGoogle(addr, googleApiKey);
+                return {
+                  success: r.success,
+                  lat: r.success ? r.lat : undefined,
+                  lon: r.success ? r.lon : undefined,
+                  fromCache: r.success ? r.fromCache : undefined,
+                  error: 'error' in r ? r.error : undefined,
+                };
+              }
+              const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
+              const r = await geocodeAddress(addr, {
+                authToken,
+              });
+              return {
+                success: r.success,
+                lat: r.success ? r.lat : undefined,
+                lon: r.success ? r.lon : undefined,
+                fromCache: r.success ? r.fromCache : undefined,
+                error: 'error' in r ? r.error : undefined,
+              };
+            }}
+            getCoordsForPlaceId={
+              useGoogleWithKey
+                ? async (placeId) => {
+                    const r = await getCoordsForPlaceId(placeId, googleApiKey);
+                    return r.success === true ? { lat: r.lat, lon: r.lon } : { error: r.error };
+                  }
+                : undefined
+            }
+            geocodeContactAddress={async (addr, parts) => {
+              if (useGoogleWithKey) {
+                const r = await geocodeAddressGoogle(addr, googleApiKey);
+                return {
+                  success: r.success,
+                  lat: r.success ? r.lat : undefined,
+                  lon: r.success ? r.lon : undefined,
+                  fromCache: r.success ? r.fromCache : undefined,
+                  error: 'error' in r ? r.error : undefined,
+                };
+              }
+              const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
+              const r = await geocodeContactAddress(addr, parts, { authToken });
+              return {
+                success: r.success,
+                lat: r.success ? r.lat : undefined,
+                lon: r.success ? r.lon : undefined,
+                fromCache: r.success ? r.fromCache : undefined,
+                error: 'error' in r ? r.error : undefined,
+              };
+            }}
+            selection={locationSelection}
+            onSelectionChange={setLocationSelection}
+            onGraphError={handleGraphError}
+            placeholder="Search Client or Address (e.g. Nikola, Køge)"
+            onDebug={__DEV__ ? handleLocationDebug : undefined}
+          />
 
-      <View style={styles.durationRow}>
-        <Text style={styles.durationLabel}>Duration</Text>
-        <View style={styles.durationPills}>
-          {DURATION_OPTS.map((d) => (
-            <TouchableOpacity
-              key={d}
+          <View style={styles.durationRow}>
+            <Text style={styles.durationLabel}>Duration</Text>
+            <View style={styles.durationPills}>
+              {DURATION_OPTS.map((d) => (
+                <TouchableOpacity
+                  key={d}
+                  style={[
+                    styles.durationPill,
+                    durationMinutes === d && styles.durationPillActive,
+                  ]}
+                  onPress={() => setDurationMinutes(d)}
+                >
+                  <Text
+                    style={[
+                      styles.durationPillText,
+                      durationMinutes === d && styles.durationPillTextActive,
+                    ]}
+                  >
+                    {d} min
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <TimeframeSelector selected={timeframe} onSelect={setTimeframe} />
+
+          <TouchableOpacity
+            style={[
+              styles.ctaButton,
+              (!canFindBestTime || searchLoading) && styles.ctaButtonDisabled,
+            ]}
+            onPress={handleFindBestTime}
+            activeOpacity={0.85}
+            disabled={!canFindBestTime || searchLoading}
+          >
+            <Text
               style={[
-                styles.durationPill,
-                durationMinutes === d && styles.durationPillActive,
+                styles.ctaButtonText,
+                (!canFindBestTime || searchLoading) && styles.ctaButtonTextDisabled,
               ]}
-              onPress={() => setDurationMinutes(d)}
             >
-              <Text
-                style={[
-                  styles.durationPillText,
-                  durationMinutes === d && styles.durationPillTextActive,
-                ]}
-              >
-                {d} min
+              {searchLoading ? 'Searching…' : 'Find best time'}
+            </Text>
+          </TouchableOpacity>
+
+          {__DEV__ && (Object.keys(devDebug).length > 0 || hasSearched) && (
+            <TouchableOpacity
+              style={styles.devPanel}
+              onPress={() => setDevPanelCollapsed((c) => !c)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.devPanelTitle}>
+                DEV: Plan Visit {devPanelCollapsed ? '(tap to expand)' : '(tap to collapse)'}
               </Text>
+              {!devPanelCollapsed && (
+                <>
+                  <Text style={styles.devPanelLine}>
+                    Location – Contacts: {String(devDebug.contactsCount ?? '-')} | Selected: {String(devDebug.selectedContact ?? devDebug.selectedAddress ?? '-')}
+                  </Text>
+                  <Text style={styles.devPanelLine}>
+                    Address: {String(devDebug.selectedAddress ?? '-')} | Geocode: {String(devDebug.geocodeResult ?? '-')} | Cache: {devDebug.geocodeCacheHit != null ? (devDebug.geocodeCacheHit ? 'hit' : 'miss') : '-'}
+                  </Text>
+                  {hasSearched && (
+                    <Text style={styles.devPanelLine}>
+                      Search – Mode: {timeframe.mode}
+                    </Text>
+                  )}
+                  {hasSearched && (
+                    <Text style={styles.devPanelLine}>
+                      Local today: {toLocalDayKey(new Date())} | Window: {toLocalDayKey(searchWindow.start)}–{toLocalDayKey(searchWindow.end)}
+                    </Text>
+                  )}
+                  {hasSearched && (
+                    <Text style={styles.devPanelLine}>
+                      Appointments: {filteredAppointments.length} (missing coords: {filteredAppointments.filter((a) => !a.coordinates || typeof a.coordinates?.latitude !== 'number').length}) | Slots: {allSlots.length}
+                    </Text>
+                  )}
+                  {hasSearched && dayIsos.length > 0 && (() => {
+                    const dayKey = dayIsos[0]!;
+                    const evs = eventsForDay(filteredAppointments, dayKey);
+                    if (evs.length === 0) return null;
+                    const parts = evs.map((e) => {
+                      const start = e.startIso ? new Date(e.startIso) : null;
+                      const end = e.endIso ? new Date(e.endIso) : null;
+                      const range = start && end ? `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}-${end.getHours().toString().padStart(2, '0')}:${end.getMinutes().toString().padStart(2, '0')}` : '-';
+                      const hasC = !!(e.coordinates && typeof e.coordinates.latitude === 'number');
+                      return `${e.title ?? '?'}(${range},coord=${hasC})`;
+                    });
+                    return <Text style={styles.devPanelLine}>Day {dayKey}: {parts.join('; ')}</Text>;
+                  })()}
+                  {devDebug.graphError != null && devDebug.graphError !== '' ? (
+                    <Text style={[styles.devPanelLine, styles.devPanelError]}>
+                      Graph: {String(devDebug.graphError)}
+                    </Text>
+                  ) : null}
+                </>
+              )}
             </TouchableOpacity>
-          ))}
-        </View>
-      </View>
+          )}
 
-      <TimeframeSelector selected={timeframe} onSelect={setTimeframe} />
-
-      <TouchableOpacity
-        style={[
-          styles.ctaButton,
-          (!canFindBestTime || searchLoading) && styles.ctaButtonDisabled,
-        ]}
-        onPress={handleFindBestTime}
-        activeOpacity={0.85}
-        disabled={!canFindBestTime || searchLoading}
-      >
-        <Text
-          style={[
-            styles.ctaButtonText,
-            (!canFindBestTime || searchLoading) && styles.ctaButtonTextDisabled,
-          ]}
-        >
-          {searchLoading ? 'Searching…' : 'Find best time'}
-        </Text>
-      </TouchableOpacity>
-
-      {__DEV__ && (Object.keys(devDebug).length > 0 || hasSearched) && (
-        <TouchableOpacity
-          style={styles.devPanel}
-          onPress={() => setDevPanelCollapsed((c) => !c)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.devPanelTitle}>
-            DEV: Plan Visit {devPanelCollapsed ? '(tap to expand)' : '(tap to collapse)'}
-          </Text>
-          {!devPanelCollapsed && (
+          {!hasSearched ? (
+            <View style={styles.setupState}>
+              <Text style={styles.setupHint}>
+                {canFindBestTime
+                  ? 'Tap "Find best time" to see slots.'
+                  : 'Select a location (contact or address) to see best slots.'}
+              </Text>
+            </View>
+          ) : searchLoading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="large" color={MS_BLUE} />
+              <Text style={styles.loadingText}>Loading your schedule…</Text>
+            </View>
+          ) : (
             <>
-              <Text style={styles.devPanelLine}>
-                Location – Contacts: {String(devDebug.contactsCount ?? '-')} | Selected: {String(devDebug.selectedContact ?? devDebug.selectedAddress ?? '-')}
+              <Text style={styles.sectionTitle}>Best Options</Text>
+              {bestOptions.length === 0 ? (
+                <Text style={styles.emptyHint}>
+                  No slots found. Try a different timeframe or client.
+                </Text>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.bestOptionsRow}
+                  style={styles.bestOptionsScroll}
+                >
+                  {bestOptions.map((slot) => (
+                    <View key={slotId(slot)} style={styles.bestOptionCard}>
+                      <GhostSlotCard
+                        slot={slot}
+                        preBuffer={preBuffer}
+                        postBuffer={postBuffer}
+                        isSelected={selectedSlotId === slotId(slot)}
+                        isBestOption={true}
+                        showDate={true}
+                        onSelect={() => handleSelectSlot(slot)}
+                        onMapPress={() => handleMapPress(slot)}
+                        onBookPress={() => handleBookSlot(slot)}
+                      />
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+
+              <Text style={[styles.sectionTitle, styles.sectionTitleSpaced]}>
+                By Day
               </Text>
-              <Text style={styles.devPanelLine}>
-                Address: {String(devDebug.selectedAddress ?? '-')} | Geocode: {String(devDebug.geocodeResult ?? '-')} | Cache: {devDebug.geocodeCacheHit != null ? (devDebug.geocodeCacheHit ? 'hit' : 'miss') : '-'}
-              </Text>
-              {hasSearched && (
-                <Text style={styles.devPanelLine}>
-                  Search – Mode: {timeframe.mode}
+              {dayGroups.length === 0 ? (
+                <Text style={styles.emptyHint}>
+                  No schedule in this window. Add meetings or choose another
+                  timeframe.
                 </Text>
+              ) : (
+                dayGroups.map((group) => (
+                  <DayTimeline
+                    key={group.dayIso}
+                    dayIso={group.dayIso}
+                    dayLabel={group.dayLabel}
+                    entries={group.entries}
+                    preBuffer={preBuffer}
+                    postBuffer={postBuffer}
+                    selectedSlotId={selectedSlotId}
+                    bestOptionIds={bestOptionIds}
+                    onSelectSlot={handleSelectSlot}
+                    onMapPress={handleMapPress}
+                    onBookSlot={handleBookSlot}
+                  />
+                ))
               )}
-              {hasSearched && (
-                <Text style={styles.devPanelLine}>
-                  Local today: {toLocalDayKey(new Date())} | Window: {toLocalDayKey(searchWindow.start)}–{toLocalDayKey(searchWindow.end)}
-                </Text>
-              )}
-              {hasSearched && (
-                <Text style={styles.devPanelLine}>
-                  Appointments: {filteredAppointments.length} (missing coords: {filteredAppointments.filter((a) => !a.coordinates || typeof a.coordinates?.latitude !== 'number').length}) | Slots: {allSlots.length}
-                </Text>
-              )}
-              {hasSearched && dayIsos.length > 0 && (() => {
-                const dayKey = dayIsos[0]!;
-                const evs = eventsForDay(filteredAppointments, dayKey);
-                if (evs.length === 0) return null;
-                const parts = evs.map((e) => {
-                  const start = e.startIso ? new Date(e.startIso) : null;
-                  const end = e.endIso ? new Date(e.endIso) : null;
-                  const range = start && end ? `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}-${end.getHours().toString().padStart(2, '0')}:${end.getMinutes().toString().padStart(2, '0')}` : '-';
-                  const hasC = !!(e.coordinates && typeof e.coordinates.latitude === 'number');
-                  return `${e.title ?? '?'}(${range},coord=${hasC})`;
-                });
-                return <Text style={styles.devPanelLine}>Day {dayKey}: {parts.join('; ')}</Text>;
-              })()}
-              {devDebug.graphError != null && devDebug.graphError !== '' ? (
-                <Text style={[styles.devPanelLine, styles.devPanelError]}>
-                  Graph: {String(devDebug.graphError)}
-                </Text>
-              ) : null}
             </>
           )}
-        </TouchableOpacity>
-      )}
+        </ScrollView>
 
-        {!hasSearched ? (
-          <View style={styles.setupState}>
-            <Text style={styles.setupHint}>
-              {canFindBestTime
-                ? 'Tap "Find best time" to see slots.'
-                : 'Select a location (contact or address) to see best slots.'}
-            </Text>
-          </View>
-        ) : searchLoading ? (
-          <View style={styles.loadingState}>
-            <ActivityIndicator size="large" color={MS_BLUE} />
-            <Text style={styles.loadingText}>Loading your schedule…</Text>
-          </View>
-        ) : (
-          <>
-            <Text style={styles.sectionTitle}>Best Options</Text>
-            {bestOptions.length === 0 ? (
-              <Text style={styles.emptyHint}>
-                No slots found. Try a different timeframe or client.
-              </Text>
-            ) : (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.bestOptionsRow}
-                style={styles.bestOptionsScroll}
+        {!isWide && mapSlot && newLocation && (
+          isExpoGo ? (
+            <Modal visible transparent animationType="fade">
+              <TouchableOpacity
+                style={styles.expoGoModalOverlay}
+                activeOpacity={1}
+                onPress={() => setMapSlot(null)}
               >
-                {bestOptions.map((slot) => (
-                  <View key={slotId(slot)} style={styles.bestOptionCard}>
-                    <GhostSlotCard
-                      slot={slot}
-                      preBuffer={preBuffer}
-                      postBuffer={postBuffer}
-                      isSelected={selectedSlotId === slotId(slot)}
-                      isBestOption={true}
-                      showDate={true}
-                      onSelect={() => handleSelectSlot(slot)}
-                      onMapPress={() => handleMapPress(slot)}
-                      onBookPress={() => handleBookSlot(slot)}
-                    />
-                  </View>
-                ))}
-              </ScrollView>
-            )}
-
-            <Text style={[styles.sectionTitle, styles.sectionTitleSpaced]}>
-              By Day
-            </Text>
-            {dayGroups.length === 0 ? (
-              <Text style={styles.emptyHint}>
-                No schedule in this window. Add meetings or choose another
-                timeframe.
-              </Text>
-            ) : (
-              dayGroups.map((group) => (
-                <DayTimeline
-                  key={group.dayIso}
-                  dayIso={group.dayIso}
-                  dayLabel={group.dayLabel}
-                  entries={group.entries}
-                  preBuffer={preBuffer}
-                  postBuffer={postBuffer}
-                  selectedSlotId={selectedSlotId}
-                  bestOptionIds={bestOptionIds}
-                  onSelectSlot={handleSelectSlot}
-                  onMapPress={handleMapPress}
-                  onBookSlot={handleBookSlot}
-                />
-              ))
-            )}
-          </>
+                <View style={styles.expoGoModalBox}>
+                  <Text style={styles.expoGoModalTitle}>Map preview</Text>
+                  <Text style={styles.expoGoModalText}>
+                    Map preview is available in the development build (EAS Build / TestFlight).
+                  </Text>
+                  <TouchableOpacity style={styles.expoGoModalButton} onPress={() => setMapSlot(null)}>
+                    <Text style={styles.expoGoModalButtonText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            </Modal>
+          ) : (
+            <Suspense fallback={null}>
+              <MapPreviewModal
+                visible={!!mapSlot}
+                onClose={() => setMapSlot(null)}
+                onConfirmBooking={() => {
+                  if (mapSlot) {
+                    setConfirmSlot(mapSlot);
+                    setMapSlot(null);
+                  }
+                }}
+                dayEvents={eventsForDay(filteredAppointments, mapSlot.dayIso)}
+                insertionCoord={newLocation}
+                slot={mapSlot}
+                homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
+              />
+            </Suspense>
+          )
         )}
-      </ScrollView>
-
-      {!isWide && mapSlot && newLocation && (
-        isExpoGo ? (
-          <Modal visible transparent animationType="fade">
-            <TouchableOpacity
-              style={styles.expoGoModalOverlay}
-              activeOpacity={1}
-              onPress={() => setMapSlot(null)}
-            >
-              <View style={styles.expoGoModalBox}>
-                <Text style={styles.expoGoModalTitle}>Map preview</Text>
-                <Text style={styles.expoGoModalText}>
-                  Map preview is available in the development build (EAS Build / TestFlight).
-                </Text>
-                <TouchableOpacity style={styles.expoGoModalButton} onPress={() => setMapSlot(null)}>
-                  <Text style={styles.expoGoModalButtonText}>Close</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
-          </Modal>
-        ) : (
-          <Suspense fallback={null}>
-            <MapPreviewModal
-              visible={!!mapSlot}
-              onClose={() => setMapSlot(null)}
-              onConfirmBooking={() => {
-                if (mapSlot) {
-                  setConfirmSlot(mapSlot);
-                  setMapSlot(null);
-                }
-              }}
-              dayEvents={eventsForDay(filteredAppointments, mapSlot.dayIso)}
-              insertionCoord={newLocation}
-              slot={mapSlot}
-              homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
-            />
-          </Suspense>
-        )
-      )}
       </View>
 
       {isWide && hasValidLocation && (

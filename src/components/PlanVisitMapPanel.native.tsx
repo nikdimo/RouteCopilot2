@@ -1,0 +1,158 @@
+import React, { useMemo } from 'react';
+import { View, StyleSheet } from 'react-native';
+import type { CalendarEvent } from '../services/graph';
+import type { ScoredSlot } from '../utils/scheduler';
+import type { Coordinate } from '../utils/scheduler';
+import { buildRouteWithInsertion } from '../utils/mapPreview';
+import NativeLeafletMap, {
+  type LeafletCoordinate,
+  type LeafletMarker,
+  type LeafletPolyline,
+} from './NativeLeafletMap';
+
+export type PlanVisitMapPanelProps = {
+  newLocation?: Coordinate | null;
+  slot?: ScoredSlot | null;
+  dayEvents?: CalendarEvent[];
+  homeBase: Coordinate;
+};
+
+const DEFAULT_COORD: LeafletCoordinate = {
+  latitude: 55.6761,
+  longitude: 12.5683,
+};
+
+export default function PlanVisitMapPanel({
+  newLocation,
+  slot,
+  dayEvents = [],
+  homeBase,
+}: PlanVisitMapPanelProps) {
+  const homePoint = useMemo(
+    () => ({ latitude: homeBase.lat, longitude: homeBase.lon }),
+    [homeBase.lat, homeBase.lon]
+  );
+
+  const insertionPoint = useMemo(
+    () =>
+      newLocation != null
+        ? { latitude: newLocation.lat, longitude: newLocation.lon }
+        : null,
+    [newLocation]
+  );
+
+  const coordsWithInsertion = useMemo(
+    () =>
+      slot != null && newLocation != null && dayEvents.length > 0
+        ? buildRouteWithInsertion(dayEvents, newLocation, slot, homeBase)
+        : [],
+    [dayEvents, homeBase, newLocation, slot]
+  );
+
+  const coordsForFit = useMemo(
+    () =>
+      coordsWithInsertion.length >= 2
+        ? coordsWithInsertion
+        : insertionPoint != null
+          ? [homePoint, insertionPoint]
+          : [homePoint],
+    [coordsWithInsertion, homePoint, insertionPoint]
+  );
+
+  const mapMarkers = useMemo<LeafletMarker[]>(() => {
+    const markers: LeafletMarker[] = [
+      {
+        id: 'home-base',
+        coordinate: homePoint,
+        label: 'H',
+        title: 'Home Base',
+        color: '#107C10',
+      },
+    ];
+
+    if (insertionPoint != null) {
+      markers.push({
+        id: 'proposed-visit',
+        coordinate: insertionPoint,
+        label: 'New',
+        title: 'Proposed visit',
+        color: '#D13438',
+      });
+    }
+
+    dayEvents
+      .filter(
+        (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
+          a.coordinates != null
+      )
+      .forEach((a, index) => {
+        markers.push({
+          id: `event-${a.id}`,
+          coordinate: a.coordinates,
+          label: String(index + 1),
+          title: a.title ?? undefined,
+          color: '#0078D4',
+        });
+      });
+
+    return markers;
+  }, [dayEvents, homePoint, insertionPoint]);
+
+  const mapPolylines = useMemo<LeafletPolyline[]>(
+    () =>
+      coordsWithInsertion.length >= 2
+        ? [
+            {
+              id: 'route-with-insertion',
+              coordinates: coordsWithInsertion,
+              color: '#00B0FF',
+              width: 4,
+            },
+          ]
+        : [],
+    [coordsWithInsertion]
+  );
+
+  const fitRequestKey = useMemo(
+    () =>
+      `${coordsForFit.length}:${coordsWithInsertion.length}:${slot?.startMs ?? 'none'}:${
+        newLocation?.lat ?? 'none'
+      }:${newLocation?.lon ?? 'none'}`,
+    [coordsForFit.length, coordsWithInsertion.length, newLocation?.lat, newLocation?.lon, slot?.startMs]
+  );
+
+  const initialCenter = useMemo<LeafletCoordinate>(() => {
+    if (insertionPoint == null) return DEFAULT_COORD;
+    return {
+      latitude: (homeBase.lat + insertionPoint.latitude) / 2,
+      longitude: (homeBase.lon + insertionPoint.longitude) / 2,
+    };
+  }, [homeBase.lat, homeBase.lon, insertionPoint]);
+
+  return (
+    <View style={styles.container}>
+      <NativeLeafletMap
+        style={styles.map}
+        markers={mapMarkers}
+        polylines={mapPolylines}
+        fitCoordinates={coordsForFit}
+        fitRequestKey={fitRequestKey}
+        fitPadding={48}
+        initialCenter={initialCenter}
+        initialZoom={11}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    minHeight: 200,
+  },
+  map: {
+    width: '100%',
+    height: '100%',
+    minHeight: 200,
+  },
+});

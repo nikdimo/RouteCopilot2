@@ -13,18 +13,19 @@ import {
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { ScheduleStackParamList } from '../navigation/ScheduleStack';
-import { MapPin, Trash2, Check, Circle } from 'lucide-react-native';
+import { MapPin, Trash2, Check, Circle, X, Clock, AlignLeft, Calendar } from 'lucide-react-native';
 import { useAuth } from '../context/AuthContext';
 import { useRoute as useRouteContext } from '../context/RouteContext';
+import { useUserPreferences } from '../context/UserPreferencesContext';
 import { openNativeDirections } from '../utils/maps';
 import {
   updateCalendarEvent,
   deleteCalendarEvent,
-  type CalendarEvent,
 } from '../services/graph';
+import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
 
-const MS_BLUE = '#0078D4';
-const RED = '#D13438';
+const MS_BLUE = '#2563EB'; // Vibrant Blue
+const RED = '#EF4444'; // Modern Red
 
 type MeetingDetailsNav = NativeStackNavigationProp<ScheduleStackParamList, 'MeetingDetails'>;
 type MeetingDetailsRoute = RouteProp<ScheduleStackParamList, 'MeetingDetails'>;
@@ -32,7 +33,10 @@ type MeetingDetailsRoute = RouteProp<ScheduleStackParamList, 'MeetingDetails'>;
 export default function MeetingDetailsScreen() {
   const navigation = useNavigation<MeetingDetailsNav>();
   const route = useRoute<MeetingDetailsRoute>();
-  const { getValidToken } = useAuth();
+  const { getValidToken, userToken } = useAuth();
+  const { preferences } = useUserPreferences();
+  const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
+  const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
   const { appointments, updateAppointment, removeAppointment, markEventAsDone, unmarkEventAsDone } =
     useRouteContext();
 
@@ -94,7 +98,7 @@ export default function MeetingDetailsScreen() {
     const token = getValidToken ? await getValidToken() : null;
     const isGraphEvent = !eventId.startsWith('local-');
 
-    if (token && isGraphEvent) {
+    if (canSyncCalendar && token && isGraphEvent) {
       const result = await updateCalendarEvent(token, eventId, {
         subject: patch.title,
         startIso: new Date(newStartMs).toISOString(),
@@ -140,7 +144,7 @@ export default function MeetingDetailsScreen() {
           onPress: async () => {
             const token = getValidToken ? await getValidToken() : null;
             const isGraphEvent = !eventId.startsWith('local-');
-            if (token && isGraphEvent) {
+            if (canSyncCalendar && token && isGraphEvent) {
               const result = await deleteCalendarEvent(token, eventId);
               if (!result.success && result.needsConsent) {
                 Alert.alert(
@@ -177,121 +181,177 @@ export default function MeetingDetailsScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
+    <View style={styles.container}>
+      <KeyboardAvoidingView
+        style={styles.keyboardContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.section}>
-          <Text style={styles.label}>Done</Text>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Custom Header */}
+          <View style={styles.headerRow}>
+            <Text style={styles.headerTitle}>Meeting Details</Text>
+            <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()}>
+              <X size={24} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Mark as Done Card */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.label}>STATUS</Text>
+          </View>
           <TouchableOpacity
-            style={styles.doneRow}
+            style={[styles.doneRow, isCompleted && styles.doneRowActive]}
             onPress={handleToggleDone}
             activeOpacity={0.8}
           >
             {isCompleted ? (
               <View style={styles.checkDone}>
-                <Check color="#fff" size={18} strokeWidth={3} />
+                <Check color="#fff" size={16} strokeWidth={3} />
               </View>
             ) : (
-              <Circle color="#107C10" size={28} />
+              <View style={styles.circleEmpty} />
             )}
-            <Text style={styles.doneLabel}>
+            <Text style={[styles.doneLabel, isCompleted && styles.doneLabelActive]}>
               {isCompleted ? 'Completed' : 'Mark as completed'}
             </Text>
           </TouchableOpacity>
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.label}>Title</Text>
-          <TextInput
-            style={styles.input}
-            value={title}
-            onChangeText={setTitle}
-            placeholder="Meeting title"
-            placeholderTextColor="#94a3b8"
-          />
-        </View>
+          {/* Title */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.label}>TITLE</Text>
+          </View>
+          <View style={styles.inputWrapper}>
+            <Calendar size={20} color="#94A3B8" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              value={title}
+              onChangeText={setTitle}
+              placeholder="Meeting title"
+              placeholderTextColor="#94A3B8"
+            />
+          </View>
 
-        <View style={styles.section}>
-          <Text style={styles.label}>Time</Text>
-          <TextInput
-            style={styles.input}
-            value={timeRange}
-            onChangeText={setTimeRange}
-            placeholder="09:00 - 10:00"
-            placeholderTextColor="#94a3b8"
-          />
-        </View>
+          {/* Time */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.label}>TIME</Text>
+          </View>
+          <View style={styles.inputWrapper}>
+            <Clock size={20} color="#94A3B8" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              value={timeRange}
+              onChangeText={setTimeRange}
+              placeholder="09:00 - 10:00"
+              placeholderTextColor="#94A3B8"
+            />
+          </View>
 
-        <View style={styles.section}>
-          <Text style={styles.label}>Address / Location</Text>
-          <TextInput
-            style={styles.input}
-            value={location}
-            onChangeText={setLocation}
-            placeholder="Address"
-            placeholderTextColor="#94a3b8"
-          />
-        </View>
+          {/* Address */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.label}>ADDRESS / LOCATION</Text>
+          </View>
+          <View style={styles.inputWrapper}>
+            <MapPin size={20} color="#94A3B8" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              value={location}
+              onChangeText={setLocation}
+              placeholder="Address"
+              placeholderTextColor="#94A3B8"
+            />
+          </View>
 
-        <View style={styles.section}>
-          <Text style={styles.label}>Notes</Text>
-          <TextInput
-            style={[styles.input, styles.notesInput]}
-            value={notes}
-            onChangeText={setNotes}
-            placeholder="Notes (optional)"
-            placeholderTextColor="#94a3b8"
-            multiline
-            numberOfLines={4}
-          />
-        </View>
+          {/* Notes */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.label}>NOTES</Text>
+          </View>
+          <View style={[styles.inputWrapper, { alignItems: 'flex-start' }]}>
+            <AlignLeft size={20} color="#94A3B8" style={[styles.inputIcon, { marginTop: 14 }]} />
+            <TextInput
+              style={[styles.input, styles.notesInput]}
+              value={notes}
+              onChangeText={setNotes}
+              placeholder="Notes (optional)"
+              placeholderTextColor="#94A3B8"
+              multiline
+              numberOfLines={4}
+            />
+          </View>
 
-        <TouchableOpacity
-          style={[styles.mapBtn, !hasCoords && styles.mapBtnDisabled]}
-          onPress={handleOpenDirections}
-          disabled={!hasCoords}
-          activeOpacity={0.8}
-        >
-          <MapPin color={hasCoords ? MS_BLUE : '#94a3b8'} size={20} />
-          <Text style={[styles.mapBtnText, !hasCoords && styles.mapBtnTextDisabled]}>
-            Open in Maps
-          </Text>
-        </TouchableOpacity>
+          {/* Actions */}
+          <View style={styles.actionsBox}>
+            <TouchableOpacity
+              style={[styles.mapBtn, !hasCoords && styles.mapBtnDisabled]}
+              onPress={handleOpenDirections}
+              disabled={!hasCoords}
+              activeOpacity={0.8}
+            >
+              <MapPin color={hasCoords ? MS_BLUE : '#94a3b8'} size={20} />
+              <Text style={[styles.mapBtnText, !hasCoords && styles.mapBtnTextDisabled]}>
+                Open in Maps
+              </Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSave} activeOpacity={0.8}>
-          <Text style={styles.saveBtnText}>Save changes</Text>
-        </TouchableOpacity>
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSave} activeOpacity={0.8}>
+              <Text style={styles.saveBtnText}>Save changes</Text>
+            </TouchableOpacity>
 
-        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} activeOpacity={0.8}>
-          <Trash2 color={RED} size={18} />
-          <Text style={styles.deleteBtnText}>Delete meeting</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </KeyboardAvoidingView>
+            <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} activeOpacity={0.8}>
+              <Trash2 color={RED} size={18} />
+              <Text style={styles.deleteBtnText}>Delete meeting</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F3F2F1',
+    backgroundColor: '#F8FAFC', // Match new app background
+  },
+  keyboardContainer: {
+    flex: 1,
   },
   scroll: {
     flex: 1,
   },
   scrollContent: {
-    padding: 20,
+    padding: 24,
     paddingBottom: 40,
+    width: '100%',
+    maxWidth: 700, // Important fix for desktop spanning
+    alignSelf: 'center',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+    paddingTop: 8,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  closeBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   errorText: {
     fontSize: 16,
-    color: '#605E5C',
+    color: '#64748B',
     textAlign: 'center',
     marginTop: 40,
   },
@@ -304,50 +364,82 @@ const styles = StyleSheet.create({
     color: MS_BLUE,
     fontWeight: '600',
   },
-  section: {
-    marginBottom: 20,
+  sectionHeader: {
+    marginBottom: 6,
+    marginTop: 18,
   },
   label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#605E5C',
-    marginBottom: 8,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+    letterSpacing: 0.5,
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  inputIcon: {
+    marginLeft: 16,
+    marginRight: 8,
   },
   input: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 16,
+    flex: 1,
     paddingVertical: 14,
+    paddingRight: 16,
     fontSize: 16,
-    color: '#1a1a1a',
-    borderWidth: 1,
-    borderColor: '#E1DFDD',
+    color: '#0F172A',
   },
   notesInput: {
-    minHeight: 100,
+    minHeight: 120,
     textAlignVertical: 'top',
   },
   doneRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
     padding: 16,
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E1DFDD',
+    borderColor: '#E2E8F0',
+    marginBottom: 8,
+  },
+  doneRowActive: {
+    backgroundColor: '#F0FDF4', // Light green background for checked
+    borderColor: '#86EFAC',
+  },
+  circleEmpty: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#CBD5E1',
   },
   checkDone: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#107C10',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#10B981', // Emerald
     alignItems: 'center',
     justifyContent: 'center',
   },
   doneLabel: {
     fontSize: 16,
+    fontWeight: '600',
     marginLeft: 12,
-    color: '#1a1a1a',
+    color: '#334155',
+  },
+  doneLabelActive: {
+    color: '#065F46',
+  },
+  actionsBox: {
+    marginTop: 40,
+    paddingTop: 24,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
   },
   mapBtn: {
     flexDirection: 'row',
@@ -355,33 +447,35 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 14,
     paddingHorizontal: 20,
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 2,
     borderColor: MS_BLUE,
-    marginBottom: 12,
+    marginBottom: 16,
+    backgroundColor: '#FFFFFF',
   },
   mapBtnDisabled: {
-    borderColor: '#94a3b8',
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
     opacity: 0.7,
   },
   mapBtnText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
     color: MS_BLUE,
     marginLeft: 8,
   },
   mapBtnTextDisabled: {
-    color: '#94a3b8',
+    color: '#94A3B8',
   },
   saveBtn: {
     backgroundColor: MS_BLUE,
     paddingVertical: 16,
-    borderRadius: 8,
+    borderRadius: 12,
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 24,
   },
   saveBtnText: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '700',
   },
@@ -390,12 +484,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: RED,
-    borderRadius: 8,
   },
   deleteBtnText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: RED,
     marginLeft: 8,

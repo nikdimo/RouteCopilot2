@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WisePlan Admin MVP</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <h1>WisePlan Admin MVP</h1>
+        <p>Use this for local admin operations until full billing/admin app is shipped.</p>
+      </header>
+
+      <section class="card">
+        <h2>Connection</h2>
+        <div class="grid two">
+          <label>
+            API Base URL
+            <input id="apiBaseInput" type="text" value="http://localhost:4000/api" />
+          </label>
+          <label>
+            Bearer Token (optional in dev auth mode)
+            <input id="tokenInput" type="password" placeholder="eyJ..." />
+          </label>
+        </div>
+        <div class="row">
+          <button id="connectBtn" type="button">Connect</button>
+          <span id="statusText" class="muted">Not connected</span>
+        </div>
+        <pre id="mePre" class="pre"></pre>
+      </section>
+
+      <section class="card">
+        <h2>Users & Tier Overrides</h2>
+        <div class="row wrap">
+          <input id="userSearchInput" type="text" placeholder="Search by email/name/aad oid" />
+          <button id="searchUsersBtn" type="button">Search users</button>
+          <button id="loadOverridesBtn" type="button">Load overrides</button>
+        </div>
+        <div id="usersTableWrap" class="tableWrap"></div>
+        <h3>Overrides</h3>
+        <div id="overridesTableWrap" class="tableWrap"></div>
+      </section>
+
+      <section class="card">
+        <h2>Admin Allowlist</h2>
+        <div class="row wrap">
+          <input id="allowUserIdInput" type="text" placeholder="User UUID" />
+          <select id="allowRoleSelect">
+            <option value="support_admin">support_admin</option>
+            <option value="super_admin">super_admin</option>
+          </select>
+          <button id="addAllowBtn" type="button">Upsert admin</button>
+          <button id="loadAllowBtn" type="button">Refresh allowlist</button>
+        </div>
+        <div id="allowlistTableWrap" class="tableWrap"></div>
+      </section>
+
+      <section class="card">
+        <h2>User State & Audit</h2>
+        <div class="row wrap">
+          <input id="stateDayKeyInput" type="text" placeholder="YYYY-MM-DD (optional)" />
+          <input id="stateSearchInput" type="text" placeholder="Search user (optional)" />
+          <button id="loadStateBtn" type="button">Load user state</button>
+          <button id="loadAuditBtn" type="button">Load audit</button>
+        </div>
+        <h3>User State</h3>
+        <div id="stateTableWrap" class="tableWrap"></div>
+        <h3>Audit</h3>
+        <div id="auditTableWrap" class="tableWrap"></div>
+      </section>
+    </main>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

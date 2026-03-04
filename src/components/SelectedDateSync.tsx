@@ -9,9 +9,12 @@ import { Platform } from 'react-native';
 import { startOfDay, endOfDay, addDays, subDays } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
+import { useUserPreferences } from '../context/UserPreferencesContext';
 import { getCalendarEventsRaw, enrichCalendarEventsAll, GraphUnauthorizedError } from '../services/graph';
+import { getLocalMeetingsForDay } from '../services/localMeetings';
 import { sortAppointmentsByTime } from '../utils/optimization';
 import { toLocalDayKey } from '../utils/dateUtils';
+import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
 
 const PRELOAD_DAYS_AHEAD = 5;
 
@@ -38,6 +41,9 @@ function applyOrderSync(
 
 export default function SelectedDateSync() {
   const { userToken, getValidToken, signOut } = useAuth();
+  const { preferences } = useUserPreferences();
+  const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
+  const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
   const {
     selectedDate,
     refreshTrigger,
@@ -53,28 +59,50 @@ export default function SelectedDateSync() {
   /** Track which day is currently "active" so background enrichment doesn't clobber a switched day. */
   const activeDayKey = useRef<string>('');
 
+  const pendingEventRef = useRef(pendingLocalEvent);
+  useEffect(() => {
+    pendingEventRef.current = pendingLocalEvent;
+  }, [pendingLocalEvent]);
+
+  useEffect(() => {
+    if (canSyncCalendar && userToken) return;
+    dayCache.current.clear();
+    activeDayKey.current = '';
+  }, [canSyncCalendar, userToken]);
+
   /** Merge pending local event into list for this day (so newly confirmed meeting shows immediately). */
   const mergePendingIfSameDay = useCallback(
     (dayKey: string, list: Awaited<ReturnType<typeof sortAppointmentsByTime>>) => {
-      if (!pendingLocalEvent || pendingLocalEvent.dayKey !== dayKey) return list;
-      const hasId = list.some((e) => e.id === pendingLocalEvent.event.id);
+      const pending = pendingEventRef.current;
+      if (!pending || pending.dayKey !== dayKey) return list;
+      const hasId = list.some((e) => e.id === pending.event.id);
       if (hasId) return list;
-      const merged = sortAppointmentsByTime([...list, { ...pendingLocalEvent.event, status: 'pending' as const }]);
+      const merged = sortAppointmentsByTime([...list, { ...pending.event, status: 'pending' as const }]);
       setPendingLocalEvent(null);
       return merged;
     },
-    [pendingLocalEvent, setPendingLocalEvent]
+    [setPendingLocalEvent]
   );
 
   const fetchForDate = useCallback(
     async (date: Date) => {
+      const dayKey = toLocalDayKey(date);
+      if (!canSyncCalendar) {
+        const localEvents = await getLocalMeetingsForDay(dayKey);
+        const localSorted = sortAppointmentsByTime(localEvents);
+        const localMerged = mergePendingIfSameDay(dayKey, localSorted);
+        dayCache.current.set(dayKey, localMerged);
+        setAppointments(localMerged);
+        setAppointmentsLoading(false);
+        setAppointmentsEnriching(false);
+        return;
+      }
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
       if (!token) {
         setAppointments([]);
         setAppointmentsEnriching(false);
         return;
       }
-      const dayKey = toLocalDayKey(date);
       activeDayKey.current = dayKey;
 
       // ── Serve from cache immediately if available ──
@@ -162,12 +190,13 @@ export default function SelectedDateSync() {
         if (e instanceof GraphUnauthorizedError) signOut();
       }
     },
-    [userToken, getValidToken, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, getDayOrder, signOut, mergePendingIfSameDay]
+    [canSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, getDayOrder, signOut, mergePendingIfSameDay]
   );
 
   /** Preload a future day fully (raw + enrich) and store in cache. Does not update context. */
   const preloadOneDay = useCallback(
     async (date: Date) => {
+      if (!canSyncCalendar) return;
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
       if (!token) return;
       const dayKey = toLocalDayKey(date);
@@ -196,7 +225,7 @@ export default function SelectedDateSync() {
         // ignore; preload is best-effort
       }
     },
-    [userToken, getValidToken, getDayOrder]
+    [canSyncCalendar, userToken, getValidToken, getDayOrder]
   );
 
   useEffect(() => {
@@ -217,6 +246,7 @@ export default function SelectedDateSync() {
   }, [selectedDate, fetchForDate, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, mergePendingIfSameDay]);
 
   useEffect(() => {
+    if (!canSyncCalendar) return;
     if (!userToken && !getValidToken) return;
     let cancelled = false;
     const run = async () => {
@@ -232,7 +262,7 @@ export default function SelectedDateSync() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDate, userToken, getValidToken, preloadOneDay]);
+  }, [canSyncCalendar, selectedDate, userToken, getValidToken, preloadOneDay]);
 
   useEffect(() => {
     if (refreshTrigger === lastRefreshTrigger.current) return;

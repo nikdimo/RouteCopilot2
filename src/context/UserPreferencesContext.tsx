@@ -3,12 +3,17 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { UserPreferences } from '../types';
 import { DEFAULT_USER_PREFERENCES, DEFAULT_WORKING_DAYS } from '../types';
+import { useAuth } from './AuthContext';
+import { backendGetFeatureAccess, backendGetProfileSettings } from '../services/backendApi';
+import { getSubscriptionTier } from '../utils/subscription';
 
-const PREFS_KEY = 'routeCopilot_userPreferences';
+const PREFS_KEY = 'wiseplan_userPreferences';
+const LEGACY_PREFS_KEYS = ['routeCopilot_userPreferences'] as const;
 
 function mergeStoredIntoDefaults(parsed: Partial<UserPreferences> | null): UserPreferences {
   if (!parsed || typeof parsed !== 'object') return DEFAULT_USER_PREFERENCES;
   try {
+    const subscriptionTier = getSubscriptionTier(parsed);
     const wd = parsed.workingDays;
     const validWorkingDays =
       Array.isArray(wd) &&
@@ -19,6 +24,7 @@ function mergeStoredIntoDefaults(parsed: Partial<UserPreferences> | null): UserP
     return {
       ...DEFAULT_USER_PREFERENCES,
       ...parsed,
+      subscriptionTier,
       workingHours: {
         ...DEFAULT_USER_PREFERENCES.workingHours,
         ...(parsed.workingHours && typeof parsed.workingHours === 'object'
@@ -38,7 +44,10 @@ function getInitialPreferences(): UserPreferences {
     return DEFAULT_USER_PREFERENCES;
   }
   try {
-    const raw = window.localStorage.getItem(PREFS_KEY);
+    const raw =
+      window.localStorage.getItem(PREFS_KEY) ??
+      LEGACY_PREFS_KEYS.map((k) => window.localStorage.getItem(k)).find((v) => v != null) ??
+      null;
     if (!raw) return DEFAULT_USER_PREFERENCES;
     const parsed = JSON.parse(raw) as Partial<UserPreferences>;
     return mergeStoredIntoDefaults(parsed);
@@ -54,7 +63,20 @@ type UserPreferencesContextValue = {
 
 const UserPreferencesContext = createContext<UserPreferencesContextValue | null>(null);
 
+function persistPreferences(next: UserPreferences) {
+  const serialized = JSON.stringify(next);
+  AsyncStorage.setItem(PREFS_KEY, serialized).catch(() => {});
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(PREFS_KEY, serialized);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export function UserPreferencesProvider({ children }: { children: React.ReactNode }) {
+  const { userToken, getValidToken } = useAuth();
   const [preferences, setPreferences] = useState<UserPreferences>(getInitialPreferences);
 
   useEffect(() => {
@@ -67,31 +89,125 @@ export function UserPreferencesProvider({ children }: { children: React.ReactNod
           } catch {
             // ignore invalid JSON
           }
+          return;
         }
+
+        Promise.all(LEGACY_PREFS_KEYS.map((k) => AsyncStorage.getItem(k)))
+          .then((legacyValues) => {
+            const legacyRaw = legacyValues.find((v) => v != null);
+            if (!legacyRaw) return;
+            try {
+              const parsed = JSON.parse(legacyRaw) as Partial<UserPreferences>;
+              const merged = mergeStoredIntoDefaults(parsed);
+              const serialized = JSON.stringify(merged);
+              setPreferences(merged);
+              AsyncStorage.setItem(PREFS_KEY, serialized).catch(() => {});
+              if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+                try {
+                  window.localStorage.setItem(PREFS_KEY, serialized);
+                } catch {
+                  // ignore
+                }
+              }
+            } catch {
+              // ignore invalid legacy JSON
+            }
+          })
+          .catch(() => {});
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      if (!userToken) {
+        if (cancelled) return;
+        setPreferences((prev) => {
+          const next = mergeStoredIntoDefaults(DEFAULT_USER_PREFERENCES);
+          if (JSON.stringify(prev) === JSON.stringify(next)) {
+            return prev;
+          }
+          persistPreferences(next);
+          return next;
+        });
+        return;
+      }
+
+      const token = userToken ?? (getValidToken ? await getValidToken() : null);
+      if (!token || cancelled) return;
+
+      const [remoteSettings, remoteFeatures] = await Promise.all([
+        backendGetProfileSettings(token),
+        backendGetFeatureAccess(token),
+      ]);
+      if (cancelled) return;
+
+      setPreferences((prev) => {
+        const signedInFallbackUseAdvanced = true;
+        const next = mergeStoredIntoDefaults(
+          remoteSettings
+            ? {
+                ...prev,
+                subscriptionTier: remoteSettings.access.subscriptionTier,
+                workingHours: remoteSettings.settings.workingHours,
+                preMeetingBuffer: remoteSettings.settings.preMeetingBuffer,
+                postMeetingBuffer: remoteSettings.settings.postMeetingBuffer,
+                homeBase: {
+                  lat: remoteSettings.settings.homeBase.lat,
+                  lon: remoteSettings.settings.homeBase.lon,
+                },
+                homeBaseLabel: remoteSettings.settings.homeBaseLabel,
+                workingDays: remoteSettings.settings.workingDays,
+                distanceThresholdKm: remoteSettings.settings.distanceThresholdKm,
+                alwaysStartFromHomeBase: remoteSettings.settings.alwaysStartFromHomeBase,
+                useGoogleGeocoding: remoteSettings.settings.useGoogleGeocoding,
+                useTrafficAwareRouting: remoteSettings.settings.useTrafficAwareRouting,
+                googleMapsApiKey: remoteSettings.settings.googleMapsApiKey ?? undefined,
+                calendarConnected: remoteSettings.settings.calendarConnected,
+                calendarProvider: remoteSettings.settings.calendarProvider ?? undefined,
+              }
+            : remoteFeatures
+            ? {
+                ...prev,
+                subscriptionTier: remoteFeatures.subscriptionTier,
+                useGoogleGeocoding: remoteFeatures.preferences.useAdvancedGeocoding,
+                useTrafficAwareRouting: remoteFeatures.preferences.useTrafficRouting,
+              }
+            : {
+                ...prev,
+                subscriptionTier: 'basic',
+                useGoogleGeocoding: signedInFallbackUseAdvanced,
+              }
+        );
+
+        if (JSON.stringify(prev) === JSON.stringify(next)) {
+          return prev;
+        }
+
+        persistPreferences(next);
+        return next;
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userToken, getValidToken]);
 
   const updatePreferences = useCallback((partial: Partial<UserPreferences>) => {
     setPreferences((prev) => {
       const next = {
         ...prev,
         ...partial,
+        subscriptionTier: getSubscriptionTier({ ...prev, ...partial }),
         workingHours: partial.workingHours
           ? { ...prev.workingHours, ...partial.workingHours }
           : prev.workingHours,
         workingDays: partial.workingDays ?? prev.workingDays ?? DEFAULT_WORKING_DAYS,
       };
-      const serialized = JSON.stringify(next);
-      AsyncStorage.setItem(PREFS_KEY, serialized).catch(() => {});
-      // On web, also write to localStorage so sync initial read and map see the same data
-      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
-        try {
-          window.localStorage.setItem(PREFS_KEY, serialized);
-        } catch {
-          // ignore
-        }
-      }
+      persistPreferences(next);
       return next;
     });
   }, []);

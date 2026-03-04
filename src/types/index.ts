@@ -7,6 +7,8 @@ export type Meeting = {
   longitude: number;
 };
 
+export type SubscriptionTier = 'free' | 'basic' | 'pro' | 'premium';
+
 /** Status for calendar events / route stops */
 export type EventStatus = 'pending' | 'completed' | 'skipped';
 
@@ -15,6 +17,8 @@ export type WorkingDays = [boolean, boolean, boolean, boolean, boolean, boolean,
 
 /** User profile settings for smart scheduling (Phase 7) */
 export type UserPreferences = {
+  /** Current local/app entitlement tier. Billing backend will eventually source this server-side. */
+  subscriptionTier?: SubscriptionTier;
   workingHours: { start: string; end: string }; // "08:00", "17:00"
   postMeetingBuffer: number; // Minutes reserved AFTER meeting end (overrun/wrap-up)
   preMeetingBuffer: number; // Minutes reserved BEFORE meeting start (parking/check-in)
@@ -28,6 +32,12 @@ export type UserPreferences = {
   distanceThresholdKm?: number;
   /** Use Google Places/Geocoding API for address search instead of free OpenStreetMap (Nominatim). Requires googleMapsApiKey. */
   useGoogleGeocoding?: boolean;
+  /** Enable traffic-aware backend routing when included in subscription. */
+  useTrafficAwareRouting?: boolean;
+  /** Indicates whether calendar sync integration is connected for this profile. */
+  calendarConnected?: boolean;
+  /** Connected calendar provider when calendarConnected is true. */
+  calendarProvider?: 'outlook';
   /** Google Cloud API key with Places API and Geocoding API enabled. Only used when useGoogleGeocoding is true. */
   googleMapsApiKey?: string;
   /**
@@ -53,12 +63,17 @@ export const DEFAULT_WORKING_DAYS: WorkingDays = [
 export const DEFAULT_HOME_BASE = { lat: 55.6761, lon: 12.5683 } as const; // Copenhagen
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
+  subscriptionTier: 'free',
   workingHours: { start: '08:00', end: '17:00' },
   postMeetingBuffer: 15,
   preMeetingBuffer: 15,
   workingDays: DEFAULT_WORKING_DAYS,
   homeBase: DEFAULT_HOME_BASE,
   distanceThresholdKm: 30,
+  useGoogleGeocoding: false,
+  useTrafficAwareRouting: false,
+  calendarConnected: false,
+  calendarProvider: undefined,
 };
 
 /** Proposed time slot from smart scheduling (Phase 7) */

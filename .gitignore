@@ -48,6 +48,7 @@ connect-vps.bat
 # Env files (secrets)
 .env
 .env.*
+!backend/.env.example
 
 # Google Play service account key
 google-service-account.json
@@ -69,6 +70,9 @@ con
 prn
 aux
 
+# Deploy output lives in sibling wiseplan-release/; ignore if vps-landing/app exists from older setup
+vps-landing/app/
+
 # Local build/cache artifacts (machine-specific)
 .android-user-home/
 .gradle/
@@ -76,3 +80,23 @@ aux
 app.json.bak
 app.json.bak2
 .idea/caches/
+
+# Local runtime output
+logs/
+*.log
+
+# Explicit backend local secret file (kept out of git)
+backend/.env
+
+# Local one-off helper files (machine-specific)
+Build.APK.SOFT.bat
+Build_Android.APK_Nuclear.docx
+Build_android.APK._SOFT.bat
+Build_android.APK.nuclear.bat
+Gihub_Push.bat
+Performance optmization proposal and DB _ CLAUDE.rtf
+VPS_Connect.bat
+VPS_Deploy_Web.bat
+VPS_Pull & Deploy.bat
+VPS_Pull.bat
+run_Claude.bat

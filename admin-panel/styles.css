@@ -1,0 +1,162 @@
+:root {
+  --bg: #f2f5f8;
+  --card: #ffffff;
+  --line: #d4dce4;
+  --text: #1f2a37;
+  --muted: #5a6775;
+  --brand: #0069c2;
+  --danger: #c62828;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: var(--text);
+  background: linear-gradient(160deg, #f8fbff 0%, var(--bg) 100%);
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.header p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 16px;
+  box-shadow: 0 8px 24px rgba(0, 33, 71, 0.05);
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+.card h3 {
+  margin-top: 18px;
+}
+
+.grid.two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input,
+select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  min-width: 220px;
+}
+
+button {
+  border: 0;
+  border-radius: 8px;
+  background: var(--brand);
+  color: white;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+button.danger {
+  background: var(--danger);
+}
+
+button.secondary {
+  background: #607d94;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pre {
+  margin-top: 10px;
+  background: #0f1720;
+  color: #d4e0ec;
+  padding: 10px;
+  border-radius: 8px;
+  overflow: auto;
+  min-height: 44px;
+}
+
+.tableWrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 10px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  text-align: left;
+  vertical-align: top;
+  font-size: 13px;
+}
+
+th {
+  background: #f7f9fc;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+td .row {
+  margin-top: 0;
+}
+
+@media (max-width: 900px) {
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+}

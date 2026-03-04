@@ -6,13 +6,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRoute } from '../context/RouteContext';
+import { useAuth } from '../context/AuthContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { getTravelMinutes } from '../utils/scheduler';
 import { DEFAULT_HOME_BASE } from '../types';
 import { fetchRoute, type OSRMRoute } from '../utils/osrm';
 import { parseTimeToDayMs, formatDurationMinutes } from '../utils/dateUtils';
 import type { CalendarEvent } from '../services/graph';
+
+const LAST_ROUTE_CACHE_KEY = 'wiseplan_lastRoute';
+const LAST_ROUTE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+type LastRouteCache = {
+  waypointsKey: string;
+  coordinates: Array<{ latitude: number; longitude: number }>;
+  savedAt: number;
+};
 
 export type CoordAppointment = CalendarEvent & {
   coordinates: { latitude: number; longitude: number };
@@ -37,6 +48,8 @@ export type UseRouteDataResult = {
   allCoordsForFit: Array<{ latitude: number; longitude: number }>;
   /** Fallback polyline when OSRM not available - {latitude, longitude}[] */
   fullPolyline: Array<{ latitude: number; longitude: number }>;
+  /** Cached polyline from last session (same waypoints): show faded while OSRM loads */
+  cachedPolylineFromSession: Array<{ latitude: number; longitude: number }> | null;
   /** ETA (arrival time in ms) for each meeting */
   etas: number[];
   /** Formatted duration string for each meeting (e.g. "30 min") */
@@ -57,6 +70,10 @@ export type UseRouteDataResult = {
 export function useRouteData(): UseRouteDataResult {
   const [osrmRoute, setOsrmRoute] = useState<OSRMRoute | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [cachedPolylineFromSession, setCachedPolylineFromSession] = useState<
+    Array<{ latitude: number; longitude: number }> | null
+  >(null);
+  const { userToken, getValidToken } = useAuth();
   const { appointments: appointmentsFromContext } = useRoute();
   const { preferences } = useUserPreferences();
 
@@ -104,16 +121,41 @@ export function useRouteData(): UseRouteDataResult {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       setOsrmRoute(null);
       setRouteLoading(false);
+      setCachedPolylineFromSession(null);
       return;
     }
 
-    // Show loading immediately but debounce the actual fetch (avoids rapid re-fetches during drag/reorder)
+    // Show loading immediately; try to show last-session polyline faded while OSRM loads
     setRouteLoading(true);
+    setCachedPolylineFromSession(null);
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     let cancelled = false;
+    AsyncStorage.getItem(LAST_ROUTE_CACHE_KEY)
+      .then((raw) => {
+        if (cancelled) return;
+        if (!raw) return;
+        try {
+          const entry = JSON.parse(raw) as LastRouteCache;
+          if (
+            entry?.waypointsKey === waypointsKey &&
+            Array.isArray(entry?.coordinates) &&
+            entry.coordinates.length >= 2 &&
+            Date.now() - (entry.savedAt ?? 0) < LAST_ROUTE_TTL_MS
+          ) {
+            setCachedPolylineFromSession(entry.coordinates);
+          }
+        } catch {
+          // ignore
+        }
+      })
+      .catch(() => {});
+
     debounceRef.current = setTimeout(() => {
-      fetchRoute(waypoints)
+      (async () => {
+        const token = userToken ?? (getValidToken ? await getValidToken() : null);
+        return fetchRoute(waypoints, { authToken: token });
+      })()
         .then((route) => {
           if (!cancelled) {
             if (ROUTE_QC_LOG) {
@@ -124,6 +166,15 @@ export function useRouteData(): UseRouteDataResult {
               });
             }
             setOsrmRoute(route);
+            if (route?.coordinates?.length) {
+              const cache: LastRouteCache = {
+                waypointsKey,
+                coordinates: route.coordinates,
+                savedAt: Date.now(),
+              };
+              AsyncStorage.setItem(LAST_ROUTE_CACHE_KEY, JSON.stringify(cache)).catch(() => {});
+              setCachedPolylineFromSession(null);
+            }
           }
         })
         .catch((err) => {
@@ -141,17 +192,21 @@ export function useRouteData(): UseRouteDataResult {
       cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [waypointsKey]);
+  }, [waypointsKey, userToken, getValidToken]);
+
 
   const refetchRouteIfNeeded = useCallback(() => {
     if (waypoints.length >= 2 && !osrmRoute && !routeLoading) {
       setRouteLoading(true);
-      fetchRoute(waypoints)
+      (async () => {
+        const token = userToken ?? (getValidToken ? await getValidToken() : null);
+        return fetchRoute(waypoints, { authToken: token });
+      })()
         .then((route) => setOsrmRoute(route))
         .catch(() => setOsrmRoute(null))
         .finally(() => setRouteLoading(false));
     }
-  }, [waypointsKey, waypoints, osrmRoute, routeLoading]);
+  }, [waypointsKey, waypoints, osrmRoute, routeLoading, userToken, getValidToken]);
 
   const {
     departByMs,
@@ -315,6 +370,7 @@ export function useRouteData(): UseRouteDataResult {
     returnByMs,
     allCoordsForFit,
     fullPolyline,
+    cachedPolylineFromSession,
     etas,
     meetingDurations,
     legStats,

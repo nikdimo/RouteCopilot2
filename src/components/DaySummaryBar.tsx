@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Clock, Navigation, Car, Flag } from 'lucide-react-native';
 import { formatTime } from '../utils/dateUtils';
 import { formatDurationSeconds } from '../utils/dateUtils';
 import { formatDistance } from '../utils/routeBubbles';
@@ -14,86 +15,108 @@ export type DaySummaryBarProps = {
   longWaitCount?: number;
 };
 
+const MS_BLUE = '#2563EB';
+const LIGHT_BLUE = '#EFF6FF';
+const TEXT_MUTED = '#94A3B8';
+const TEXT_DARK = '#0F172A';
+
 export default function DaySummaryBar({
   totalDriveSec,
   totalDistanceM,
   departByMs,
   returnByMs,
-  tightCount,
-  lateCount,
-  longWaitCount = 0,
 }: DaySummaryBarProps) {
   const totalDriveStr = formatDurationSeconds(totalDriveSec);
   const totalDistStr = formatDistance(totalDistanceM);
-  const summaryParts: string[] = [];
-  if (lateCount > 0) summaryParts.push(`${lateCount} late`);
-  if (tightCount > 0) summaryParts.push(`${tightCount} tight`);
-  if (longWaitCount > 0) summaryParts.push(`${longWaitCount} long wait`);
-  const summaryStr = summaryParts.length > 0 ? summaryParts.join(', ') : 'On time';
+
+  const startTimeStr = formatTime(departByMs);
+  const endTimeStr = formatTime(returnByMs);
 
   return (
-    <View style={styles.container}>
+    <View style={styles.gridContainer}>
       <View style={styles.row}>
-        <Text style={styles.primary}>
-          {totalDriveStr} drive · {totalDistStr}
-        </Text>
+        {/* Box 1: Drive Time */}
+        <View style={styles.card}>
+          <View style={styles.header}>
+            <Clock size={14} color={MS_BLUE} />
+            <Text style={styles.label}>TOTAL DRIVE TIME</Text>
+          </View>
+          <Text style={styles.value}>{totalDriveStr.replace(' hr', 'h').replace(' min', ' min')} drive</Text>
+        </View>
+
+        {/* Box 2: Distance */}
+        <View style={styles.card}>
+          <View style={styles.header}>
+            <Navigation size={14} color="#9333EA" />
+            <Text style={styles.label}>TOTAL DISTANCE</Text>
+          </View>
+          <Text style={styles.value}>{totalDistStr}</Text>
+        </View>
       </View>
+
       <View style={styles.row}>
-        <Text style={styles.secondary}>
-          Out {formatTime(departByMs)} · Back ~{formatTime(returnByMs)}
-        </Text>
-      </View>
-      <View style={styles.row}>
-        <Text
-          style={[
-            styles.badge,
-            (lateCount > 0 || tightCount > 0) && styles.badgeWarning,
-            lateCount > 0 && styles.badgeLate,
-          ]}
-        >
-          {summaryStr}
-        </Text>
+        {/* Box 3: Start Time */}
+        <View style={styles.card}>
+          <View style={styles.header}>
+            <Car size={14} color="#16A34A" />
+            <Text style={styles.label}>START TIME</Text>
+          </View>
+          <Text style={styles.value}>{startTimeStr}</Text>
+        </View>
+
+        {/* Box 4: End Time */}
+        <View style={styles.card}>
+          <View style={styles.header}>
+            <Flag size={14} color="#D97706" />
+            <Text style={styles.label}>END TIME</Text>
+          </View>
+          <Text style={styles.value}>{endTimeStr}</Text>
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    paddingVertical: 12,
+  gridContainer: {
     paddingHorizontal: 16,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    marginBottom: 24,
+    gap: 12,
   },
   row: {
-    marginBottom: 4,
+    flexDirection: 'row',
+    gap: 12,
   },
-  rowLast: {
-    marginBottom: 0,
+  card: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.02,
+    shadowRadius: 4,
+    elevation: 2,
+    minHeight: 70,
+    justifyContent: 'flex-start',
   },
-  primary: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#1a1a1a',
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
   },
-  secondary: {
-    fontSize: 13,
-    color: '#605E5C',
+  label: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: TEXT_MUTED,
+    letterSpacing: 0.5,
   },
-  badge: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#107C10',
-    marginTop: 4,
-  },
-  badgeWarning: {
-    color: '#C19C00',
-  },
-  badgeLate: {
-    color: '#D13438',
+  value: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: TEXT_DARK,
   },
 });

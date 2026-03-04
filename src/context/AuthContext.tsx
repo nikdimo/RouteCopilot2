@@ -1,11 +1,22 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { Platform } from 'react-native';
+import * as Linking from 'expo-linking';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { MS_CLIENT_ID } from '../config/auth';
-import { refreshAccessToken } from '../utils/tokenRefresh';
+import { BACKEND_API_BASE_URL, BACKEND_API_ENABLED } from '../config/backend';
+import { clearGraphSession } from '../services/graphAuth';
 
-// SecureStore is not available on web; use AsyncStorage instead.
+const BACKEND_BASE_FALLBACK = 'http://localhost:4000';
+const NORMALIZED_BACKEND_BASE = (() => {
+  const raw = (BACKEND_API_BASE_URL || BACKEND_BASE_FALLBACK).replace(/\/+$/, '');
+  return raw.endsWith('/api') ? raw.slice(0, -4) : raw;
+})();
+
+function buildApiUrl(path: string) {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${NORMALIZED_BACKEND_BASE}/api${normalizedPath}`;
+}
+
 const tokenStorage = {
   async getItem(key: string): Promise<string | null> {
     if (Platform.OS === 'web') return AsyncStorage.getItem(key);
@@ -22,8 +33,8 @@ const tokenStorage = {
 };
 
 export type UserData = {
+  email: string | null;
   displayName: string | null;
-  mail: string | null;
 };
 
 type AuthContextValue = {
@@ -32,92 +43,106 @@ type AuthContextValue = {
   isRestoringSession: boolean;
   signIn: (token: string, refreshToken?: string) => Promise<void>;
   signOut: () => void;
-  /** Get a valid token, refreshing if needed. Returns null if session invalid. */
   getValidToken: () => Promise<string | null>;
+  requestMagicLink: (email: string) => Promise<{ success: boolean; error?: string }>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const ME_URL = 'https://graph.microsoft.com/v1.0/me';
-const ME_SELECT = 'displayName,mail';
-const TOKEN_KEY = 'userToken';
-const REFRESH_TOKEN_KEY = 'userRefreshToken';
-
-// ─── JWT helpers (no-network token inspection) ────────────────────────────────
+const TOKEN_KEY = 'wiseplanAuthToken';
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const parts = token.split('.');
     if (parts.length < 2) return null;
     const base64 = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=');
-    return JSON.parse(atob(padded)) as Record<string, unknown>;
+    // React Native minimal atob
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    let str = base64.replace(/=+$/, '');
+    let output = '';
+    for (let bc = 0, bs = 0, buffer, i = 0; buffer = str.charAt(i++); ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4) ? output += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
+      buffer = chars.indexOf(buffer);
+    }
+    return JSON.parse(decodeURIComponent(escape(output)));
   } catch {
     return null;
   }
 }
 
-/** Returns true if the JWT is expired (or unparseable). Uses a 60-second buffer. */
 function isTokenExpired(token: string): boolean {
   const payload = decodeJwtPayload(token);
   if (!payload) return true;
   const exp = typeof payload.exp === 'number' ? payload.exp : null;
-  if (exp == null) return true;
+  if (exp == null) return false;
   return Date.now() / 1000 > exp - 60;
 }
 
-/** Extract user display info from Microsoft JWT claims — no network needed. */
 function userDataFromJwt(token: string): UserData {
   const payload = decodeJwtPayload(token);
-  const displayName = payload && typeof payload.name === 'string' ? payload.name : null;
-  const mail =
-    payload && typeof payload.preferred_username === 'string'
-      ? payload.preferred_username
-      : payload && typeof payload.upn === 'string'
-      ? payload.upn
-      : null;
-  return { displayName, mail };
+  const email = typeof payload?.email === 'string' ? payload.email : null;
+  const displayName = typeof payload?.name === 'string' ? payload.name : email;
+  return { email, displayName };
+}
+
+function stripMagicTokenFromWebUrl() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined' || !window.history?.replaceState) {
+    return;
+  }
+  try {
+    const current = new URL(window.location.href);
+    if (!current.searchParams.has('token')) return;
+    current.searchParams.delete('token');
+    const nextSearch = current.searchParams.toString();
+    const nextUrl = `${current.pathname}${nextSearch ? `?${nextSearch}` : ''}${current.hash ?? ''}`;
+    window.history.replaceState({}, '', nextUrl);
+  } catch {
+    // ignore browser URL cleanup errors
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userToken, setUserToken] = useState<string | null>(null);
   const [userData, setUserData] = useState<UserData | null>(null);
-  /** True until we've checked SecureStore for a stored session. Prevents showing Login while restoring. */
   const [isRestoringSession, setIsRestoringSession] = useState(true);
 
   const signOut = useCallback(() => {
     setUserToken(null);
     setUserData(null);
-    tokenStorage.removeItem(TOKEN_KEY).catch(() => {});
-    tokenStorage.removeItem(REFRESH_TOKEN_KEY).catch(() => {});
+    tokenStorage.removeItem(TOKEN_KEY).catch(() => { });
+    clearGraphSession().catch(() => { });
   }, []);
 
   const fetchUserData = useCallback(async (token: string) => {
+    if (!BACKEND_API_ENABLED) {
+      setUserData(userDataFromJwt(token));
+      return true;
+    }
     try {
-      const res = await fetch(`${ME_URL}?$select=${ME_SELECT}`, {
+      const res = await fetch(buildApiUrl('/me'), {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.status === 401) return false;
-      if (!res.ok) return false;
+      if (!res.ok) {
+        // Keep session on non-auth failures (e.g. endpoint temporarily unavailable).
+        setUserData(userDataFromJwt(token));
+        return true;
+      }
       const data = await res.json();
       setUserData({
-        displayName: data.displayName ?? null,
-        mail: data.mail ?? data.userPrincipalName ?? null,
+        email: data.email ?? null,
+        displayName: data.name ?? data.email ?? null,
       });
       return true;
     } catch {
-      setUserData(null);
-      return false;
+      setUserData(userDataFromJwt(token));
+      return true;
     }
   }, []);
 
   const signIn = useCallback(
-    async (token: string, refreshToken?: string) => {
+    async (token: string) => {
       setUserToken(token);
       await tokenStorage.setItem(TOKEN_KEY, token);
-      if (refreshToken) {
-        await tokenStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-      }
       const ok = await fetchUserData(token);
       if (!ok) signOut();
     },
@@ -127,96 +152,91 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const getValidToken = useCallback(async (): Promise<string | null> => {
     const stored = await tokenStorage.getItem(TOKEN_KEY);
     if (!stored) return null;
-
-    // Fast path: token still valid — skip the /me network call entirely
-    if (!isTokenExpired(stored)) return stored;
-
-    // Token expired — try refresh
-    const refreshToken = await tokenStorage.getItem(REFRESH_TOKEN_KEY);
-    if (!refreshToken) return null;
-
-    const result = await refreshAccessToken(refreshToken, MS_CLIENT_ID);
-    if (!result.success) return null;
-
-    await tokenStorage.setItem(TOKEN_KEY, result.accessToken);
-    if (result.refreshToken) {
-      await tokenStorage.setItem(REFRESH_TOKEN_KEY, result.refreshToken);
+    if (isTokenExpired(stored)) {
+      signOut();
+      return null;
     }
-    setUserToken(result.accessToken);
-    // Refresh user display info in background (non-blocking)
-    fetch(`${ME_URL}?$select=${ME_SELECT}`, {
-      headers: { Authorization: `Bearer ${result.accessToken}` },
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data) {
-          setUserData({
-            displayName: data.displayName ?? null,
-            mail: data.mail ?? data.userPrincipalName ?? null,
-          });
-        }
-      })
-      .catch(() => {});
-    return result.accessToken;
-  }, []);
+    return stored;
+  }, [signOut]);
+
+  const requestMagicLink = useCallback(async (email: string) => {
+    if (!BACKEND_API_ENABLED) {
+      console.log(`[Mock Auth] Requested magic link for ${email}`);
+      return { success: true };
+    }
+    try {
+      const res = await fetch(buildApiUrl('/auth/request-magic-link'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to send magic link' };
+      }
+      if (typeof data?.token === 'string' && data.token.trim()) {
+        await signIn(data.token.trim());
+      }
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: 'Network error. Please try again.' };
+    }
+  }, [signIn]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const token = await tokenStorage.getItem(TOKEN_KEY);
       if (cancelled) { setIsRestoringSession(false); return; }
-      if (!token) { setIsRestoringSession(false); return; }
-
-      // ── Fast path: token is still valid — restore instantly from JWT, no network ──
-      if (!isTokenExpired(token)) {
-        if (!cancelled) {
-          setUserToken(token);
-          setUserData(userDataFromJwt(token));
-          setIsRestoringSession(false);
-          // Silently refresh user display name in background (non-blocking)
-          fetch(`${ME_URL}?$select=${ME_SELECT}`, { headers: { Authorization: `Bearer ${token}` } })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data) => {
-              if (data && !cancelled) {
-                setUserData({ displayName: data.displayName ?? null, mail: data.mail ?? data.userPrincipalName ?? null });
-              }
-            })
-            .catch(() => {});
-        }
-        return;
-      }
-
-      // ── Token expired — try refresh token ──
-      const refresh = await tokenStorage.getItem(REFRESH_TOKEN_KEY);
-      if (!refresh) {
+      if (!token || isTokenExpired(token)) {
         await tokenStorage.removeItem(TOKEN_KEY);
         if (!cancelled) setIsRestoringSession(false);
         return;
       }
 
-      const result = await refreshAccessToken(refresh, MS_CLIENT_ID);
-      if (!result.success) {
-        if (!cancelled) setIsRestoringSession(false);
-        signOut();
-        return;
-      }
+      setUserToken(token);
+      setUserData(userDataFromJwt(token));
+      setIsRestoringSession(false);
 
-      const newToken = result.accessToken;
-      await tokenStorage.setItem(TOKEN_KEY, newToken);
-      if (result.refreshToken) await tokenStorage.setItem(REFRESH_TOKEN_KEY, result.refreshToken);
-
-      const res = await fetch(`${ME_URL}?$select=${ME_SELECT}`, { headers: { Authorization: `Bearer ${newToken}` } });
-      if (!cancelled) {
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          setUserToken(newToken);
-          setUserData({ displayName: data.displayName ?? null, mail: data.mail ?? data.userPrincipalName ?? null });
-        }
-        setIsRestoringSession(false);
+      if (BACKEND_API_ENABLED) {
+        fetch(buildApiUrl('/me'), { headers: { Authorization: `Bearer ${token}` } })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (data && !cancelled) {
+              setUserData({ email: data.email ?? null, displayName: data.name ?? data.email ?? null });
+            }
+          })
+          .catch(() => { });
       }
     })();
     return () => { cancelled = true; };
   }, [signOut]);
+
+  useEffect(() => {
+    const handleDeepLink = (event: Linking.EventType) => {
+      const url = event.url;
+      if (!url) return;
+      const parsed = Linking.parse(url);
+      const tokenParam =
+        parsed.queryParams && typeof parsed.queryParams.token === 'string'
+          ? parsed.queryParams.token.trim()
+          : '';
+      if (tokenParam) {
+        void signIn(tokenParam).finally(() => {
+          stripMagicTokenFromWebUrl();
+        });
+      }
+    };
+
+    const sub = Linking.addEventListener('url', handleDeepLink);
+    Linking.getInitialURL().then((url) => {
+      if (url) handleDeepLink({ url });
+    });
+
+    return () => {
+      sub.remove();
+    };
+  }, [signIn]);
 
   const value: AuthContextValue = {
     userToken,
@@ -225,13 +245,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signIn,
     signOut,
     getValidToken,
+    requestMagicLink,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

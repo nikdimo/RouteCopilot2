@@ -1,7 +1,7 @@
 # WisePlan – Deployment Roadmap
 
 **Project:** WisePlan (formerly Route Copilot)  
-**Last updated:** 2026-02-16
+**Last updated:** 2026-02-27
 
 ---
 
@@ -22,7 +22,7 @@
 
 ### Completed
 - **App:** Renamed to WisePlan, bundle IDs `com.wiseplan.app`
-- **VPS:** Contabo Linux at 207.180.222.248
+- **VPS:** Deploy moved to new VPS; app and landing served from new server. (Previous: Contabo 207.180.222.248.)
 - **Nginx:** Serving landing page (/) and web app (/app/); `location = /` block prevents redirect loop
 - **Domain:** wiseplan.dk live via Cloudflare (DNS → VPS, SSL Full, not Flexible)
 - **Azure:** Route Copilot app, redirect URIs for wiseplan.dk, wiseplan.dk/app/, wiseplan://auth, localhost
@@ -84,6 +84,82 @@
 2. **Landing page** – Update vps-landing/index.html with TestFlight/Play links when ready; deploy to VPS root
 3. **Local login (optional)** – Fix localhost redirect_uri if needed for dev
 4. **Production release** – App Store + Play Store when ready
+5. **Backend Phase 3** – See [SaaS & Backend Development Roadmap](#saas--backend-development-roadmap): full schema, geocode/route/user-state APIs
+
+---
+
+## Immediate Next Steps (Billing Go-Live)
+
+1. **Run full local billing QA**
+   - Verify homepage `Subscribe` button opens `/billing/`.
+   - Verify billing page loads plan catalog and feature matrix.
+   - Verify account billing page loads status/invoices.
+   - Verify in-app locked-feature upgrade prompts deep-link to billing.
+2. **Choose billing mode for rollout**
+   - `mock` for internal testing only.
+   - `stripe` for real payments.
+3. **Prepare VPS production environment**
+   - Confirm backend env values: `DATABASE_URL`, billing provider env, Stripe keys, webhook secret, `BILLING_FRONTEND_BASE_URL`.
+   - Confirm DB migrations run cleanly on VPS.
+4. **Deploy and smoke test**
+   - Deploy backend + landing/billing pages.
+   - Test `/billing`, `/account/billing`, checkout flow, and webhook-driven status transitions.
+5. **Release lock and security pass**
+   - Rotate any previously exposed API keys.
+   - Take DB backup snapshot before launch.
+   - Update operational docs/runbook with final production values and rollback steps.
+6. **Store-policy billing compliance gate (iOS/Android)**
+   - Validate external billing-link policy for each storefront before production submission.
+   - Decide and document platform behavior (external web billing, native IAP, or hybrid policy-based flow) prior to release candidate build.
+
+---
+
+## VPS Staging Rollout Plan (Backend + Billing While UI Is Still In Progress)
+
+**Objective (March 2, 2026):** Reduce local startup delays by moving backend + billing flows to an always-on VPS staging environment now, while continuing UI work locally.
+
+### Why this now
+- Local development is slowed down by repeatedly starting backend + billing services.
+- Backend/billing can be stabilized independently from UI polish.
+- A staging-first rollout lowers risk versus direct production launch.
+
+### Scope
+- **In scope now:** VPS staging backend, DB migrations, billing pages, webhook flow, app->staging API wiring for local testing.
+- **Not in scope now:** Final production cutover, final UI polish, app-store release gating.
+
+### Phase Plan
+
+1. **Phase A - Staging foundation (1-2 days)**
+   - Provision staging runtime (process manager/service), Postgres, TLS, env files, backups.
+   - Define staging URLs for API and billing pages.
+   - Exit criteria: backend health endpoint and DB connectivity are stable after restart/reboot.
+
+2. **Phase B - Backend + schema deploy (1 day)**
+   - Deploy backend build to VPS staging.
+   - Run migrations and verify billing-related tables and seed data are present.
+   - Exit criteria: `/api/public/plans`, `/api/billing/me`, `/api/billing/checkout-session` respond correctly in staging.
+
+3. **Phase C - Billing web + webhook validation (1 day)**
+   - Deploy `/billing` and `/account/billing` pages to staging.
+   - Configure billing provider in test mode and webhook secret.
+   - Validate end-to-end: checkout -> webhook -> subscription state update -> account page reflects paid status.
+   - Exit criteria: idempotent webhook handling verified with repeated event delivery.
+
+4. **Phase D - Local UI against staging backend (0.5-1 day)**
+   - Point local app to staging backend for day-to-day UI work.
+   - Keep local backend startup only as fallback.
+   - Exit criteria: local UI iteration works without starting full local backend stack each cycle.
+
+5. **Phase E - Production readiness gate (after UI stabilizes)**
+   - Security pass: rotate keys, verify secrets, confirm CORS/rate limits.
+   - Ops pass: backup snapshot + rollback steps documented and tested.
+   - Business pass: billing flows + invoices + entitlement gating signed off.
+   - Exit criteria: explicit go-live approval for production cutover.
+
+### Success Metrics
+- Local iteration no longer blocked by backend startup time.
+- Staging billing flow is reproducible and stable (including webhook-driven state transitions).
+- Production cutover becomes a controlled final step, not a prerequisite for UI completion.
 
 ---
 
@@ -91,13 +167,15 @@
 
 | File | Purpose |
 |------|---------|
-| `docs/ROADMAP.md` | This file – status, problems, next steps |
+| `docs/ROADMAP.md` | This file – status, problems, next steps, SaaS & backend phases |
 | `docs/WORKING_CONFIG.md` | Protected config – deploy workflow, nginx, Cloudflare, Azure, revert |
 | `docs/DOMAIN_AND_AZURE_SETUP.md` | Specs: domain → VPS, SSL, Azure redirect URIs |
 | `docs/CURRENT_STATE.md` | App features, Phase 7, QA notes, recent accomplishments |
 | `docs/SPEC.md` | Phase 7 smart scheduling logic |
+| `docs/DECISION_SHEET_V1.md` | SaaS contract: statuses, roles, entitlement keys, promo rules |
 | `vps-landing/` | Landing page (index.html), nginx config, setup scripts |
 | `eas.json` | EAS build/submit profiles |
+| Dev app → Scopes tab | In-app list of OAuth/API scopes (src/screens/DevDocsScreen.tsx) |
 
 ---
 
@@ -116,27 +194,21 @@ Plan to improve perceived speed and performance: what to load first, what runs i
 
 ---
 
-### Phase 1: Quick Wins (No VPS) — ~1 day
+### Phase 1: Quick Wins (No VPS) — ~1 day ✅ Done
 
-**Priority order:**
-
-1. **Remove duplicate today load** — Delete RootNavigator `useLoadAppointmentsForDate(undefined)`; let SelectedDateSync be single source. Impact: ~50% fewer Graph calls on startup.
-2. **Parallelize enrichment** — `services/graph.ts`: `Promise.all([geocode, contacts])` if still sequential. Impact: 2–3 s → ~1 s enrichment.
-3. **Skeleton loaders** — ScheduleScreen: 3–5 card skeletons while loading; MapScreen: home marker + loading overlay. Impact: Perceived load time cut in half.
-4. **Cache tuning** — Meeting counts TTL 4 h → 8 h; OSRM debounce 350 ms → 250 ms; ensure ±1 day prefetch on idle. Impact: Day switching feels instant for adjacent days.
-
-**Estimated effort:** 4–6 h. **Risk:** Very low (all client-side).
+- Remove duplicate today load (SelectedDateSync single source). ✅
+- Parallelize enrichment (Promise.all in graph.ts). ✅
+- Skeleton loaders (ScheduleScreen + MapScreen overlay). ✅
+- Cache tuning (8 h counts, 250 ms OSRM, ±1 day prefetch). ✅
+- DaySlider dot fix (delete decrements count; Refresh refetches; web Refresh button). ✅
 
 ---
 
-### Phase 2: Progressive Map Loading — ~0.5 day
+### Phase 2: Progressive Map Loading — ~0.5 day ✅ Done
 
-- Show home marker immediately (already done).
-- If previous session cached route in AsyncStorage → show faded polyline from last session.
-- Calculate OSRM in background; replace with fresh route when resolved.
-- Optional: haversine ETA estimates while OSRM loads.
-
-**Impact:** Map interactive in ~100 ms vs 600–2000 ms. **Effort:** 2–3 h. **Risk:** Low.
+- Last-session route cache in AsyncStorage; faded polyline while OSRM loads. ✅
+- OSRM in background; replace with fresh route when resolved. ✅
+- Haversine ETAs used when OSRM not ready. ✅
 
 ---
 
@@ -169,4 +241,102 @@ Once VPS exists: sync completed_ids and custom meeting order across devices; rea
 
 ### Recommended Order
 
-Start with **Phase 1** (quick wins): remove duplicate load, parallelize enrichment, skeleton loaders. Then choose: Phase 2 (progressive map), Phase 3 (VPS backend), or Phase 4 (sync) as needed.
+Phase 1 and Phase 2 done. **Next:** Phase 3 (VPS backend + DB on new VPS). Then Phase 4 (multi-device sync) and Phase 5 (billing integration).
+
+---
+
+## SaaS & Backend Development Roadmap
+
+Full schema now, staged implementation (Option B). Backend lives in `backend/`; API at **api.wiseplan.dk**; user app at **wiseplan.dk/app**; admin at **admin.wiseplan.dk**.
+
+### Backend development phases (overview)
+
+| Phase | Goal | Status | Est. |
+|-------|------|--------|------|
+| **3** | VPS backend: full schema, geocode + route + user state APIs | ⏳ Pending | 2–3 days |
+| **4** | Auth + tenant + entitlements core (users, auth_identities, orgs, roles) | ⏳ Pending | 3–5 days |
+| **5** | Billing (Stripe, plans, subscriptions, webhooks, idempotency) | ⏳ Pending | 5–7 days |
+| **6** | Admin panel MVP (admin.wiseplan.dk: plans, subs, promos, audit) | ⏳ Pending | 4–6 days |
+| **7** | Multi-device sync (optional; app state across devices) | ⏳ Pending | 1–2 days |
+| **8** | Usage metering, observability, backups, restore drills | ⏳ Pending | 2–3 days |
+
+### Locked decisions (baseline)
+
+- **Schema:** Full SaaS schema from day one (users, auth_identities, organizations, plans, subscriptions, entitlements, caches, audit, usage, webhook log).
+- **Tier source of truth:** `docs/BUSINESS_PLAN_TIERS.md` defines plan/tier content ("what"). This roadmap defines implementation sequencing ("when/how").
+- **Tenants:** One org per user in v1; multi-user orgs later without schema rewrite.
+- **Auth:** auth_identities from day one (Microsoft only at launch; add providers later).
+- **Admin:** admin.wiseplan.dk only; RBAC + audit logs; allowlist table for admin access (Azure group optional later).
+- **Privacy:** Store email in DB for support lookup; document in privacy policy; support delete/export.
+- **Cache TTL:** Geocode 90 days, route cache 30 days; app state no TTL (user-owned), soft-delete support.
+- **Billing:** Paid status from webhooks only; entitlements enforced in backend (frontend checks UX-only).
+- **Webhooks:** Idempotency + replay protection from day one. Usage metering tables from day one (for future usage-based pricing).
+
+### Phase 3: VPS Backend — full schema, cache APIs (2–3 days)
+
+- **Scope:** Geocode cache, OSRM route cache, user app state (completed IDs, day order). No Graph/calendar content on server.
+- **Deliverables:** `backend/` with migrations for full schema (see Phase 4 for table list); API endpoints: `POST /api/geocode`, `POST /api/route`, `GET/POST /api/user/state`. Microsoft OAuth token validation. PostgreSQL on VPS (private interface); Nginx in front (TLS, routing, rate limit).
+- **DB tables (Phase 3 surface):** geocode_cache, osrm_route_cache (or route_cache), user_app_state_daily; plus schema placeholders for users, auth_identities, organizations, etc. for Phase 4.
+
+### Phase 4: Auth + tenant + entitlements core (3–5 days)
+
+- **Deliverables:** users, auth_identities, organizations, organization_members (roles: owner/admin/member), provider_accounts, connected_calendars, user_notification_preferences, plans, plan_entitlements, org_entitlement_overrides (optional), admin_allowlist, admin_audit_log. Token validation and role checks. One org per user on first signup.
+- **Enforcement:** All entitlement checks in backend; frontend only for UX (e.g. hiding paywalled features).
+
+### Phase 5: Billing integration (5–7 days)
+
+- **Deliverables:** Stripe (or one provider) integration; plans, plan_prices, plan_allowances, subscriptions, subscription_events, invoices, payments, coupons, promotions, promotion_redemptions. Webhook endpoint with idempotency (webhook_event_log) and replay protection. Paid status only from webhook-derived state.
+- **Scope boundary:** This phase implements billing and entitlement plumbing only (the "how/when"). Product tier definitions, feature matrix, and tier copy are owned by `docs/BUSINESS_PLAN_TIERS.md` (the "what").
+
+### Phase 6: Admin panel MVP (4–6 days)
+
+- **URL:** admin.wiseplan.dk (separate app shell).
+- **Features:** Plans & pricing catalog; subscription/customer management; manual entitlement overrides (with reason and expiry); promotions tab (discounts, duration, max redemptions, plan scope); user/org lookup and support actions; calendar-link limits view (Basic=1 calendar), cache operations (invalidate geocode/route); consent/opt-out/message log views for Premium messaging; audit and webhook health dashboard.
+- **Auth:** Allowlist table; strict RBAC; every action audited.
+
+### Phase 7: Multi-device sync (1–2 days, optional)
+
+- Sync completed_event_ids and day_order across devices (polling or WebSocket). App state only; no Graph data on server.
+
+### Phase 8: Usage metering, observability, backups (2–3 days)
+
+- **Usage:** usage_events or equivalent for future usage-based pricing; no schema change later.
+- **Observability:** Structured logs, error tracking, API latency and cache hit metrics.
+- **Operations:** Backup schedule, restore drills, key rotation runbook.
+
+### Tier-driven DB requirements (from BUSINESS_PLAN_TIERS.md)
+
+- **Calendar limits (Basic vs Pro/Premium):** `provider_accounts`, `connected_calendars` (+ per-tier entitlement checks).
+- **Running-late behavior:** `user_notification_preferences` (late threshold, "notify me" toggles, default channel policy).
+- **Premium consent/compliance:** `client_message_consents`, `client_message_opt_outs`, `message_audit_log` (who, what, when, channel, outcome).
+- **Premium messaging pipeline:** `notification_jobs`, `notification_deliveries` (email/SMS provider IDs, delivery status, retries).
+- **Recurring templates:** `recurring_meeting_templates`.
+- **Export day plan:** `export_jobs`, `shared_exports` (expirable links or file references).
+- **Allowances/overage economics:** `plan_allowances`, `usage_events`, `usage_counters_monthly` (SMS/email/AI units for billing guardrails).
+
+### Reference: full table list (for schema design)
+
+- **Identity & tenants:** users, auth_identities, organizations, organization_members, provider_accounts, connected_calendars
+- **Billing:** plans, plan_prices, plan_allowances, subscriptions, subscription_events, invoices, payments, coupons, promotions, promotion_redemptions
+- **Entitlements:** features, plan_entitlements, org_entitlement_overrides
+- **Messaging & compliance:** user_notification_preferences, client_message_consents, client_message_opt_outs, notification_jobs, notification_deliveries, message_audit_log
+- **Product artifacts:** recurring_meeting_templates, export_jobs, shared_exports
+- **App & cache:** user_app_state_daily, geocode_cache, route_cache (or osrm_route_cache)
+- **Operations:** webhook_event_log, admin_audit_log, usage_events, usage_counters_monthly
+- **Admin:** admin_allowlist (or equivalent)
+
+See **Decision Sheet v1** (`docs/DECISION_SHEET_V1.md`) for exact statuses, role matrix, entitlement keys, promo rules, and lifecycle states.
+
+---
+
+## DB build plan (Phase 3)
+
+**Where to build the DB and backend**
+
+- **Not in the deploy folder** (`wiseplan-release`). That folder is for **built static output** (what you rsync to the VPS). It should not contain source code, migrations, or API.
+- **Recommended: in the main app repo** (`RouteCopilot2`), in a new **`backend/`** folder. That gives:
+  - One repo for app + API + migrations (versioned together).
+  - Same clone has everything; deploy script can build the app and deploy backend to the VPS.
+- **Contents of `backend/`:** Migration files (SQL or a migration tool), Node API (Express), `package.json`, `.env.example`. Run PostgreSQL **locally** (Docker or native) for development; run migrations on the **new VPS** when deploying.
+
+**Steps:** (1) Add `backend/` to RouteCopilot2 with schema and migrations. (2) Run Postgres locally, run migrations, develop API. (3) On new VPS: install Postgres, run same migrations, deploy API. (4) Point app to API when ready.

@@ -13,6 +13,7 @@ import DevDocsScreen from '../screens/DevDocsScreen';
 
 const MS_BLUE = '#0078D4';
 const isExpoGo = Constants.appOwnership === 'expo';
+const disableNativeMapInExpoGo = Platform.OS !== 'web' && isExpoGo;
 
 // Lazy-load MapScreen so react-native-maps is only loaded when Map tab is opened (and not in Expo Go)
 const MapScreen = React.lazy(() => import('../screens/MapScreen'));
@@ -107,7 +108,7 @@ export default function AppNavigator() {
       />
       <Tab.Screen
         name="Map"
-        component={isExpoGo ? MapExpoGoPlaceholder : MapScreenWithSuspense}
+        component={disableNativeMapInExpoGo ? MapExpoGoPlaceholder : MapScreenWithSuspense}
         initialParams={{ triggerLoadWhenEmpty: true }}
         options={{
           title: 'Map',
