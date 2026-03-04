@@ -1481,11 +1481,15 @@
                         ? 'Manage'
                         : (upgrading ? 'Upgrade Now' : 'Downgrade'));
                 if (plan.code === 'pro' && !isCurrent) ctaLabel = 'Get Pro Access';
-                if (plan.code === 'premium' && !isCurrent) ctaLabel = 'Get Premium';
+                if (plan.code === 'premium' && !isCurrent) ctaLabel = 'Coming Soon';
 
                 var btnClass = isCurrent
                     ? 'plan-cta-btn ghost'
                     : (plan.code === 'pro' ? 'plan-cta-btn primary' : 'plan-cta-btn dark');
+
+                if (plan.code === 'premium') {
+                    btnClass = 'plan-cta-btn ghost';
+                }
 
                 var features = (PLAN_FEATURES[plan.code] || []).map(function (label) {
                     return '<li><span class="plan-feature-dot"></span><span>' + escapeHtml(label) + '</span></li>';
@@ -1495,6 +1499,8 @@
                 var cardClass = 'plan-card-home' + (plan.code === 'pro' ? ' pro-plan' : '');
                 var desc = escapeHtml(plan.description || '');
                 if (annualSubline) desc += '<br><span style="font-size:0.78rem;">' + escapeHtml(annualSubline) + '</span>';
+
+                var isDisabled = isCurrent || plan.code === 'premium';
 
                 return '' +
                     '<article class="' + cardClass + '">' +
@@ -1507,7 +1513,7 @@
                     '<div class="plan-subline-home">' + desc + '</div>' +
                     '<ul class="plan-feature-list">' + features + '</ul>' +
                     '<button class="' + btnClass + '" data-action="choose-plan" data-plan-code="' + escapeHtml(plan.code) + '"' +
-                    (isCurrent ? ' disabled' : '') + '>' +
+                    (isDisabled ? ' disabled' : '') + '>' +
                     escapeHtml(ctaLabel) +
                     '</button>' +
                     '</article>';
