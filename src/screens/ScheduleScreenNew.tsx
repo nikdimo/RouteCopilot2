@@ -259,6 +259,7 @@ export default function ScheduleScreen() {
 
   // Sidebar Resizer State
   const [sidebarWidth, setSidebarWidth] = useState(400); // Default to 400px width
+  const [isResizing, setIsResizing] = useState(false);
   const sidebarWidthRef = useRef(400);
   const initialSidebarWidthRef = useRef(400);
 
@@ -270,7 +271,10 @@ export default function ScheduleScreen() {
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
       onPanResponderGrant: () => {
+        setIsResizing(true);
         initialSidebarWidthRef.current = sidebarWidthRef.current;
       },
       onPanResponderMove: (evt, gestureState) => {
@@ -279,6 +283,8 @@ export default function ScheduleScreen() {
         if (newWidth > windowWidth - 300) newWidth = windowWidth - 300;
         setSidebarWidth(newWidth);
       },
+      onPanResponderRelease: () => setIsResizing(false),
+      onPanResponderTerminate: () => setIsResizing(false),
     })
   ).current;
 
@@ -746,7 +752,7 @@ export default function ScheduleScreen() {
 
   if (isWide) {
     return (
-      <View style={styles.splitContainer}>
+      <View style={[styles.splitContainer, isResizing && Platform.OS === 'web' ? { userSelect: 'none' } as any : null]}>
         {/* Schedule Pane - using dynamic sidebarWidth */}
         <View style={[styles.schedulePane, { width: sidebarWidth, flex: undefined, paddingLeft: insets.left }]}>
           {scheduleContent}
@@ -894,6 +900,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     // @ts-ignore
     cursor: 'col-resize', // Web specific styling
+    touchAction: 'none',
+    userSelect: 'none',
     zIndex: 50,
   },
   resizerLine: {
