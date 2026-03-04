@@ -56,6 +56,7 @@ import {
   GraphUnauthorizedError,
   type CalendarEvent,
 } from '../services/graph';
+import { clearGraphSession, isMagicAuthToken } from '../services/graphAuth';
 import { getLocalMeetingsInRange } from '../services/localMeetings';
 import { sortAppointmentsByTime } from '../utils/optimization';
 import { DEFAULT_HOME_BASE } from '../types';
@@ -348,7 +349,10 @@ export default function AddMeetingScreen() {
       setSearchAppointments(sorted);
     } catch (e) {
       if (e instanceof GraphUnauthorizedError) {
-        signOut();
+        await clearGraphSession().catch(() => {});
+        if (userToken && !isMagicAuthToken(userToken)) {
+          signOut();
+        }
       } else {
         Alert.alert('Search error', e instanceof Error ? e.message : 'Failed to load calendar');
       }

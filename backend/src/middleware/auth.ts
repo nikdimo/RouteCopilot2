@@ -6,6 +6,10 @@ import { ensureUserFromIdentity } from "../services/userService.js";
 
 const jwks = createRemoteJWKSet(new URL(azureJwksUri));
 
+function isPostgresErrorCode(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9A-Z]{5}$/.test(value);
+}
+
 function getBearerToken(header?: string) {
   if (!header) {
     return null;
@@ -122,6 +126,12 @@ export async function requireAuth(
 
     return next();
   } catch (error) {
+    const code = (error as { code?: unknown } | null | undefined)?.code;
+    if (isPostgresErrorCode(code)) {
+      console.error("Auth backend error:", error);
+      return res.status(500).json({ error: "Auth backend error" });
+    }
+
     console.error("Auth error:", error);
     return res.status(401).json({ error: "Unauthorized" });
   }

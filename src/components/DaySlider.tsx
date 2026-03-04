@@ -14,7 +14,7 @@ const MS_BLUE = '#0078D4';
 const DAYS_TO_SHOW = 14;
 const DAYS_BACK_WEB = 365;
 const DAYS_AHEAD_WEB = 730;
-const PILL_WIDTH = 48;
+const PILL_WIDTH = 42;
 const PILL_GAP = 10;
 
 /** Dot colors by meeting count: none (0), green (1–2), yellow (3–4), red (5+) */
@@ -229,37 +229,44 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   scroll: {
-    maxHeight: 76,
+    maxHeight: 56,
   },
   container: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 4,
     flexDirection: 'row',
     alignItems: 'stretch',
   },
   pill: {
-    width: 48,
+    width: 42,
     marginRight: 0,
     borderRadius: 8,
     backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
+    paddingVertical: 4,
     marginHorizontal: 2,
-    height: 54, // Consistent height
+    height: 38, // Consistent height
   },
   pillActive: {
     backgroundColor: '#3B82F6', // Brighter mockup blue
-    height: 64, // stretches taller
-    marginTop: -5, // pop out effect
-    borderRadius: 12,
-    shadowColor: '#3B82F6',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
+    height: 46, // stretches taller
+    marginTop: -4, // pop out effect
+    borderRadius: 10,
+    ...Platform.select({
+      web: {
+        boxShadow: '0px 4px 8px rgba(59, 130, 246, 0.2)',
+      },
+      default: {
+        shadowColor: '#3B82F6',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+      },
+    }),
   },
   monthDividerPill: {
-    height: 54, // Matches the inactive pill height
+    height: 38, // Matches the inactive pill height
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 8,
@@ -291,7 +298,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   dayName: {
-    fontSize: 11,
+    fontSize: 9,
     color: '#64748B',
     fontWeight: '600',
     marginBottom: 2,
@@ -301,18 +308,18 @@ const styles = StyleSheet.create({
     color: '#E0E7FF',
   },
   dayNameWeb: {
-    fontSize: 10,
+    fontSize: 8, // smaller on web
   },
   dateNum: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
     color: '#0F172A',
   },
   dateNumActive: {
     color: '#FFFFFF',
-    fontSize: 18,
+    fontSize: 16,
   },
   dateNumWeb: {
-    fontSize: 15,
+    fontSize: 13,
   },
 });

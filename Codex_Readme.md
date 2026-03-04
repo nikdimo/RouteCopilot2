@@ -5,6 +5,166 @@
 - Do not run commands, open files, edit code, or execute tools until the user gives an explicit task.
 - If the user message is unclear, ask a short clarification question and wait.
 
+## Latest Session Update (2026-03-04, refresh stability + meeting flicker resolved)
+- User-reported final issue set:
+  1. Refresh previously signed user out (fixed earlier in session).
+  2. After that fix, meetings intermittently alternated between:
+     - "No meeting scheduled"
+     - meetings visible
+     across consecutive refreshes.
+  3. Console showed web deprecation warnings (`shadow*`, `pointerEvents`) and Graph contact `429` rate-limit noise.
+- Root causes addressed:
+  1. Startup auth/entitlement race:
+     - Signed-in session could briefly run calendar flow as non-sync (local-only) while preferences hydrated.
+  2. Duplicate/competing fetch pressure:
+     - Embedded map and enrichment paths contributed to unstable refresh timing in web flow.
+  3. Web storage fragility:
+     - token persistence needed stronger AsyncStorage/localStorage fallback handling.
+  4. Contact enrichment over-querying:
+     - Address-like strings were being sent to Graph contacts search, increasing 429s.
+- Fixes implemented:
+  1. `src/context/AuthContext.tsx`
+     - Hardened web token storage fallback (AsyncStorage + localStorage).
+     - Safer JWT parsing.
+     - Magic token expiry handling aligned to backend truth.
+  2. `src/services/graphAuth.ts`
+     - Same web storage fallback hardening for Graph access/refresh tokens.
+     - Safer JWT parsing.
+  3. `src/components/SelectedDateSync.tsx`
+     - Added `shouldSyncCalendar = canSyncCalendar || Boolean(userToken)` to avoid signed-in hydration race.
+  4. `src/hooks/useLoadAppointmentsForDate.ts`
+     - Same `shouldSyncCalendar` logic for consistency.
+  5. `src/screens/MapScreen.web.tsx`
+     - Prevented embedded-map focus auto-load from racing Schedule-owned sync.
+  6. `src/services/graph.ts`
+     - Added `isLikelyAddressQuery(...)` and skipped address-like contact searches.
+     - Rate-limited contact-address enrichment (`limitConcurrency(..., 2)` + spacing).
+     - Added explicit `429` handling for contact search paths.
+  7. Web warning cleanup:
+     - `src/components/DaySlider.tsx`: replaced web `shadow*` with `boxShadow`.
+     - `src/components/MeetingCard.tsx`: replaced web `shadow*` with `boxShadow`.
+     - `src/navigation/RootNavigator.tsx`: moved deprecated `pointerEvents` prop usage to style-based pattern.
+- Deployment:
+  1. Latest deployed web bundle hash:
+     - `index-9c7e32634479bdebaf2a1e0ed4cb819b.js`
+  2. Public verification:
+     - `https://wiseplan.dk/app/` serves the hash above.
+     - Cache-busted test URL used: `https://wiseplan.dk/app/?v=20260304-5`
+- User confirmation:
+  1. User confirmed: issue is fixed.
+
+## Latest Session Update (2026-03-04, refresh stable but meetings flicker/no-show on reload)
+- User-reported behavior after sign-out fix:
+  1. Refresh no longer signs user out.
+  2. Meetings list intermittently showed "No meeting scheduled" until manual refresh.
+  3. In some refresh cycles, meetings toggled between empty and populated.
+- Root-cause focus:
+  1. Web Graph session token storage used AsyncStorage-only reads/writes and could return empty/transient values during reload timing.
+  2. `MapScreen.web` still auto-triggered `load()` even when embedded inside Schedule, creating duplicate fetch/race pressure while `SelectedDateSync` was already responsible for day sync.
+- Fixes implemented:
+  1. `src/services/graphAuth.ts`
+     - Added robust web storage behavior for Graph tokens:
+       - read fallback: AsyncStorage -> localStorage
+       - write/remove mirrored to both stores
+     - Added explicit error when both stores fail during write.
+     - Updated JWT payload decode path to UTF-8-safe base64url decode.
+  2. `src/screens/MapScreen.web.tsx`
+     - Changed focus-load behavior to skip `load()` when map is embedded in Schedule.
+     - Keeps meeting-count refresh for non-embedded map screen only.
+- Deployment:
+  1. New web bundle built:
+     - `index-dd13b21b3257a430197c0d9d2a8a0556.js`
+  2. Origin verification (bypassing CDN cache) confirms new hash is served from origin for `/app/`.
+  3. Public cache-busted URL confirmed:
+     - `https://wiseplan.dk/app/?v=20260304-3` -> `index-dd13b21b3257a430197c0d9d2a8a0556.js`
+
+## Latest Session Update (2026-03-04, refresh sign-out hardening + UI callback wiring + web deploy)
+- User-reported issues:
+  1. Refresh still signed user out.
+  2. New schedule/empty-state UI updates needed function wiring.
+- Auth + backend status:
+  1. Verified VPS env is correct for magic auth:
+     - `AUTH_MODE=magic`
+     - `MAGIC_LINK_TOKEN_ISSUER=wiseplan-auth`
+     - `MAGIC_LINK_TOKEN_AUDIENCE=wiseplan-app`
+     - `MAGIC_LINK_TOKEN_TTL_MINUTES=10080`
+  2. Backend deploy already includes race-condition fix:
+     - `backend/src/services/userService.ts` uses `pg_advisory_xact_lock(hashtext(aad_oid))`.
+     - Confirmed in VPS build artifact: `/home/nikola/RouteCopilot2/backend/dist/services/userService.js`.
+  3. Log interpretation:
+     - `users_aad_oid_key` duplicate error at `2026-03-04 13:37:39` occurred before later backend restart.
+     - No matching duplicate-key/auth backend errors observed after restart windows in current log check.
+- Frontend/UI wiring completed:
+  1. `src/components/emptyState/EmptyStateScanner.tsx`
+     - Added optional `onSignInAndSync` prop.
+     - Wired CTA button `Sign In & Sync` to call handler (it previously had no `onPress`).
+  2. `src/screens/ScheduleScreenNew.tsx`
+     - Passed `handleSignInAndSync` down into `EmptySchedule` and into `EmptyStateScanner`.
+     - Existing wiring retained for signed-in empty state:
+       - `Create New Meeting` -> `navigation.navigate('AddMeeting')`.
+- Web production deploy:
+  1. Rebuilt production web bundle with:
+     - `EXPO_PUBLIC_ENABLE_VPS_BACKEND=true`
+     - `EXPO_PUBLIC_BACKEND_API_URL=https://api.wiseplan.dk`
+  2. New bundle hash:
+     - `index-e0c35e494742c416f53eeede56f340d0.js`
+  3. Deployed to:
+     - `/var/www/wiseplan-test/app`
+  4. Verified served publicly:
+     - `https://wiseplan.dk/app/` now references `index-e0c35e494742c416f53eeede56f340d0.js`
+  5. Verified live bundle contains new CTA handler text:
+     - `Go to Profile to sign in and connect calendar sync`
+
+## Latest Session Update (2026-03-04, VPS backend/web production go-live + refresh sign-out hotfix)
+- User goals in this run:
+  1. Deploy backend and web to VPS production.
+  2. Ensure app uses `https://api.wiseplan.dk`.
+  3. Resolve "refresh signs me out again".
+- VPS infrastructure and production rollout completed:
+  1. Verified SSH + sudo automation on VPS (`nikola@207.180.222.248`).
+  2. Uploaded and secured backend env at `/etc/wiseplan/backend.env`.
+  3. Built backend on VPS and ran migrations (`0001`..`0005`) successfully.
+  4. Installed/started persistent systemd service:
+     - `wiseplan-backend.service`
+     - backend listens on `127.0.0.1:4000`
+  5. Added nginx site for:
+     - `api.wiseplan.dk` -> reverse proxy to backend
+     - `admin.wiseplan.dk` -> static `admin-panel` deployment
+  6. Issued SSL certs for `api.wiseplan.dk` and `admin.wiseplan.dk` with certbot.
+  7. Verified health:
+     - `https://api.wiseplan.dk/api/health` -> `{"ok":true}`
+     - `https://api.wiseplan.dk/healthz` -> `{"ok":true,...}`
+     - `https://admin.wiseplan.dk/` returns admin app HTML
+- Web app production deploy completed:
+  1. Rebuilt web bundle with:
+     - `EXPO_PUBLIC_ENABLE_VPS_BACKEND=true`
+     - `EXPO_PUBLIC_BACKEND_API_URL=https://api.wiseplan.dk`
+  2. Deployed to `/var/www/wiseplan-test/app`.
+  3. Confirmed bundle contains backend constants:
+     - `BACKEND_API_BASE_URL="https://api.wiseplan.dk"`
+     - backend enabled flag true.
+  4. Resolved Cloudflare/DNS stale-origin issue (public still serving old hash).
+  5. Final public verification now shows:
+     - `https://wiseplan.dk/app/` serves new hash `index-4e0cade593fa322268b2b5b2ab8d8d41.js`
+     - JS served with `content-type: application/javascript`
+- Refresh sign-out issue findings and fix:
+  1. Production root cause found: magic-link JWT session lifetime was only 30 minutes.
+  2. If token is older than TTL, refresh restores nothing and user appears signed out.
+  3. Hotfix applied in production env:
+     - `MAGIC_LINK_TOKEN_TTL_MINUTES=10080` (7 days)
+  4. Backend schema validation updated to allow longer TTL values:
+     - `backend/src/config/env.ts` max increased to 90 days.
+  5. Templates updated:
+     - `backend/.env.example`
+     - `backend/backend.prod.env.template`
+  6. Backend rebuilt and service restarted successfully after TTL change.
+- Important operational note:
+  1. Tokens issued before this TTL change still expire under old 30-minute rule.
+  2. User must sign in again once to receive a new longer-lived token.
+- Deployment/process decision captured:
+  1. Preferred workflow is local fix + local test + git push + VPS deploy.
+  2. VPS-direct edits only for urgent production hotfixes.
+
 ## Latest Session Update (2026-03-04, Outlook web reconnect popup fix + instant meetings refresh)
 - User-reported behavior before fix:
   1. First Outlook connect worked.

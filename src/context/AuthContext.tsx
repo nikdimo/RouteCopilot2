@@ -4,7 +4,7 @@ import * as Linking from 'expo-linking';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BACKEND_API_BASE_URL, BACKEND_API_ENABLED } from '../config/backend';
-import { clearGraphSession } from '../services/graphAuth';
+import { clearGraphSession, isMagicAuthToken } from '../services/graphAuth';
 
 const BACKEND_BASE_FALLBACK = 'http://localhost:4000';
 const NORMALIZED_BACKEND_BASE = (() => {
@@ -19,16 +19,73 @@ function buildApiUrl(path: string) {
 
 const tokenStorage = {
   async getItem(key: string): Promise<string | null> {
-    if (Platform.OS === 'web') return AsyncStorage.getItem(key);
+    if (Platform.OS === 'web') {
+      let asyncValue: string | null = null;
+      try {
+        asyncValue = await AsyncStorage.getItem(key);
+      } catch {
+        // ignore AsyncStorage read errors on web and try localStorage fallback
+      }
+      if (asyncValue && asyncValue.trim().length > 0) {
+        return asyncValue;
+      }
+      if (typeof window !== 'undefined' && window.localStorage) {
+        try {
+          const localValue = window.localStorage.getItem(key);
+          if (localValue && localValue.trim().length > 0) {
+            // best-effort sync back to AsyncStorage
+            AsyncStorage.setItem(key, localValue).catch(() => { });
+            return localValue;
+          }
+        } catch {
+          // ignore localStorage read errors
+        }
+      }
+      return asyncValue;
+    }
     return SecureStore.getItemAsync(key);
   },
   async setItem(key: string, value: string): Promise<void> {
-    if (Platform.OS === 'web') await AsyncStorage.setItem(key, value);
-    else await SecureStore.setItemAsync(key, value);
+    if (Platform.OS === 'web') {
+      let wrote = false;
+      try {
+        await AsyncStorage.setItem(key, value);
+        wrote = true;
+      } catch {
+        // ignore and fallback to localStorage
+      }
+      if (typeof window !== 'undefined' && window.localStorage) {
+        try {
+          window.localStorage.setItem(key, value);
+          wrote = true;
+        } catch {
+          // ignore localStorage write errors
+        }
+      }
+      if (!wrote) {
+        throw new Error('Failed to persist auth token on web storage');
+      }
+      return;
+    }
+    await SecureStore.setItemAsync(key, value);
   },
   async removeItem(key: string): Promise<void> {
-    if (Platform.OS === 'web') await AsyncStorage.removeItem(key);
-    else await SecureStore.deleteItemAsync(key);
+    if (Platform.OS === 'web') {
+      try {
+        await AsyncStorage.removeItem(key);
+      } catch {
+        // ignore AsyncStorage remove errors
+      }
+      if (typeof window !== 'undefined' && window.localStorage) {
+        try {
+          window.localStorage.removeItem(key);
+        } catch {
+          // ignore localStorage remove errors
+        }
+      }
+      return;
+    }
+    await SecureStore.deleteItemAsync(key);
   },
 };
 
@@ -55,15 +112,33 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const parts = token.split('.');
     if (parts.length < 2) return null;
-    const base64 = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
-    // React Native minimal atob
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-    let str = base64.replace(/=+$/, '');
-    let output = '';
-    for (let bc = 0, bs = 0, buffer, i = 0; buffer = str.charAt(i++); ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4) ? output += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
-      buffer = chars.indexOf(buffer);
+    const encoded = parts[1]!;
+    const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = (4 - (base64.length % 4)) % 4;
+    const padded = `${base64}${'='.repeat(padding)}`;
+    const atobFn = typeof globalThis !== 'undefined' && typeof globalThis.atob === 'function'
+      ? globalThis.atob.bind(globalThis)
+      : null;
+    if (!atobFn) return null;
+
+    const binary = atobFn(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
     }
-    return JSON.parse(decodeURIComponent(escape(output)));
+
+    let jsonText = '';
+    if (typeof TextDecoder !== 'undefined') {
+      jsonText = new TextDecoder('utf-8').decode(bytes);
+    } else {
+      let encodedUtf8 = '';
+      for (let i = 0; i < bytes.length; i += 1) {
+        encodedUtf8 += `%${bytes[i]!.toString(16).padStart(2, '0')}`;
+      }
+      jsonText = decodeURIComponent(encodedUtf8);
+    }
+
+    return JSON.parse(jsonText);
   } catch {
     return null;
   }
@@ -71,9 +146,11 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 
 function isTokenExpired(token: string): boolean {
   const payload = decodeJwtPayload(token);
-  if (!payload) return true;
+  if (!payload) return false;
   const exp = typeof payload.exp === 'number' ? payload.exp : null;
   if (exp == null) return false;
+  // Backend remains the source of truth for magic-link token validity.
+  if (isMagicAuthToken(token)) return false;
   return Date.now() / 1000 > exp - 60;
 }
 
@@ -144,7 +221,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUserToken(token);
       await tokenStorage.setItem(TOKEN_KEY, token);
       const ok = await fetchUserData(token);
-      if (!ok) signOut();
+      if (!ok) {
+        // Keep magic-link sessions alive on transient backend auth races.
+        if (isMagicAuthToken(token)) {
+          setUserData(userDataFromJwt(token));
+          return;
+        }
+        signOut();
+      }
     },
     [fetchUserData, signOut]
   );

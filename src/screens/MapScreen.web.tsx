@@ -416,8 +416,12 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
 
   useFocusEffect(
     useCallback(() => {
-      if (appointmentsLengthRef.current === 0 && isSameDay(ctxSelectedDate, today)) load();
-      if (!embeddedRef.current) ensureMeetingCountsForDate(ctxSelectedDate);
+      if (!embeddedRef.current && appointmentsLengthRef.current === 0 && isSameDay(ctxSelectedDate, today)) {
+        load();
+      }
+      if (!embeddedRef.current) {
+        ensureMeetingCountsForDate(ctxSelectedDate);
+      }
     }, [load, ensureMeetingCountsForDate, ctxSelectedDate, today])
   );
   const headerTitle = isSameDay(ctxSelectedDate, today) ? "Today's Route" : format(ctxSelectedDate, 'EEE, MMM d');

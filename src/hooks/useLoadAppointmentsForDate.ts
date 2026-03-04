@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { getCalendarEvents, GraphUnauthorizedError } from '../services/graph';
+import { clearGraphSession, isMagicAuthToken } from '../services/graphAuth';
 import { getLocalMeetingsForDay } from '../services/localMeetings';
 import { sortAppointmentsByTime } from '../utils/optimization';
 import { toLocalDayKey } from '../utils/dateUtils';
@@ -21,10 +22,11 @@ export function useLoadAppointmentsForDate(date: Date | undefined) {
   const { preferences } = useUserPreferences();
   const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
   const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
+  const shouldSyncCalendar = canSyncCalendar || Boolean(userToken);
 
   const load = useCallback(async () => {
     const targetDate = date ?? startOfDay(new Date());
-    if (!canSyncCalendar) {
+    if (!shouldSyncCalendar) {
       setAppointmentsLoading(true);
       const dayKey = toLocalDayKey(targetDate);
       getLocalMeetingsForDay(dayKey)
@@ -54,11 +56,14 @@ export function useLoadAppointmentsForDate(date: Date | undefined) {
       .catch((e) => {
         setAppointments([]);
         if (e instanceof GraphUnauthorizedError) {
-          signOut();
+          clearGraphSession().catch(() => {});
+          if (userToken && !isMagicAuthToken(userToken)) {
+            signOut();
+          }
         }
       })
       .finally(() => setAppointmentsLoading(false));
-  }, [canSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsLoading, signOut, date]);
+  }, [shouldSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsLoading, signOut, date]);
 
   return { load };
 }

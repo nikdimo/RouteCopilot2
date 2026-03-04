@@ -84,9 +84,15 @@ app.json.bak2
 # Local runtime output
 logs/
 *.log
+.npm-cache/
+_compare_clone/
+scripts/__pycache__/
+dist_upload.zip
 
 # Explicit backend local secret file (kept out of git)
 backend/.env
+backend/backend.prod.env
+backend/*.prod.env
 
 # Local one-off helper files (machine-specific)
 Build.APK.SOFT.bat

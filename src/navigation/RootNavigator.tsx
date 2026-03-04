@@ -122,7 +122,7 @@ export default function RootNavigator() {
       <SelectedDateSync />
       <AppNavigator />
       {showOutlookConnectedBanner ? (
-        <View style={styles.connectedBannerWrap} pointerEvents="none">
+        <View style={[styles.connectedBannerWrap, styles.nonInteractive]}>
           <View style={styles.connectedBanner}>
             <Text style={styles.connectedBannerText}>Outlook connected. Calendar sync is active.</Text>
           </View>
@@ -156,6 +156,10 @@ const styles = StyleSheet.create({
     right: 12,
     zIndex: 60,
     alignItems: 'center',
+  },
+  nonInteractive: {
+    // react-native-web deprecates the View prop `pointerEvents`; use style pointerEvents instead.
+    pointerEvents: 'none' as any,
   },
   connectedBanner: {
     backgroundColor: '#0F766E',

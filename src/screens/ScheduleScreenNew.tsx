@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
   Alert,
   PanResponder,
+  Animated,
 } from 'react-native';
 import type { RenderItemParams } from 'react-native-draggable-flatlist';
 import { GripVertical, ChevronUp, ChevronDown, RefreshCw, ChevronLeft, ChevronRight, Calendar, CalendarDays, X } from 'lucide-react-native';
@@ -53,6 +54,7 @@ import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subs
 import { EmptyStateScanner } from '../components/emptyState/EmptyStateScanner';
 import { useEmptyStateAnimation } from '../components/emptyState/useEmptyStateAnimation';
 import { MockSchedule } from '../components/emptyState/MockSchedule';
+import { SignedInEmptyStateLeft, SignedInEmptyStateRight } from '../components/emptyState/SignedInEmptyState';
 
 const MapScreen = React.lazy(() => import('./MapScreen'));
 const isExpoGo = Constants.appOwnership === 'expo';
@@ -200,24 +202,52 @@ function ScheduleSkeletonCards() {
   );
 }
 
-function EmptySchedule({ animationState, isWide }: { animationState: number, isWide: boolean }) {
+function EmptySchedule({
+  animationState,
+  isWide,
+  isSignedIn,
+  onAddMeeting,
+  onSignInAndSync,
+}: {
+  animationState: number;
+  isWide: boolean;
+  isSignedIn: boolean;
+  onAddMeeting: () => void;
+  onSignInAndSync: () => void;
+}) {
   if (isWide) {
+    if (isSignedIn) {
+      return (
+        <View style={{ width: '100%', height: '100%' }}>
+          <SignedInEmptyStateLeft onAddMeeting={onAddMeeting} />
+        </View>
+      );
+    }
     return (
       <View style={{ width: '100%', height: '100%', backgroundColor: '#ffffff' }}>
         <MockSchedule animationState={animationState} />
       </View>
     );
   }
+
+  // Mobile Portrait
+  if (isSignedIn) {
+    return (
+      <View style={{ width: '100%', height: '100%' }}>
+        <SignedInEmptyStateLeft onAddMeeting={onAddMeeting} />
+      </View>
+    );
+  }
   return (
     <View style={styles.emptyContainer}>
-      <EmptyStateScanner />
+      <EmptyStateScanner onSignInAndSync={onSignInAndSync} />
     </View>
   );
 }
 
 type ScheduleNav = NativeStackNavigationProp<ScheduleStackParamList, 'ScheduleHome'>;
 
-export default function ScheduleScreen() {
+function ScheduleScreenNew() {
   const navigation = useNavigation<ScheduleNav>();
   const { userToken } = useAuth();
   const { preferences } = useUserPreferences();
@@ -246,10 +276,25 @@ export default function ScheduleScreen() {
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const { coords, legStats, etas, waitTimeBeforeMeetingMin, departByMs, returnByMs, homeBase } = useRouteData();
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [reorderMode, setReorderMode] = useState(false);
   const [ctaVisible, setCtaVisible] = useState(true);
+
+  const scrollY = useRef(new Animated.Value(0)).current;
+
+  const isSignedIn = !!userToken;
+
+  const handleAddMeeting = useCallback(() => {
+    navigation.navigate('AddMeeting');
+  }, [navigation]);
+
+  const handleSignInAndSync = useCallback(() => {
+    const parent = navigation.getParent();
+    if (parent) {
+      parent.navigate('Profile' as never);
+      return;
+    }
+    Alert.alert('Open Profile', 'Go to Profile to sign in and connect calendar sync.');
+  }, [navigation]);
 
   const isWide = useIsWideScreen();
   const useSplitLayout = isWide;
@@ -586,70 +631,7 @@ export default function ScheduleScreen() {
 
   const listHeader = (
     <>
-      {/* Date Header matching the Mockup */}
-      <View style={styles.topHeaderSpacing}>
-        {isWide ? null : (
-          <View style={styles.daySliderRow}>
-            <View style={styles.daySliderWrap}>
-              <DaySlider
-                selectedDate={selectedDate}
-                onSelectDate={onSelectDate}
-                meetingCountByDay={meetingCountByDay}
-              />
-            </View>
-            {Platform.OS === 'web' && (
-              <TouchableOpacity
-                style={styles.refreshButton}
-                onPress={onRefresh}
-                disabled={refreshing}
-                activeOpacity={0.7}
-              >
-                <RefreshCw size={18} color={refreshing ? '#999' : '#0078D4'} />
-                <Text style={[styles.refreshButtonText, refreshing && styles.refreshButtonTextDisabled]}>
-                  Refresh
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-      </View>
-
-      {daySummary ? (
-        <DaySummaryBar
-          totalDriveSec={daySummary.totalDriveSec}
-          totalDistanceM={daySummary.totalDistanceM}
-          departByMs={daySummary.departByMs}
-          returnByMs={daySummary.returnByMs}
-          tightCount={daySummary.tightCount}
-          lateCount={daySummary.lateCount}
-          longWaitCount={daySummary.longWaitCount}
-        />
-      ) : null}
-
-      {/* "Timeline" Section Header */}
-      {isWide ? (
-        <View style={styles.timelineHeaderRow}>
-          <Text style={styles.timelineTitle}>Timeline</Text>
-          <View style={styles.viewModeWrap}>
-            <ViewModeToggle value={viewMode} onChange={setViewMode} />
-          </View>
-          {appointmentsList.length > 0 ? (
-            <TouchableOpacity
-              style={styles.reorderButton}
-              onPress={() => setReorderMode((m) => !m)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.reorderButtonText}>
-                {reorderMode ? 'Cancel' : 'Reorder'}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      ) : (
-        <View style={styles.timelineHeaderRow}>
-          <Text style={styles.timelineTitle}>Timeline</Text>
-        </View>
-      )}
+      <View style={{ height: isWide ? 56 : (daySummary ? 130 : 95) }} />
 
       {isWide && reorderMode && appointmentsList.length > 0 ? (
         <View style={styles.reorderBar}>
@@ -680,7 +662,7 @@ export default function ScheduleScreen() {
         </View>
       ) : null}
 
-      {(viewMode === 'timeline' || !isWide) && appointmentsList.length > 0 ? (
+      {appointmentsList.length > 0 ? (
         <DayTimelineStrip
           appointments={appointmentsList}
           selectedDateMs={selectedDate.getTime()}
@@ -712,10 +694,6 @@ export default function ScheduleScreen() {
         <View style={styles.loadingContainer}>
           <ScheduleSkeletonCards />
         </View>
-      ) : error ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
       ) : useDragList && DraggableFlatListComponent ? (
         <DraggableFlatListComponent
           data={blockData}
@@ -736,7 +714,20 @@ export default function ScheduleScreen() {
               ? [styles.listEmpty, { paddingBottom: listBottomPadding }]
               : [styles.listContent, { paddingBottom: listBottomPadding }]
           }
-          ListEmptyComponent={() => <EmptySchedule animationState={emptyAnimationState} isWide={isWide} />}
+          ListEmptyComponent={() => (
+            <EmptySchedule
+              animationState={emptyAnimationState}
+              isWide={isWide}
+              isSignedIn={isSignedIn}
+              onAddMeeting={handleAddMeeting}
+              onSignInAndSync={handleSignInAndSync}
+            />
+          )}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: false }
+          )}
+          scrollEventThrottle={16}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -750,135 +741,211 @@ export default function ScheduleScreen() {
     </>
   );
 
+  const headerTranslateY = scrollY.interpolate({
+    inputRange: [0, 80],
+    outputRange: [0, -80],
+    extrapolate: 'clamp',
+  });
+
   if (isWide) {
     return (
-      <View style={[styles.splitContainer, isResizing && Platform.OS === 'web' ? { userSelect: 'none' } as any : null]}>
-        {/* Schedule Pane - using dynamic sidebarWidth */}
-        <View style={[styles.schedulePane, { width: sidebarWidth, flex: undefined, paddingLeft: insets.left }]}>
-          {scheduleContent}
-        </View>
-
-        {/* Draggable Divider */}
-        <View
-          style={styles.resizerHandle}
-          {...panResponder.panHandlers}
-        >
-          <View style={styles.resizerLine} />
-        </View>
-
-        <View style={[styles.mapPane, { flex: 1, paddingRight: insets.right }]}>
-          {/* Day Slider as Header above Map */}
-          <View style={[styles.desktopMapHeaderContainer, { paddingTop: Math.max(insets.top, 8) }]}>
-
-            {/* LEFT HEADER: Month & Route Planner Title */}
-            <View style={styles.desktopLeftHeader}>
-              <View style={styles.calendarIconSquare}>
-                <Calendar color="#3B82F6" size={20} />
-              </View>
-              <View style={styles.desktopMonthTextGroup}>
-                <Text style={styles.desktopMonthTitle}>{format(visibleMonthDate, 'MMMM yyyy')}</Text>
-                <Text style={styles.desktopMonthSubtitle}>Route Planner</Text>
-              </View>
+      <View style={[styles.container, isResizing && Platform.OS === 'web' ? { userSelect: 'none' } as any : null]}>
+        {/* GLOBAL HEADER */}
+        <Animated.View style={[styles.globalHeaderWide, { transform: [{ translateY: headerTranslateY }] }]}>
+          {/* Left: Date & Title */}
+          <View style={styles.globalHeaderLeft}>
+            <View style={styles.calendarIconSquare}>
+              <Calendar color="#3B82F6" size={20} />
             </View>
+            <View style={styles.desktopMonthTextGroup}>
+              <Text style={styles.desktopMonthTitle}>{format(visibleMonthDate, 'MMMM yyyy')}</Text>
+              <Text style={styles.desktopMonthSubtitle}>Route Planner</Text>
+            </View>
+          </View>
 
-            {/* RIGHT HEADER: Day Slider controls */}
-            <View style={styles.desktopHeaderRight}>
-              <TouchableOpacity
-                style={styles.desktopTodayButton}
-                onPress={() => onSelectDate(TODAY)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.desktopTodayText}>Today</Text>
+          {/* Center: Summary Stats */}
+          <View style={styles.globalHeaderCenter}>
+            {daySummary ? (
+              <DaySummaryBar
+                totalDriveSec={daySummary.totalDriveSec}
+                totalDistanceM={daySummary.totalDistanceM}
+                departByMs={daySummary.departByMs}
+                returnByMs={daySummary.returnByMs}
+                tightCount={daySummary.tightCount}
+                lateCount={daySummary.lateCount}
+                longWaitCount={daySummary.longWaitCount}
+              />
+            ) : null}
+          </View>
+
+          {/* Right: Day Slider */}
+          <View style={styles.globalHeaderRight}>
+            <TouchableOpacity
+              style={styles.desktopTodayButton}
+              onPress={() => onSelectDate(TODAY)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.desktopTodayText}>Today</Text>
+            </TouchableOpacity>
+
+            <View style={styles.unifiedDayStripContainer}>
+              <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(-5)}>
+                <ChevronLeft color="#333" size={18} />
               </TouchableOpacity>
 
-              <View style={styles.unifiedDayStripContainer}>
-                <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(-5)}>
-                  <ChevronLeft color="#333" size={18} />
-                </TouchableOpacity>
-
-                <View style={styles.desktopDaySliderWrap}>
-                  <DaySlider
-                    ref={daySliderRef}
-                    selectedDate={selectedDate}
-                    onSelectDate={onSelectDate}
-                    meetingCountByDay={meetingCountByDay}
-                    onVisibleMonthChange={setVisibleMonthDate}
-                  />
-                </View>
-
-                <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(5)}>
-                  <ChevronRight color="#333" size={18} />
-                </TouchableOpacity>
+              <View style={styles.desktopDaySliderWrap}>
+                <DaySlider
+                  ref={daySliderRef}
+                  selectedDate={selectedDate}
+                  onSelectDate={onSelectDate}
+                  meetingCountByDay={meetingCountByDay}
+                  onVisibleMonthChange={setVisibleMonthDate}
+                />
               </View>
 
-              {Platform.OS === 'web' && (
-                <TouchableOpacity
-                  style={styles.refreshButton}
-                  onPress={onRefresh}
-                  disabled={refreshing}
-                  activeOpacity={0.7}
+              <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(5)}>
+                <ChevronRight color="#333" size={18} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Animated.View>
+
+        <View style={styles.splitContainer}>
+          {/* Schedule Pane - using dynamic sidebarWidth */}
+          <View style={[styles.schedulePane, { width: sidebarWidth, flex: undefined, paddingLeft: insets.left }]}>
+            {scheduleContent}
+          </View>
+
+          {/* Draggable Divider */}
+          <View
+            style={styles.resizerHandle}
+            {...panResponder.panHandlers}
+          >
+            <View style={styles.resizerLine} />
+          </View>
+
+          <View style={[styles.mapPane, { flex: 1, paddingRight: insets.right }]}>
+            <View style={{ flex: 1 }}>
+              {isExpoGo ? (
+                <View style={[styles.container, styles.mapPlaceholder]}>
+                  <Text style={styles.mapPlaceholderText}>Map available in development build</Text>
+                </View>
+              ) : isSignedIn && isEmptyData ? (
+                <SignedInEmptyStateRight />
+              ) : (
+                <Suspense
+                  fallback={
+                    <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                      <ActivityIndicator size="large" color="#0078D4" />
+                    </View>
+                  }
                 >
-                  <RefreshCw size={18} color={refreshing ? '#999' : '#0078D4'} />
-                </TouchableOpacity>
+                  <MapScreen key={`embed-${windowWidth}-${windowHeight}`} embeddedInSchedule emptyAnimationState={emptyAnimationState} />
+                </Suspense>
               )}
             </View>
           </View>
 
-          <View style={{ flex: 1 }}>
-            {isExpoGo ? (
-              <View style={[styles.container, styles.mapPlaceholder]}>
-                <Text style={styles.mapPlaceholderText}>Map available in development build</Text>
+          {/* Floating Onboarding CTA (Option 1) for Desktop */}
+          {!isSignedIn && isEmptyData && ctaVisible && (
+            <View style={styles.floatingCtaContainer}>
+              <View style={styles.floatingCtaInner}>
+                <View style={styles.ctaIconBadge}>
+                  <CalendarDays size={20} color="#3b82f6" />
+                </View>
+                <View style={styles.ctaTextContainer}>
+                  <Text style={styles.ctaHeadline}>Unlock Proactive Scheduling</Text>
+                  <Text style={styles.ctaSubtext}>Find the best slots for your upcoming meetings dynamically. Sync your calendar to start your free 30-day trial.</Text>
+                </View>
+                <TouchableOpacity style={styles.ctaButton} onPress={handleSignInAndSync}>
+                  <Text style={styles.ctaButtonText}>Sign In & Sync</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.ctaCloseButton}
+                  onPress={() => setCtaVisible(false)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <X size={16} color="#94a3b8" />
+                </TouchableOpacity>
               </View>
-            ) : (
-              <Suspense
-                fallback={
-                  <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-                    <ActivityIndicator size="large" color="#0078D4" />
-                  </View>
-                }
-              >
-                <MapScreen key={`embed-${windowWidth}-${windowHeight}`} embeddedInSchedule emptyAnimationState={emptyAnimationState} />
-              </Suspense>
-            )}
-          </View>
-        </View>
-
-        {/* Floating Onboarding CTA (Option 1) for Desktop */}
-        {isEmptyData && ctaVisible && (
-          <View style={styles.floatingCtaContainer}>
-            <View style={styles.floatingCtaInner}>
-              <View style={styles.ctaIconBadge}>
-                <CalendarDays size={20} color="#3b82f6" />
-              </View>
-              <View style={styles.ctaTextContainer}>
-                <Text style={styles.ctaHeadline}>Unlock Proactive Scheduling</Text>
-                <Text style={styles.ctaSubtext}>Find the best slots for your upcoming meetings dynamically. Sync your calendar to start your free 30-day trial.</Text>
-              </View>
-              <TouchableOpacity style={styles.ctaButton}>
-                <Text style={styles.ctaButtonText}>Sign In & Sync</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.ctaCloseButton}
-                onPress={() => setCtaVisible(false)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <X size={16} color="#94a3b8" />
-              </TouchableOpacity>
             </View>
-          </View>
-        )}
+          )}
 
+        </View>
       </View>
     );
   }
 
-  return <View style={styles.container}>{scheduleContent}</View>;
+  // Portrait layout fallback (old mobile)
+  return (
+    <View style={styles.container}>
+      <Animated.View style={[styles.globalHeaderPortrait, { transform: [{ translateY: headerTranslateY }] }]}>
+        <View style={styles.globalHeaderPortraitTop}>
+          <View style={styles.calendarIconSquare}>
+            <Calendar color="#3B82F6" size={20} />
+          </View>
+          <View style={[styles.desktopMonthTextGroup, { marginLeft: 12 }]}>
+            <Text style={styles.desktopMonthTitle}>{format(visibleMonthDate, 'MMMM yyyy')}</Text>
+            <Text style={styles.desktopMonthSubtitle}>Route Planner</Text>
+          </View>
+        </View>
+
+        <View style={styles.globalHeaderPortraitCenter}>
+          {daySummary ? (
+            <DaySummaryBar
+              totalDriveSec={daySummary.totalDriveSec}
+              totalDistanceM={daySummary.totalDistanceM}
+              departByMs={daySummary.departByMs}
+              returnByMs={daySummary.returnByMs}
+              tightCount={daySummary.tightCount}
+              lateCount={daySummary.lateCount}
+              longWaitCount={daySummary.longWaitCount}
+            />
+          ) : null}
+        </View>
+
+        <View style={styles.globalHeaderPortraitBottom}>
+          <View style={styles.portraitUnifiedStripContainer}>
+            <TouchableOpacity
+              style={[styles.desktopTodayButton, { marginRight: 8 }]}
+              onPress={() => onSelectDate(TODAY)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.desktopTodayText}>Today</Text>
+            </TouchableOpacity>
+
+            <View style={styles.unifiedDayStripContainer}>
+              <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(-5)}>
+                <ChevronLeft color="#333" size={18} />
+              </TouchableOpacity>
+
+              <View style={styles.daySliderWrap}>
+                <DaySlider
+                  ref={daySliderRef}
+                  selectedDate={selectedDate}
+                  onSelectDate={onSelectDate}
+                  meetingCountByDay={meetingCountByDay}
+                  onVisibleMonthChange={setVisibleMonthDate}
+                />
+              </View>
+
+              <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(5)}>
+                <ChevronRight color="#333" size={18} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Animated.View>
+
+      {scheduleContent}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F3F2F1',
+    backgroundColor: '#FFFFFF',
   },
   splitContainer: {
     flex: 1,
@@ -887,7 +954,7 @@ const styles = StyleSheet.create({
   schedulePane: {
     flex: 1,
     minWidth: 0,
-    backgroundColor: '#F3F2F1',
+    backgroundColor: '#FFFFFF',
   },
   mapPane: {
     flex: 1,
@@ -895,7 +962,7 @@ const styles = StyleSheet.create({
   },
   resizerHandle: {
     width: 12,
-    backgroundColor: '#F3F2F1',
+    backgroundColor: '#F3F2F1', // We can keep the handle slightly distinct or match the white. Let's keep it subtle gray to show it's draggable, or use white. I'll make it #FAFAFA.
     alignItems: 'center',
     justifyContent: 'center',
     // @ts-ignore
@@ -1063,12 +1130,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   desktopMonthTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0F172A',
   },
   desktopMonthSubtitle: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#64748B',
     fontWeight: '500',
     marginTop: 0,
@@ -1080,20 +1147,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   calendarIconSquare: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: '#EFF6FF',
     alignItems: 'center',
     justifyContent: 'center',
   },
   unifiedDayStripContainer: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    paddingHorizontal: 4,
-    paddingVertical: 4,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 8,
+    paddingHorizontal: 2,
+    paddingVertical: 2,
   },
   desktopHeaderRight: {
     flexDirection: 'row',
@@ -1103,15 +1173,15 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   desktopTodayButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#CBD5E1',
     backgroundColor: '#FFFFFF',
   },
   desktopTodayText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     color: '#334155',
   },
@@ -1190,7 +1260,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 0,
   },
   emptyText: {
     fontSize: 16,
@@ -1274,4 +1344,75 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#f1f5f9',
   },
+  globalHeaderWide: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 6, // Optimization
+    borderBottomWidth: 1,
+    borderColor: '#E2E8F0',
+    zIndex: 10,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+  },
+  globalHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flexShrink: 0,
+  },
+  globalHeaderCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -8, // Compensate for internal DaySummaryBar margins
+    marginBottom: -20,
+    minWidth: 0,
+  },
+  globalHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 16,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  globalHeaderPortrait: {
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderColor: '#E2E8F0',
+    zIndex: 10,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  globalHeaderPortraitTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  globalHeaderPortraitCenter: {
+    marginHorizontal: -16, // Bleed summary bar
+  },
+  globalHeaderPortraitBottom: {
+    marginHorizontal: -16, // Bleed day slider
+    borderTopWidth: 1,
+    borderColor: '#F1F5F9',
+    paddingVertical: 4,
+    paddingHorizontal: 16,
+  },
+  portraitUnifiedStripContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
 });
+
+export default ScheduleScreenNew;

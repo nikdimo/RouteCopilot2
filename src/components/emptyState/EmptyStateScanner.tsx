@@ -1,15 +1,18 @@
 import React from 'react';
-import { View, StyleSheet, useWindowDimensions, Text, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import { MockMap } from './MockMap';
 import { MockSchedule } from './MockSchedule';
 import { useIsWideScreen } from '../../hooks/useIsWideScreen';
 import { useEmptyStateAnimation } from './useEmptyStateAnimation';
 import { CalendarDays, X } from 'lucide-react-native';
 
-export const EmptyStateScanner = () => {
+type EmptyStateScannerProps = {
+    onSignInAndSync?: () => void;
+};
+
+export const EmptyStateScanner = ({ onSignInAndSync }: EmptyStateScannerProps) => {
     const animationState = useEmptyStateAnimation(true);
     const isWideScreen = useIsWideScreen();
-    const { width } = useWindowDimensions();
     const [ctaVisible, setCtaVisible] = React.useState(true);
 
     return (
@@ -50,7 +53,7 @@ export const EmptyStateScanner = () => {
                                 <Text style={styles.ctaSubtext}>Find the best slots for your upcoming meetings dynamically. Sync your calendar to start your free 30-day trial.</Text>
                             </View>
 
-                            <TouchableOpacity style={styles.ctaButton}>
+                            <TouchableOpacity style={styles.ctaButton} onPress={onSignInAndSync}>
                                 <Text style={styles.ctaButtonText}>Sign In & Sync</Text>
                             </TouchableOpacity>
 
@@ -76,7 +79,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#e2e8f0',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 16,
+        padding: 0,
     },
     innerContainer: {
         backgroundColor: '#f8f9fa',
@@ -89,6 +92,7 @@ const styles = StyleSheet.create({
         elevation: 10,
         maxWidth: 1200,
         width: '100%',
+        borderRadius: 0,
     },
     landscapeContainer: {
         flexDirection: 'row',
@@ -106,8 +110,8 @@ const styles = StyleSheet.create({
     portraitContainer: {
         flexDirection: 'column',
         height: '100%',
-        maxWidth: 480,
-        borderRadius: 36,
+        width: '100%',
+        borderRadius: 0,
     },
     mapPanelMobile: {
         flex: 0.5,
@@ -147,7 +151,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
-        padding: 16,
+        padding: 0,
         paddingRight: 40, // Space for close button
         borderRadius: 20,
         shadowColor: '#000',
@@ -207,3 +211,4 @@ const styles = StyleSheet.create({
         backgroundColor: '#f1f5f9',
     },
 });
+

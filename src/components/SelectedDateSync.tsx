@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { getCalendarEventsRaw, enrichCalendarEventsAll, GraphUnauthorizedError } from '../services/graph';
+import { clearGraphSession, isMagicAuthToken } from '../services/graphAuth';
 import { getLocalMeetingsForDay } from '../services/localMeetings';
 import { sortAppointmentsByTime } from '../utils/optimization';
 import { toLocalDayKey } from '../utils/dateUtils';
@@ -44,6 +45,8 @@ export default function SelectedDateSync() {
   const { preferences } = useUserPreferences();
   const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
   const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
+  // Avoid startup races where preferences still report `free` while signed-in auth is already ready.
+  const shouldSyncCalendar = canSyncCalendar || Boolean(userToken);
   const {
     selectedDate,
     refreshTrigger,
@@ -65,10 +68,10 @@ export default function SelectedDateSync() {
   }, [pendingLocalEvent]);
 
   useEffect(() => {
-    if (canSyncCalendar && userToken) return;
+    if (shouldSyncCalendar && userToken) return;
     dayCache.current.clear();
     activeDayKey.current = '';
-  }, [canSyncCalendar, userToken]);
+  }, [shouldSyncCalendar, userToken]);
 
   /** Merge pending local event into list for this day (so newly confirmed meeting shows immediately). */
   const mergePendingIfSameDay = useCallback(
@@ -87,7 +90,7 @@ export default function SelectedDateSync() {
   const fetchForDate = useCallback(
     async (date: Date) => {
       const dayKey = toLocalDayKey(date);
-      if (!canSyncCalendar) {
+      if (!shouldSyncCalendar) {
         const localEvents = await getLocalMeetingsForDay(dayKey);
         const localSorted = sortAppointmentsByTime(localEvents);
         const localMerged = mergePendingIfSameDay(dayKey, localSorted);
@@ -187,16 +190,21 @@ export default function SelectedDateSync() {
           setAppointmentsLoading(false);
           setAppointmentsEnriching(false);
         }
-        if (e instanceof GraphUnauthorizedError) signOut();
+        if (e instanceof GraphUnauthorizedError) {
+          await clearGraphSession().catch(() => {});
+          if (userToken && !isMagicAuthToken(userToken)) {
+            signOut();
+          }
+        }
       }
     },
-    [canSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, getDayOrder, signOut, mergePendingIfSameDay]
+    [shouldSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, getDayOrder, signOut, mergePendingIfSameDay]
   );
 
   /** Preload a future day fully (raw + enrich) and store in cache. Does not update context. */
   const preloadOneDay = useCallback(
     async (date: Date) => {
-      if (!canSyncCalendar) return;
+      if (!shouldSyncCalendar) return;
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
       if (!token) return;
       const dayKey = toLocalDayKey(date);
@@ -225,7 +233,7 @@ export default function SelectedDateSync() {
         // ignore; preload is best-effort
       }
     },
-    [canSyncCalendar, userToken, getValidToken, getDayOrder]
+    [shouldSyncCalendar, userToken, getValidToken, getDayOrder]
   );
 
   useEffect(() => {
@@ -246,7 +254,7 @@ export default function SelectedDateSync() {
   }, [selectedDate, fetchForDate, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, mergePendingIfSameDay]);
 
   useEffect(() => {
-    if (!canSyncCalendar) return;
+    if (!shouldSyncCalendar) return;
     if (!userToken && !getValidToken) return;
     let cancelled = false;
     const run = async () => {
@@ -262,7 +270,7 @@ export default function SelectedDateSync() {
     return () => {
       cancelled = true;
     };
-  }, [canSyncCalendar, selectedDate, userToken, getValidToken, preloadOneDay]);
+  }, [shouldSyncCalendar, selectedDate, userToken, getValidToken, preloadOneDay]);
 
   useEffect(() => {
     if (refreshTrigger === lastRefreshTrigger.current) return;

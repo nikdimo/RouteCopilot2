@@ -1,5 +1,33 @@
 # WisePlan – Release Notes
 
+## 2026-03-04 - Stable VPS Build (Auth + Calendar Sync)
+
+What is stable in this version:
+- Magic-link session no longer signs users out on normal page refresh.
+- Outlook connect flow is reliable on web, including reconnect loops.
+- Calendar connection status persists correctly in Profile.
+- Meetings now auto-refresh after successful Outlook connect (no Profile round-trip needed).
+- Schedule meeting list no longer alternates between empty/non-empty across refreshes.
+- Schedule empty-state CTAs are wired:
+  - `Create New Meeting` opens Add Meeting.
+  - `Sign In & Sync` opens Profile sign-in path.
+- Backend auth race handling improved for duplicate identity inserts.
+- Magic-link session TTL increased to 7 days in production.
+
+Web/runtime improvements:
+- Reduced noisy web warnings by moving key shadow styles to web `boxShadow`.
+- Replaced deprecated web `pointerEvents` prop usage in updated path.
+- Added stronger web token persistence fallback for both auth token and Graph token
+  (AsyncStorage + localStorage fallback path).
+- Reduced Microsoft Graph Contacts 429 pressure by limiting contact-enrichment lookups
+  and skipping address-like queries for contact search.
+
+Production endpoints in use:
+- App: `https://wiseplan.dk/app/`
+- API: `https://api.wiseplan.dk`
+- Admin: `https://admin.wiseplan.dk`
+
+---
 ## 2026-02-16 – TestFlight & Auth Fixes
 
 **TestFlight:** White screen fixed. Builds now show app correctly. Causes: `expo-splash-screen` (preventAutoHideAsync, hideAsync) and `newArchEnabled: false` in app.json. EAS build + submit; Microsoft auth works on device.
@@ -63,3 +91,4 @@
 - **Auth:** Microsoft OAuth 2.0 with PKCE; tokens stored in SecureStore (native) / AsyncStorage (web)
 - **Platforms:** iOS, Android, Web (wiseplan.dk/app/)
 - **Stack:** Expo 54, React Native, Microsoft Graph API
+

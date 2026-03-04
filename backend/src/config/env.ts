@@ -54,7 +54,8 @@ const EnvSchema = z.object({
   MAGIC_LINK_JWT_SECRET: optionalText,
   MAGIC_LINK_TOKEN_ISSUER: z.string().default("wiseplan-auth"),
   MAGIC_LINK_TOKEN_AUDIENCE: z.string().default("wiseplan-app"),
-  MAGIC_LINK_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().max(24 * 60).default(30),
+  // Allow long-lived web sessions (up to 90 days) for magic-link auth.
+  MAGIC_LINK_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().max(90 * 24 * 60).default(30),
   MAGIC_LINK_WEB_URL: z.string().url().default("https://wiseplan.dk/app/"),
   MAGIC_LINK_FROM_NAME: z.string().default("WisePlan"),
   MAGIC_LINK_FROM_EMAIL: z.string().email().default("hello@wiseplan.dk"),

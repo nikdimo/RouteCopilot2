@@ -385,7 +385,7 @@ async function enrichCalendarEventsWithContactInfo(
     const t = e.title?.trim();
     const loc = e.location?.trim();
     if (t) keys.add(t);
-    if (loc && loc !== t) keys.add(loc);
+    if (loc && loc !== t && !isLikelyAddressQuery(loc)) keys.add(loc);
   }
 
   const keyToContact = new Map<string, { phone?: string; email?: string }>();
@@ -434,15 +434,22 @@ export async function enrichCalendarEventsWithContactAddresses(
   const needEnrichment = events.filter((e) => (e.location?.trim() ?? '') !== '' && !e.coordinates);
   if (needEnrichment.length === 0) return events;
 
-  const uniqueLocations = [...new Set(needEnrichment.map((e) => e.location!.trim()))];
+  const uniqueLocations = [
+    ...new Set(
+      needEnrichment
+        .map((e) => e.location!.trim())
+        .filter((loc) => !isLikelyAddressQuery(loc))
+    ),
+  ];
+  if (uniqueLocations.length === 0) return events;
   const locationToEnriched = new Map<
     string,
     { location: string; coordinates: { latitude: number; longitude: number }; phone?: string; email?: string }
   >();
 
-  // Parallel contact + geocode lookups for all unique locations
-  await Promise.all(
-    uniqueLocations.map(async (loc) => {
+  // Rate-limit contact + geocode lookups to avoid Graph 429 bursts.
+  await limitConcurrency(uniqueLocations, 2, async (loc) => {
+      await new Promise(resolve => setTimeout(resolve, 120));
       const result = await searchContacts(token, loc);
       if (!result.success || !result.contacts || result.contacts.length === 0) return;
 
@@ -466,8 +473,7 @@ export async function enrichCalendarEventsWithContactAddresses(
         phone: contact.phones[0]?.trim() || undefined,
         email: contact.emails[0]?.trim() || undefined,
       });
-    })
-  );
+    });
 
   if (locationToEnriched.size === 0) return events;
 
@@ -777,6 +783,17 @@ function contactMatchesQuery(c: GraphContact, queryLower: string): boolean {
   return fields.some((f) => f.toLowerCase().includes(queryLower));
 }
 
+function isLikelyAddressQuery(value: string): boolean {
+  const q = value.trim();
+  if (!q) return false;
+  if (/\d/.test(q)) return true;
+  if (q.includes(',')) return true;
+  if (/\b(street|st|avenue|ave|road|rd|lane|ln|boulevard|blvd|drive|dr|vej|gade|plads|torv)\b/i.test(q)) {
+    return true;
+  }
+  return false;
+}
+
 export type SearchContactsResult =
   | { success: true; contacts: ContactSearchResult[] }
   | { success: false; error: string; needsConsent?: boolean; is401?: boolean; is403?: boolean };
@@ -842,6 +859,12 @@ async function _doSearchContacts(
     const searchRes = await fetchWithRetry(searchUrl, {
       headers: { Authorization: `Bearer ${graphToken}`, ConsistencyLevel: 'eventual' },
     });
+    if (searchRes.status === 429) {
+      return {
+        success: false,
+        error: 'Contacts lookup is temporarily rate limited by Microsoft Graph.',
+      };
+    }
     if (searchRes.ok) {
       const searchData = (await searchRes.json()) as { value?: GraphContact[] };
       const contacts = _mapGraphContacts(searchData.value ?? [], q);
@@ -866,6 +889,12 @@ async function _doSearchContacts(
         error: 'Grant Contacts.Read or Contacts.ReadWrite to search contacts.',
         needsConsent: true,
         is403: true,
+      };
+    }
+    if (res.status === 429) {
+      return {
+        success: false,
+        error: 'Contacts lookup is temporarily rate limited by Microsoft Graph.',
       };
     }
     if (!res.ok) {

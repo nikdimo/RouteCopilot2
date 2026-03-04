@@ -47,6 +47,8 @@ export async function ensureUserFromIdentity(input: IdentityInput) {
 
   try {
     await client.query("BEGIN");
+    // Serialize identity provisioning per aad_oid to avoid concurrent INSERT races.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [input.aadOid]);
 
     const found = await client.query<UserRow>(
       `SELECT id, organization_id, app_trial_started_at, app_trial_ends_at
