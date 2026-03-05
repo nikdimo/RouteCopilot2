@@ -5,6 +5,63 @@
 - Do not run commands, open files, edit code, or execute tools until the user gives an explicit task.
 - If the user message is unclear, ask a short clarification question and wait.
 
+## Latest Session Update (2026-03-05, Best Options ranking/badge fix + slot logic instrumentation)
+- User-reported production bug:
+  1. Best Options showed two `Pusher` variants for the same meeting.
+  2. One variant had `0 km` detour and another had `+15.8 km`.
+  3. The higher-detour option was shown as `Best`.
+- Root cause fixed:
+  1. UI badge bug in Best Options carousel:
+     - `isBestOption` was hardcoded `true` for every card, so all cards were effectively treated as best in that view.
+  2. Ranking consistency gap:
+     - Best-options selection used local score-only ordering instead of one shared canonical comparator (tier + score + stable tie-breakers).
+- Ranking pipeline now standardized:
+  1. Added canonical comparator in scheduler:
+     - `compareScoredSlots(a,b)` = `tier asc -> score asc -> startMs asc -> dayIso asc`.
+  2. Added shared picker:
+     - `pickBestOptionsWithDayDiversity(...)` now uses canonical rank before day-diversity selection.
+  3. Added shared best-badge source helper:
+     - `getBestBadgeSlotId(bestOptions)` -> badge source is always `bestOptions[0]`.
+  4. AddMeeting screen updated to:
+     - rank with `compareScoredSlots`
+     - pick with `pickBestOptionsWithDayDiversity`
+     - assign `Best` badge only when `slotId(slot) === bestBadgeSlotId`
+- Proposed slot logic (core product logic) documented/confirmed:
+  1. Candidate generation:
+     - For each day gap, scheduler evaluates up to 4 starts (earliest 3 + midpoint), snapped to 15-minute grid.
+  2. Hard guardrails before acceptance:
+     - working-hours bounds
+     - no-past constraints
+     - travel-time + pre/post buffer feasibility
+     - no overlap with existing events
+     - distance-threshold guard for same-day detour
+  3. Flex/domino behavior:
+     - Slot can shift adjacent meetings only through flexible windows.
+     - Domino chain is allowed only while each moved meeting remains within its own flex capacity.
+     - Chain is rejected if a non-flex hop is needed, if any overlap appears, or if a shifted meeting would move into the past (today guardrail).
+  4. Scoring (lower is better):
+     - base: `detourKm * 10`
+     - + smooth slack penalty for tight/very loose spacing
+     - + busy-day penalty
+     - - optional cross-day adjacency bonus (field mode)
+  5. Final ordering:
+     - canonical sort above, then optional tier filtering.
+- Debug instrumentation added (guarded by flag):
+  1. Set `globalThis.__debugBestOptionsRanking = true` in dev to log per candidate:
+     - candidate id, slot start/end, candidate type
+     - pushed meeting ids + old/new times + direction
+     - detour raw (km/meters) + display string + on-route flag
+     - score components/weights + final score
+     - final rank index
+     - exact `Best` badge source and whether badge applied
+- QA/test coverage added:
+  1. `runPusherRankingQA()` in scheduler:
+     - same pushed meeting earlier vs later
+     - `0 km` vs `+15.8 km`
+     - verifies `0 km` ranks ahead (numeric ordering)
+     - verifies badge source matches top-ranked candidate
+  2. Included in `runFullQASuite()`.
+
 ## Latest Session Update (2026-03-05, UI controls relocation + portrait overlap fix + wide-header experiment/revert)
 - User requests in this run:
   1. Move dev/debug controls off the main route screen:

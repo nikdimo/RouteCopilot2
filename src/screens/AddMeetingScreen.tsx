@@ -16,7 +16,10 @@ import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import {
+  compareScoredSlots,
   findSmartSlots,
+  getBestBadgeSlotId,
+  pickBestOptionsWithDayDiversity,
   slotId,
   type ScoredSlot,
   type Coordinate,
@@ -64,6 +67,7 @@ import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subs
 
 const MS_BLUE = '#0078D4';
 const MS_PER_MIN = 60_000;
+const FLEX_WINDOW_REGEX = /\[Flexible Window:\s*([0-2]?\d:[0-5]\d)\s*to\s*([0-2]?\d:[0-5]\d)(?:\s*\|[^\]]*)?\]/i;
 
 function toCoord(ev: CalendarEvent): Coordinate | null {
   const c = ev.coordinates;
@@ -77,6 +81,12 @@ function formatDayLabel(dayIso: string): string {
   const [y, mo, d] = dayIso.split('-').map((x) => parseInt(x, 10));
   const date = new Date(y, mo - 1, d);
   return date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+function hasFlexibleWindow(event: CalendarEvent): boolean {
+  const body = (event.notes ?? event.bodyPreview ?? '').trim();
+  if (!body) return false;
+  return FLEX_WINDOW_REGEX.test(body);
 }
 
 function eventsForDay(events: CalendarEvent[], dayIso: string): CalendarEvent[] {
@@ -100,6 +110,17 @@ function eventsForDay(events: CalendarEvent[], dayIso: string): CalendarEvent[] 
     }
     return startOfDay(new Date(startMs)).getTime() === dayStartMs;
   });
+}
+
+function formatClock(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+}
+
+function formatDetourKmDisplay(detourKm: number): string {
+  if (detourKm === 0) return '0 km';
+  if (detourKm < 0) return `Saves ${Math.abs(detourKm).toFixed(1)} km`;
+  return `+${detourKm.toFixed(1)} km`;
 }
 
 function inferCountryCodeFromHomeBase(homeBase?: { lat: number; lon: number } | null) {
@@ -132,43 +153,6 @@ function filterAppointmentsByWindow(
       return false;
     }
   });
-}
-
-/**
- * Pick the 3 best options with day-level diversity.
- * Rule: at most one slot per calendar day, so the user sees genuinely different choices
- * (e.g. Tuesday morning, Thursday afternoon, Friday) rather than three variants of the
- * same Tuesday gap. Within each day, the slot with the lowest score is chosen.
- * Falls back to same-day slots if fewer than 3 distinct days are available.
- */
-function pickBestOptions(slots: ScoredSlot[]): ScoredSlot[] {
-  if (slots.length === 0) return [];
-  if (slots.length <= 3) return [...slots];
-
-  const byScore = [...slots].sort((a, b) => a.score - b.score);
-
-  // Phase 1: one best slot per unique day, up to 3 days
-  const result: ScoredSlot[] = [];
-  const seenDays = new Set<string>();
-  for (const slot of byScore) {
-    if (!seenDays.has(slot.dayIso)) {
-      seenDays.add(slot.dayIso);
-      result.push(slot);
-      if (result.length >= 3) return result;
-    }
-  }
-
-  // Phase 2: fewer than 3 unique days — fill remaining slots by score (any day)
-  const seenIds = new Set(result.map((s) => slotId(s)));
-  for (const slot of byScore) {
-    if (!seenIds.has(slotId(slot))) {
-      seenIds.add(slotId(slot));
-      result.push(slot);
-      if (result.length >= 3) return result;
-    }
-  }
-
-  return result;
 }
 
 /** Enrich events that have location but no coordinates. Enables correct detour when inserting between meetings. */
@@ -214,6 +198,7 @@ export default function AddMeetingScreen() {
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [mapSlot, setMapSlot] = useState<ScoredSlot | null>(null);
   const [confirmSlot, setConfirmSlot] = useState<ScoredSlot | null>(null);
+  const [highlightedShiftEventIds, setHighlightedShiftEventIds] = useState<string[]>([]);
   const [devDebug, setDevDebug] = useState<Record<string, unknown>>({});
   const [devPanelCollapsed, setDevPanelCollapsed] = useState(true);
   const [searchAppointments, setSearchAppointments] = useState<CalendarEvent[] | null>(null);
@@ -264,11 +249,79 @@ export default function AddMeetingScreen() {
     });
   }, [hasSearched, scheduleForSearch, newLocation, durationMinutes, preferences, searchWindow, timeframe.mode, qaLog]);
 
-  const bestOptions = useMemo(() => pickBestOptions(allSlots), [allSlots]);
-  const bestOptionIds = useMemo(
-    () => new Set(bestOptions.map((s) => slotId(s))),
+  const rankedSlots = useMemo(
+    () => [...allSlots].sort(compareScoredSlots),
+    [allSlots]
+  );
+  const bestOptions = useMemo(
+    () => pickBestOptionsWithDayDiversity(rankedSlots, 3),
+    [rankedSlots]
+  );
+  const bestBadgeSlotId = useMemo(
+    () => getBestBadgeSlotId(bestOptions),
     [bestOptions]
   );
+  const bestOptionIds = useMemo(
+    () => new Set(bestBadgeSlotId ? [bestBadgeSlotId] : []),
+    [bestBadgeSlotId]
+  );
+
+  useEffect(() => {
+    const devEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
+    if (!devEnabled || !hasSearched || searchLoading) return;
+    const g = globalThis as unknown as { __debugBestOptionsRanking?: boolean };
+    if (!g.__debugBestOptionsRanking) return;
+
+    const bestBadgeSource = 'bestOptions[0] from ranked candidates (compareScoredSlots + day-diversity pick)';
+    const ranked = [...allSlots].sort(compareScoredSlots);
+
+    const rows = ranked.map((slot, idx) => {
+      const id = slotId(slot);
+      const explain = slot.explain;
+      const shifts = explain?.shiftedEvents ?? [];
+      const primaryShift = shifts[0];
+      const onRoute = (slot.metrics.detourKm ?? 0) <= 5;
+      const scoreBreakdown = explain?.scoreBreakdown;
+      const detourKm = slot.metrics.detourKm ?? 0;
+
+      return {
+        candidateId: id,
+        slotStart: formatClock(slot.startMs),
+        slotEnd: formatClock(slot.endMs),
+        candidateType: shifts.length > 0 ? 'pusher' : (slot.tier === 4 ? 'new-day' : 'standard'),
+        pushedMeetingIds: shifts.map((s) => s.id),
+        pushedMeetingOldTimes: shifts.map((s) => `${formatClock(s.fromStartMs)}-${formatClock(s.fromEndMs)}`),
+        pushedMeetingNewTimes: shifts.map((s) => `${formatClock(s.toStartMs)}-${formatClock(s.toEndMs)}`),
+        moveDirections: shifts.map((s) => s.direction),
+        primaryPushedMeetingId: primaryShift?.id ?? null,
+        primaryPushedMeetingOldTime: primaryShift ? `${formatClock(primaryShift.fromStartMs)}-${formatClock(primaryShift.fromEndMs)}` : null,
+        primaryPushedMeetingNewTime: primaryShift ? `${formatClock(primaryShift.toStartMs)}-${formatClock(primaryShift.toEndMs)}` : null,
+        primaryMoveDirection: primaryShift?.direction ?? null,
+        detourKmRaw: detourKm,
+        detourMetersRaw: detourKm * 1000,
+        detourDisplay: formatDetourKmDisplay(detourKm),
+        onRoute,
+        scoreComponents: scoreBreakdown ?? null,
+        finalScore: slot.score,
+        finalRankIndex: idx,
+        bestBadgeApplied: bestBadgeSlotId === id,
+        bestBadgeSource,
+        indexInUnsortedArray: allSlots.findIndex((s) => slotId(s) === id),
+      };
+    });
+
+    console.groupCollapsed(`[BestOptionsRanking] ${rows.length} candidates`);
+    rows.forEach((row) => console.log(row));
+    console.log('Best options order', bestOptions.map((s, index) => ({
+      rankInBestOptions: index,
+      candidateId: slotId(s),
+      finalScore: s.score,
+      detourKmRaw: s.metrics.detourKm ?? 0,
+      detourDisplay: formatDetourKmDisplay(s.metrics.detourKm ?? 0),
+    })));
+    console.log('Best badge slot', bestBadgeSlotId);
+    console.groupEnd();
+  }, [allSlots, bestOptions, bestBadgeSlotId, hasSearched, searchLoading]);
 
   const dayIsos = useMemo(() => {
     const fromSlots = new Set(allSlots.map((s) => s.dayIso));
@@ -381,20 +434,35 @@ export default function AddMeetingScreen() {
   useEffect(() => {
     setHasSearched(false);
     setSearchAppointments(null);
+    setHighlightedShiftEventIds([]);
   }, [locationSelection, durationMinutes, timeframe]);
 
   const handleSelectSlot = (slot: ScoredSlot) => {
     setSelectedSlotId(slotId(slot));
     setMapSlot(slot);
     setConfirmSlot(null);
+    setHighlightedShiftEventIds([]);
   };
 
   const handleBookSlot = (slot: ScoredSlot) => {
     setConfirmSlot(slot);
+    setHighlightedShiftEventIds([]);
   };
 
   const handleMapPress = (slot: ScoredSlot) => {
     setMapSlot(slot);
+    setHighlightedShiftEventIds([]);
+  };
+
+  const handlePusherToggle = (
+    slot: ScoredSlot,
+    active: boolean,
+    affectedEventIds: string[]
+  ) => {
+    setSelectedSlotId(slotId(slot));
+    setMapSlot(slot);
+    setConfirmSlot(null);
+    setHighlightedShiftEventIds(active ? affectedEventIds : []);
   };
 
   const handleConfirmBooking = async (
@@ -422,36 +490,58 @@ export default function AddMeetingScreen() {
     /** We propose only feasible, optimal slots. No save-time checks—trust the proposals. */
     const isLocalId = finalEvent.id.startsWith('local-');
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
+    const eventBody = (finalEvent.bodyPreview ?? finalEvent.notes ?? '').trim() || undefined;
     if (canSyncCalendar && token && isLocalId) {
       const proposedStartIso = finalEvent.startIso!;
       const proposedEndIso = finalEvent.endIso!;
       const proposedTime = finalEvent.time;
-      const result = await createCalendarEvent(token, {
-        subject: finalEvent.title,
-        startIso: proposedStartIso,
-        endIso: proposedEndIso,
-        location: finalEvent.location,
-        body: finalEvent.notes,
-      });
-      if (result.success && 'event' in result) {
-        // Preserve proposed times; Graph may return different format causing display shift
-        finalEvent = { ...result.event, startIso: proposedStartIso, endIso: proposedEndIso, time: proposedTime };
-      } else {
-        const needsConsent = 'needsConsent' in result ? Boolean(result.needsConsent) : false;
-        const errorMessage = 'error' in result ? result.error : 'Calendar sync failed';
-        if (needsConsent) {
-          Alert.alert(
-            'Permission needed',
-            'Grant Calendars.ReadWrite in your Microsoft account to sync to Outlook. Saved locally for now.',
-            [{ text: 'OK' }]
-          );
+      try {
+        const result = await createCalendarEvent(token, {
+          subject: finalEvent.title,
+          startIso: proposedStartIso,
+          endIso: proposedEndIso,
+          location: finalEvent.location,
+          body: eventBody,
+        });
+        if (result.success && 'event' in result) {
+          // Preserve proposed times; Graph may return different format causing display shift
+          finalEvent = {
+            ...result.event,
+            startIso: proposedStartIso,
+            endIso: proposedEndIso,
+            time: proposedTime,
+            notes: eventBody,
+            bodyPreview: eventBody,
+          };
         } else {
-          Alert.alert(
-            'Calendar sync failed',
-            errorMessage,
-            [{ text: 'OK' }]
-          );
+          const needsConsent = 'needsConsent' in result ? Boolean(result.needsConsent) : false;
+          const errorMessage = 'error' in result ? result.error : 'Calendar sync failed';
+          if (needsConsent) {
+            Alert.alert(
+              'Permission needed',
+              'Grant Calendars.ReadWrite in your Microsoft account to sync to Outlook. Saved locally for now.',
+              [{ text: 'OK' }]
+            );
+          } else {
+            Alert.alert(
+              'Calendar sync failed',
+              errorMessage,
+              [{ text: 'OK' }]
+            );
+          }
         }
+      } catch (err) {
+        if (err instanceof GraphUnauthorizedError) {
+          await clearGraphSession().catch(() => { });
+          if (userToken && !isMagicAuthToken(userToken)) {
+            signOut();
+          }
+        }
+        Alert.alert(
+          'Calendar sync failed',
+          err instanceof Error ? err.message : 'Meeting was saved locally.',
+          [{ text: 'OK' }]
+        );
       }
     }
 
@@ -530,22 +620,42 @@ export default function AddMeetingScreen() {
     }
 
     if (canCreateContacts && token && contactInput && (contactInput.displayName || contactInput.email)) {
-      const contactResult = await createContact(token, {
-        displayName: contactInput.displayName ?? contactInput.email,
-        companyName: contactInput.companyName,
-        businessPhones: contactInput.businessPhone ? [contactInput.businessPhone] : undefined,
-        emailAddresses: contactInput.email ? [{ address: contactInput.email }] : undefined,
-      });
-      if (contactResult.success) {
-        Alert.alert('Contact saved', 'Contact saved to Outlook.');
-      } else {
-        const needsConsent = 'needsConsent' in contactResult ? Boolean(contactResult.needsConsent) : false;
-        const errorMessage = 'error' in contactResult ? contactResult.error : 'Unknown error';
+      const displayName = (contactInput.displayName ?? contactInput.email ?? finalEvent.title ?? '').trim();
+      const nameParts = displayName.split(/\s+/).filter(Boolean);
+      const givenName = nameParts[0] ?? undefined;
+      const surname = nameParts.length > 1 ? nameParts.slice(1).join(' ') : undefined;
+      const businessAddress =
+        locationSelection.type === 'contact'
+          ? locationSelection.contact.bestAddress ?? undefined
+          : (locationForEvent.trim() ? { street: locationForEvent.trim() } : undefined);
+
+      try {
+        const contactResult = await createContact(token, {
+          displayName,
+          givenName,
+          surname,
+          companyName: contactInput.companyName,
+          businessPhones: contactInput.businessPhone ? [contactInput.businessPhone] : undefined,
+          emailAddresses: contactInput.email ? [{ address: contactInput.email, name: displayName }] : undefined,
+          businessAddress,
+        });
+        if (contactResult.success) {
+          Alert.alert('Contact saved', 'Contact name and address were saved to Outlook.');
+        } else {
+          const needsConsent = 'needsConsent' in contactResult ? Boolean(contactResult.needsConsent) : false;
+          const errorMessage = 'error' in contactResult ? contactResult.error : 'Unknown error';
+          Alert.alert(
+            'Meeting saved',
+            needsConsent
+              ? 'Could not save contact (permission needed). Grant Contacts.ReadWrite to sync contacts to Outlook.'
+              : `Could not save contact: ${errorMessage}. Meeting was saved.`,
+            [{ text: 'OK' }]
+          );
+        }
+      } catch (err) {
         Alert.alert(
           'Meeting saved',
-          needsConsent
-            ? 'Could not save contact (permission needed). Grant Contacts.ReadWrite to sync contacts to Outlook.'
-            : `Could not save contact: ${errorMessage}. Meeting was saved.`,
+          `Could not save contact: ${err instanceof Error ? err.message : 'Unknown error'}. Meeting was saved.`,
           [{ text: 'OK' }]
         );
       }
@@ -771,7 +881,7 @@ export default function AddMeetingScreen() {
                   )}
                   {hasSearched && (
                     <Text style={styles.devPanelLine}>
-                      Appointments: {filteredAppointments.length} (missing coords: {filteredAppointments.filter((a) => !a.coordinates || typeof a.coordinates?.latitude !== 'number').length}) | Slots: {allSlots.length}
+                      Appointments: {filteredAppointments.length} (missing coords: {filteredAppointments.filter((a) => !a.coordinates || typeof a.coordinates?.latitude !== 'number').length}, flexible: {filteredAppointments.filter(hasFlexibleWindow).length}) | Slots: {allSlots.length}
                     </Text>
                   )}
                   {hasSearched && dayIsos.length > 0 && (() => {
@@ -824,11 +934,12 @@ export default function AddMeetingScreen() {
                           preBuffer={preBuffer}
                           postBuffer={postBuffer}
                           isSelected={selectedSlotId === slotId(slot)}
-                          isBestOption={true}
+                          isBestOption={bestBadgeSlotId != null && slotId(slot) === bestBadgeSlotId}
                           showDate={true}
                           onSelect={() => handleSelectSlot(slot)}
                           onMapPress={() => handleMapPress(slot)}
                           onBookPress={() => handleBookSlot(slot)}
+                          onPusherToggle={handlePusherToggle}
                         />
                       </View>
                     ))}
@@ -857,6 +968,7 @@ export default function AddMeetingScreen() {
                       onSelectSlot={handleSelectSlot}
                       onMapPress={handleMapPress}
                       onBookSlot={handleBookSlot}
+                      onPusherToggle={handlePusherToggle}
                     />
                   ))
                 )}
@@ -872,14 +984,23 @@ export default function AddMeetingScreen() {
                 <TouchableOpacity
                   style={styles.expoGoModalOverlay}
                   activeOpacity={1}
-                  onPress={() => setMapSlot(null)}
+                  onPress={() => {
+                    setMapSlot(null);
+                    setHighlightedShiftEventIds([]);
+                  }}
                 >
                   <View style={styles.expoGoModalBox}>
                     <Text style={styles.expoGoModalTitle}>Map preview</Text>
                     <Text style={styles.expoGoModalText}>
                       Map preview is available in the development build (EAS Build / TestFlight).
                     </Text>
-                    <TouchableOpacity style={styles.expoGoModalButton} onPress={() => setMapSlot(null)}>
+                    <TouchableOpacity
+                      style={styles.expoGoModalButton}
+                      onPress={() => {
+                        setMapSlot(null);
+                        setHighlightedShiftEventIds([]);
+                      }}
+                    >
                       <Text style={styles.expoGoModalButtonText}>Close</Text>
                     </TouchableOpacity>
                   </View>
@@ -889,17 +1010,22 @@ export default function AddMeetingScreen() {
               <Suspense fallback={null}>
                 <MapPreviewModal
                   visible={!!mapSlot}
-                  onClose={() => setMapSlot(null)}
+                  onClose={() => {
+                    setMapSlot(null);
+                    setHighlightedShiftEventIds([]);
+                  }}
                   onConfirmBooking={() => {
                     if (mapSlot) {
                       setConfirmSlot(mapSlot);
                       setMapSlot(null);
+                      setHighlightedShiftEventIds([]);
                     }
                   }}
                   dayEvents={eventsForDay(filteredAppointments, mapSlot.dayIso)}
                   insertionCoord={newLocation}
                   slot={mapSlot}
                   homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
+                  highlightedEventIds={highlightedShiftEventIds}
                 />
               </Suspense>
             )
@@ -928,6 +1054,7 @@ export default function AddMeetingScreen() {
                     : []
                 }
                 homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
+                highlightedEventIds={highlightedShiftEventIds}
               />
             </Suspense>
           )}

@@ -13,6 +13,7 @@ const MAX_SLOTS = 100;
 const MAX_CANDIDATES_PER_GAP = 3;
 /** Slot start times snap to 15-minute grid (round UP to avoid "leave earlier than possible") */
 const SNAP_MINUTES = 15;
+const FLEX_WINDOW_REGEX = /\[Flexible Window:\s*([0-2]?\d:[0-5]\d)\s*to\s*([0-2]?\d:[0-5]\d)(?:\s*\|[^\]]*)?\]/i;
 
 // ─── Helper Types ──────────────────────────────────────────────────────────────
 
@@ -36,6 +37,27 @@ export type SlotExplainAnchor = {
   startMs: number;
   endMs: number;
   hasCoord: boolean;
+};
+
+export type SlotExplainShift = {
+  id: string;
+  title: string;
+  direction: 'earlier' | 'later';
+  fromStartMs: number;
+  fromEndMs: number;
+  toStartMs: number;
+  toEndMs: number;
+  shiftMinutes: number;
+  maxShiftMinutes: number;
+};
+
+export type SlotScoreBreakdown = {
+  detourWeight: number;
+  detourBase: number;
+  slackPenalty: number;
+  busyDayPenalty: number;
+  crossDayBonus: number;
+  total: number;
 };
 
 export type SlotExplain = {
@@ -81,7 +103,31 @@ export type SlotExplain = {
   arrivalMarginMinutes?: number;
   /** True when arrivalMarginMinutes >= preBuffer */
   arriveEarlyPreferred?: boolean;
+  /** Minutes previous event was moved earlier due to flexibility window */
+  prevShiftMinutes?: number;
+  /** Minutes next event was moved later due to flexibility window */
+  nextShiftMinutes?: number;
+  /** Max earlier shift available on previous event */
+  prevShiftMaxMinutes?: number;
+  /** Max later shift available on next event */
+  nextShiftMaxMinutes?: number;
+  /** Full chain of shifted meetings when domino flexibility is used */
+  shiftedEvents?: SlotExplainShift[];
+  /** Weighted scoring components used in final ranking */
+  scoreBreakdown?: SlotScoreBreakdown;
   eventsWithMissingCoordsUsed: string[];
+};
+
+type DayEvent = {
+  ev: CalendarEvent;
+  startMs: number;
+  endMs: number;
+  hasCoord: boolean;
+  /** How far this event can be moved earlier (ms) based on [Flexible Window] */
+  maxShiftEarlierMs: number;
+  /** How far this event can be moved later (ms) based on [Flexible Window] */
+  maxShiftLaterMs: number;
+  isFlexible: boolean;
 };
 
 /**
@@ -203,6 +249,28 @@ function parseTimeToMinutes(s: string): number {
   const h = parseInt(parts[0] ?? '0', 10);
   const m = parseInt(parts[1] ?? '0', 10);
   return h * 60 + m;
+}
+
+function parseClockToMinutes(value: string): number | null {
+  const match = value.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return null;
+  const hours = parseInt(match[1] ?? '0', 10);
+  const minutes = parseInt(match[2] ?? '0', 10);
+  return hours * 60 + minutes;
+}
+
+function parseFlexibleWindowStartMs(ev: CalendarEvent, dayStartMs: number): { minStartMs: number; maxStartMs: number } | null {
+  const source = (ev.notes ?? ev.bodyPreview ?? '').trim();
+  if (!source) return null;
+  const match = source.match(FLEX_WINDOW_REGEX);
+  if (!match) return null;
+  const minMinutes = parseClockToMinutes(match[1] ?? '');
+  const maxMinutes = parseClockToMinutes(match[2] ?? '');
+  if (minMinutes == null || maxMinutes == null || maxMinutes <= minMinutes) return null;
+  return {
+    minStartMs: dayStartMs + minMinutes * MS_PER_MIN,
+    maxStartMs: dayStartMs + maxMinutes * MS_PER_MIN,
+  };
 }
 
 /** Set time on a date from "HH:MM", return epoch ms. dayStartMs = midnight of that day. */
@@ -344,7 +412,7 @@ function eventsForDay(
   dayStartMs: number,
   dayWorkStartMs: number,
   dayWorkEndMs: number
-): Array<{ ev: CalendarEvent; startMs: number; endMs: number; hasCoord: boolean }> {
+): DayEvent[] {
   const dayStart = startOfDay(new Date(dayStartMs)).getTime();
   return events
     .map((ev) => {
@@ -357,16 +425,32 @@ function eventsForDay(
       const endMs = Math.min(r.endMs, dayWorkEndMs);
       if (endMs <= startMs) return null;
       const hasCoord = !!(ev.coordinates && typeof ev.coordinates.latitude === 'number' && typeof ev.coordinates.longitude === 'number');
-      return { ev, startMs, endMs, hasCoord };
+      const durationMs = endMs - startMs;
+      let maxShiftEarlierMs = 0;
+      let maxShiftLaterMs = 0;
+      let isFlexible = false;
+
+      const flexStartWindow = parseFlexibleWindowStartMs(ev, dayStart);
+      if (flexStartWindow) {
+        const earliestAllowedStart = Math.max(dayWorkStartMs, flexStartWindow.minStartMs);
+        const latestAllowedStart = Math.min(dayWorkEndMs - durationMs, flexStartWindow.maxStartMs);
+        if (latestAllowedStart >= earliestAllowedStart) {
+          maxShiftEarlierMs = Math.max(0, startMs - earliestAllowedStart);
+          maxShiftLaterMs = Math.max(0, latestAllowedStart - startMs);
+          isFlexible = maxShiftEarlierMs > 0 || maxShiftLaterMs > 0;
+        }
+      }
+
+      return { ev, startMs, endMs, hasCoord, maxShiftEarlierMs, maxShiftLaterMs, isFlexible };
     })
-    .filter((x): x is { ev: CalendarEvent; startMs: number; endMs: number; hasCoord: boolean } => x != null)
+    .filter((x): x is DayEvent => x != null)
     .sort((a, b) => a.startMs - b.startMs);
 }
 
 /** Build timeline: [StartAnchor, ...events, EndAnchor]. Events without coords use homeBase (still block time). */
 function buildTimeline(
   dayStartMs: number,
-  dayEvents: Array<{ ev: CalendarEvent; startMs: number; endMs: number; hasCoord: boolean }>,
+  dayEvents: DayEvent[],
   prefs: UserPreferences,
   effectiveStartMs: number,
   effectiveEndMs: number
@@ -403,6 +487,77 @@ function buildTimeline(
 
   const timeline = [startAnchor, ...eventItems, endAnchor].sort((a, b) => a.startMs - b.startMs);
   return timeline;
+}
+
+type DominoShiftEntry = {
+  index: number;
+  shiftMs: number;
+  direction: 'earlier' | 'later';
+};
+
+type DominoShiftPlan = {
+  shiftById: Map<string, number>;
+  entries: DominoShiftEntry[];
+};
+
+function buildEarlierDominoPlan(
+  dayEvents: DayEvent[],
+  startIndex: number,
+  requiredShiftMs: number,
+  gapBeforeMs: number[],
+  dominoEarlierCapMs: number[]
+): DominoShiftPlan | null {
+  if (requiredShiftMs <= 0) return { shiftById: new Map(), entries: [] };
+  if (startIndex < 0 || startIndex >= dayEvents.length) return null;
+  if (requiredShiftMs > (dominoEarlierCapMs[startIndex] ?? 0)) return null;
+
+  const shiftsByIndex = new Map<number, number>();
+  let requiredForCurrent = requiredShiftMs;
+
+  for (let idx = startIndex; idx >= 0 && requiredForCurrent > 0; idx--) {
+    const ev = dayEvents[idx]!;
+    if (requiredForCurrent > ev.maxShiftEarlierMs) return null;
+    shiftsByIndex.set(idx, requiredForCurrent);
+    requiredForCurrent = Math.max(0, requiredForCurrent - (gapBeforeMs[idx] ?? 0));
+  }
+
+  if (requiredForCurrent > 0) return null;
+
+  const entries: DominoShiftEntry[] = [...shiftsByIndex.entries()]
+    .map(([index, shiftMs]) => ({ index, shiftMs, direction: 'earlier' as const }))
+    .sort((a, b) => a.index - b.index);
+  const shiftById = new Map(entries.map((entry) => [dayEvents[entry.index]!.ev.id, entry.shiftMs]));
+  return { shiftById, entries };
+}
+
+function buildLaterDominoPlan(
+  dayEvents: DayEvent[],
+  startIndex: number,
+  requiredShiftMs: number,
+  gapAfterMs: number[],
+  dominoLaterCapMs: number[]
+): DominoShiftPlan | null {
+  if (requiredShiftMs <= 0) return { shiftById: new Map(), entries: [] };
+  if (startIndex < 0 || startIndex >= dayEvents.length) return null;
+  if (requiredShiftMs > (dominoLaterCapMs[startIndex] ?? 0)) return null;
+
+  const shiftsByIndex = new Map<number, number>();
+  let requiredForCurrent = requiredShiftMs;
+
+  for (let idx = startIndex; idx < dayEvents.length && requiredForCurrent > 0; idx++) {
+    const ev = dayEvents[idx]!;
+    if (requiredForCurrent > ev.maxShiftLaterMs) return null;
+    shiftsByIndex.set(idx, requiredForCurrent);
+    requiredForCurrent = Math.max(0, requiredForCurrent - (gapAfterMs[idx] ?? 0));
+  }
+
+  if (requiredForCurrent > 0) return null;
+
+  const entries: DominoShiftEntry[] = [...shiftsByIndex.entries()]
+    .map(([index, shiftMs]) => ({ index, shiftMs, direction: 'later' as const }))
+    .sort((a, b) => a.index - b.index);
+  const shiftById = new Map(entries.map((entry) => [dayEvents[entry.index]!.ev.id, entry.shiftMs]));
+  return { shiftById, entries };
 }
 
 /**
@@ -482,6 +637,42 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
     }
 
     const dayEvents = eventsForDay(scheduleInWindow, dayStart, effectiveStartMs, effectiveEndMs);
+    if (isToday) {
+      for (const ev of dayEvents) {
+        // Do not reschedule meetings that already started today.
+        if (ev.startMs < nowMs) {
+          ev.maxShiftEarlierMs = 0;
+          ev.maxShiftLaterMs = 0;
+          ev.isFlexible = false;
+          continue;
+        }
+        // Even flexible meetings cannot be shifted earlier than "now".
+        const untilNowMs = Math.max(0, ev.startMs - nowMs);
+        ev.maxShiftEarlierMs = Math.min(ev.maxShiftEarlierMs, untilNowMs);
+        ev.isFlexible = ev.maxShiftEarlierMs > 0 || ev.maxShiftLaterMs > 0;
+      }
+    }
+    const dayEventIndexById = new Map(dayEvents.map((item, index) => [item.ev.id, index]));
+    const gapBeforeMs = dayEvents.map((item, index) => {
+      const prevEndMs = index > 0 ? dayEvents[index - 1]!.endMs : effectiveStartMs;
+      return Math.max(0, item.startMs - prevEndMs);
+    });
+    const gapAfterMs = dayEvents.map((item, index) => {
+      const nextStartMs = index + 1 < dayEvents.length ? dayEvents[index + 1]!.startMs : effectiveEndMs;
+      return Math.max(0, nextStartMs - item.endMs);
+    });
+    const dominoEarlierCapMs = dayEvents.map(() => 0);
+    for (let idx = 0; idx < dayEvents.length; idx++) {
+      const ev = dayEvents[idx]!;
+      const prevCapMs = idx > 0 ? dominoEarlierCapMs[idx - 1]! : 0;
+      dominoEarlierCapMs[idx] = Math.min(ev.maxShiftEarlierMs, (gapBeforeMs[idx] ?? 0) + prevCapMs);
+    }
+    const dominoLaterCapMs = dayEvents.map(() => 0);
+    for (let idx = dayEvents.length - 1; idx >= 0; idx--) {
+      const ev = dayEvents[idx]!;
+      const nextCapMs = idx + 1 < dayEvents.length ? dominoLaterCapMs[idx + 1]! : 0;
+      dominoLaterCapMs[idx] = Math.min(ev.maxShiftLaterMs, (gapAfterMs[idx] ?? 0) + nextCapMs);
+    }
     const timeline = buildTimeline(dayStart, dayEvents, prefs, effectiveStartMs, effectiveEndMs);
 
     // Empty-week path: no meetings anywhere in the search window.
@@ -598,6 +789,14 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               arrivalMarginMinutes: (meetingStartMs - (effectiveStartMs + travelToMinutes * MS_PER_MIN)) / MS_PER_MIN,
               arriveEarlyPreferred:
                 (meetingStartMs - (effectiveStartMs + travelToMinutes * MS_PER_MIN)) / MS_PER_MIN >= preBuffer,
+              scoreBreakdown: {
+                detourWeight: 10,
+                detourBase: score,
+                slackPenalty: 0,
+                busyDayPenalty: 0,
+                crossDayBonus: 0,
+                total: score,
+              },
               eventsWithMissingCoordsUsed: [],
             };
           }
@@ -631,22 +830,37 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       const prev = timeline[i]!;
       const next = timeline[i + 1]!;
 
-      const prevDepartMs =
+      const prevDayEventIndex = prev.type === 'event' ? dayEventIndexById.get(prev.id) : undefined;
+      const nextDayEventIndex = next.type === 'event' ? dayEventIndexById.get(next.id) : undefined;
+      const prevShiftEarlierMaxMs =
+        prev.type === 'event' && prevDayEventIndex != null
+          ? (dominoEarlierCapMs[prevDayEventIndex] ?? 0)
+          : 0;
+      const nextShiftLaterMaxMs =
+        next.type === 'event' && nextDayEventIndex != null
+          ? (dominoLaterCapMs[nextDayEventIndex] ?? 0)
+          : 0;
+
+      const prevDepartBaseMs =
         prev.type === 'event'
           ? prev.endMs + postBuffer * MS_PER_MIN
           : prev.endMs;
 
-      const nextArriveByMs =
+      const nextArriveByBaseMs =
         next.type === 'event'
           ? next.startMs - preBuffer * MS_PER_MIN
           : next.startMs;
 
-      const gapMs = nextArriveByMs - prevDepartMs;
+      // Flexible meetings can widen a gap by moving prev earlier and/or next later.
+      const prevDepartWindowStartMs = prevDepartBaseMs - prevShiftEarlierMaxMs;
+      const nextArriveByWindowEndMs = nextArriveByBaseMs + nextShiftLaterMaxMs;
+
+      const gapMs = nextArriveByWindowEndMs - prevDepartWindowStartMs;
       const gapMinutes = gapMs / MS_PER_MIN;
 
       if (gapMs <= 0) continue;
 
-      const travelToMinutes = getTravelMinutes(prev.coord, newLoc, prevDepartMs);
+      const travelToMinutesWindow = getTravelMinutes(prev.coord, newLoc, prevDepartWindowStartMs);
       const bufferWaivedAtStart = prev.type === 'start';
       const bufferWaivedAtEnd = next.type === 'end';
 
@@ -654,12 +868,12 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       // first gap — the worker is already in the field, so the first meeting can start at
       // exactly work start time. For all other gaps (prev=event), travel from prev event
       // to the new meeting is still required regardless of mode.
-      const effectiveTravelToStart = !startFromHomeBase && bufferWaivedAtStart ? 0 : travelToMinutes;
+      const effectiveTravelToStart = !startFromHomeBase && bufferWaivedAtStart ? 0 : travelToMinutesWindow;
 
-      const minStartFromWorkStartMs = prevDepartMs + effectiveTravelToStart * MS_PER_MIN;
+      const minStartFromWorkStartMs = prevDepartWindowStartMs + effectiveTravelToStart * MS_PER_MIN;
       const rawMeetingStartMs = bufferWaivedAtStart
         ? minStartFromWorkStartMs
-        : prevDepartMs + (travelToMinutes + preBuffer) * MS_PER_MIN;
+        : prevDepartWindowStartMs + (travelToMinutesWindow + preBuffer) * MS_PER_MIN;
       let candidateStart0: number;
       let travelToNowMinutes = 0;
       if (bufferWaivedAtStart && isToday) {
@@ -670,24 +884,16 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       } else {
         candidateStart0 = snapStartMsUp(rawMeetingStartMs);
       }
-      const requiredMinutesSansTravelFrom = bufferWaivedAtStart && bufferWaivedAtEnd
-        ? durationMinutes
-        : bufferWaivedAtStart
-          ? durationMinutes + postBuffer
-          : bufferWaivedAtEnd
-            ? travelToMinutes + preBuffer + durationMinutes
-            : travelToMinutes + preBuffer + durationMinutes + postBuffer;
-
       // Build candidate start times: earliest 3 positions PLUS the midpoint of the gap.
       // The midpoint gives a balanced placement — breathing room on both sides — which is
       // often more comfortable than always packing the new meeting against the previous one.
       const approxTravelFrom = bufferWaivedAtEnd
         ? 0
-        : getTravelMinutes(newLoc, next.coord, nextArriveByMs);
+        : getTravelMinutes(newLoc, next.coord, nextArriveByWindowEndMs);
       const latestFeasibleStart = bufferWaivedAtEnd
         ? snapStartMsDown(effectiveEndMs - durationMinutes * MS_PER_MIN)
         : snapStartMsDown(
-            nextArriveByMs -
+            nextArriveByWindowEndMs -
               approxTravelFrom * MS_PER_MIN -
               postBuffer * MS_PER_MIN -
               durationMinutes * MS_PER_MIN
@@ -713,9 +919,6 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       for (const meetingStartMs of candidateStarts) {
         if (slots.length >= MAX_SLOTS) break;
         const slotEndMs = meetingStartMs + durationMinutes * MS_PER_MIN;
-        const departAtMs = slotEndMs + postBuffer * MS_PER_MIN;
-        const travelFromMinutes = getTravelMinutes(newLoc, next.coord, departAtMs);
-        const requiredMinutes = requiredMinutesSansTravelFrom + (bufferWaivedAtEnd ? 0 : travelFromMinutes);
 
         const dayIsoGap = toLocalDayKey(dayStart);
         const dayLabelGap = formatDayLabel(dayIsoGap);
@@ -723,6 +926,107 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         const qaReject = (reason: string) => {
           if (onSlotConsidered) onSlotConsidered({ dayIso: dayIsoGap, dayLabel: dayLabelGap, timeRange: timeRangeGap, status: 'rejected', reason });
         };
+
+        let prevShiftUsedMs = 0;
+        let nextShiftUsedMs = 0;
+        let prevDominoPlan: DominoShiftPlan = { shiftById: new Map(), entries: [] };
+        let nextDominoPlan: DominoShiftPlan = { shiftById: new Map(), entries: [] };
+        let prevDepartMs = prevDepartBaseMs;
+        let nextArriveByMs = nextArriveByBaseMs;
+
+        let travelToMinutes = getTravelMinutes(prev.coord, newLoc, prevDepartMs);
+
+        if (!bufferWaivedAtStart) {
+          let requiredPrevShiftMs = 0;
+          for (let iter = 0; iter < 5; iter++) {
+            const departCandidateMs = prevDepartBaseMs - requiredPrevShiftMs;
+            const travelCandidateMinutes = getTravelMinutes(prev.coord, newLoc, departCandidateMs);
+            const requiredStartBaseMs = prevDepartBaseMs + (travelCandidateMinutes + preBuffer) * MS_PER_MIN;
+            const recomputed = Math.max(0, requiredStartBaseMs - meetingStartMs);
+            if (recomputed === requiredPrevShiftMs) {
+              travelToMinutes = travelCandidateMinutes;
+              break;
+            }
+            requiredPrevShiftMs = recomputed;
+            if (iter === 4) {
+              travelToMinutes = travelCandidateMinutes;
+            }
+          }
+
+          if (requiredPrevShiftMs > prevShiftEarlierMaxMs) {
+            qaReject('Needs moving flexible chain earlier beyond limit');
+            continue;
+          }
+
+          if (requiredPrevShiftMs > 0) {
+            if (prevDayEventIndex == null) {
+              qaReject('Internal guard: missing previous event index');
+              continue;
+            }
+            const plan = buildEarlierDominoPlan(
+              dayEvents,
+              prevDayEventIndex,
+              requiredPrevShiftMs,
+              gapBeforeMs,
+              dominoEarlierCapMs
+            );
+            if (!plan) {
+              qaReject('Needs moving non-flex previous chain or exceeds flex window');
+              continue;
+            }
+            prevDominoPlan = plan;
+            prevShiftUsedMs = requiredPrevShiftMs;
+            prevDepartMs = prevDepartBaseMs - prevShiftUsedMs;
+            travelToMinutes = getTravelMinutes(prev.coord, newLoc, prevDepartMs);
+            const requiredStartAfterShiftMs = prevDepartMs + (travelToMinutes + preBuffer) * MS_PER_MIN;
+            if (requiredStartAfterShiftMs > meetingStartMs) {
+              qaReject('Arrive late even with domino flexibility');
+              continue;
+            }
+          }
+        }
+
+        const requiredMinutesSansTravelFrom = bufferWaivedAtStart && bufferWaivedAtEnd
+          ? durationMinutes
+          : bufferWaivedAtStart
+            ? durationMinutes + postBuffer
+            : bufferWaivedAtEnd
+              ? travelToMinutes + preBuffer + durationMinutes
+              : travelToMinutes + preBuffer + durationMinutes + postBuffer;
+
+        const departAtMs = slotEndMs + postBuffer * MS_PER_MIN;
+        const travelFromMinutes = getTravelMinutes(newLoc, next.coord, departAtMs);
+        const requiredMinutes = requiredMinutesSansTravelFrom + (bufferWaivedAtEnd ? 0 : travelFromMinutes);
+
+        if (!bufferWaivedAtEnd) {
+          const requiredArrivalMs = departAtMs + travelFromMinutes * MS_PER_MIN;
+          const requiredNextShiftMs = Math.max(0, requiredArrivalMs - nextArriveByBaseMs);
+          if (requiredNextShiftMs > nextShiftLaterMaxMs) {
+            qaReject("Can't reach next meeting in time within flex chain");
+            continue;
+          }
+          if (requiredNextShiftMs > 0) {
+            if (nextDayEventIndex == null) {
+              qaReject('Internal guard: missing next event index');
+              continue;
+            }
+            const plan = buildLaterDominoPlan(
+              dayEvents,
+              nextDayEventIndex,
+              requiredNextShiftMs,
+              gapAfterMs,
+              dominoLaterCapMs
+            );
+            if (!plan) {
+              qaReject("Can't push next chain without breaking flex limits");
+              continue;
+            }
+            nextDominoPlan = plan;
+            nextShiftUsedMs = requiredNextShiftMs;
+            nextArriveByMs = nextArriveByBaseMs + nextShiftUsedMs;
+          }
+        }
+
         if (gapMinutes < requiredMinutes) { qaReject(`Gap too small (need ${Math.ceil(requiredMinutes)} min)`); continue; }
         if (slotEndMs > effectiveEndMs) break;
         if (slotEndMs > windowEndMs) break;
@@ -730,11 +1034,105 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         if (meetingStartMs < windowStartMs) { qaReject('Before window'); continue; }
         if (!bufferWaivedAtEnd && departAtMs + travelFromMinutes * MS_PER_MIN > nextArriveByMs) { qaReject("Can't reach next meeting in time"); continue; }
         if (meetingStartMs < minStartMs) { qaReject('In the past'); continue; }
+        if (!bufferWaivedAtStart && prevDepartMs + (travelToMinutes + preBuffer) * MS_PER_MIN > meetingStartMs) { qaReject('Arrive late'); continue; }
         if (bufferWaivedAtStart && prevDepartMs + effectiveTravelToStart * MS_PER_MIN > meetingStartMs) { qaReject('Arrive late'); continue; }
         if (bufferWaivedAtStart && isToday && nowMs + travelToNowMinutes * MS_PER_MIN > meetingStartMs) { qaReject("Can't leave now in time"); continue; }
 
-        const noOverlap = !dayEvents.some((e) => intervalsOverlap(meetingStartMs, slotEndMs, e.startMs, e.endMs));
+        const adjustedRangesById = new Map<string, { startMs: number; endMs: number }>();
+        for (const entry of prevDominoPlan.entries) {
+          const ev = dayEvents[entry.index]!;
+          adjustedRangesById.set(ev.ev.id, {
+            startMs: ev.startMs - entry.shiftMs,
+            endMs: ev.endMs - entry.shiftMs,
+          });
+        }
+        for (const entry of nextDominoPlan.entries) {
+          const ev = dayEvents[entry.index]!;
+          adjustedRangesById.set(ev.ev.id, {
+            startMs: ev.startMs + entry.shiftMs,
+            endMs: ev.endMs + entry.shiftMs,
+          });
+        }
+
+        const shiftedScheduleValid = (() => {
+          for (let idx = 1; idx < dayEvents.length; idx++) {
+            const left = adjustedRangesById.get(dayEvents[idx - 1]!.ev.id) ?? {
+              startMs: dayEvents[idx - 1]!.startMs,
+              endMs: dayEvents[idx - 1]!.endMs,
+            };
+            const right = adjustedRangesById.get(dayEvents[idx]!.ev.id) ?? {
+              startMs: dayEvents[idx]!.startMs,
+              endMs: dayEvents[idx]!.endMs,
+            };
+            if (left.endMs > right.startMs) return false;
+          }
+          return true;
+        })();
+        if (!shiftedScheduleValid) { qaReject('Shift chain causes meeting overlap'); continue; }
+        if (isToday) {
+          const shiftedIntoPast = dayEvents.some((e) => {
+            const adjusted = adjustedRangesById.get(e.ev.id);
+            return adjusted != null && adjusted.startMs < nowMs;
+          });
+          if (shiftedIntoPast) { qaReject("Can't move shifted meeting into past"); continue; }
+        }
+
+        const noOverlap = !dayEvents.some((e) => {
+          const adjusted = adjustedRangesById.get(e.ev.id);
+          return intervalsOverlap(
+            meetingStartMs,
+            slotEndMs,
+            adjusted?.startMs ?? e.startMs,
+            adjusted?.endMs ?? e.endMs
+          );
+        });
         if (!noOverlap) { qaReject('Overlaps existing meeting'); continue; }
+
+        const shiftedEventsForExplain: SlotExplainShift[] = [
+          ...prevDominoPlan.entries,
+          ...nextDominoPlan.entries,
+        ]
+          .map((entry) => {
+            const ev = dayEvents[entry.index]!;
+            const shiftMinutes = Math.round(entry.shiftMs / MS_PER_MIN);
+            const maxShiftMinutes = Math.round(
+              (entry.direction === 'earlier' ? ev.maxShiftEarlierMs : ev.maxShiftLaterMs) / MS_PER_MIN
+            );
+            if (entry.direction === 'earlier') {
+              return {
+                id: ev.ev.id,
+                title: ev.ev.title ?? '(No title)',
+                direction: 'earlier' as const,
+                fromStartMs: ev.startMs,
+                fromEndMs: ev.endMs,
+                toStartMs: ev.startMs - entry.shiftMs,
+                toEndMs: ev.endMs - entry.shiftMs,
+                shiftMinutes,
+                maxShiftMinutes,
+              };
+            }
+            return {
+              id: ev.ev.id,
+              title: ev.ev.title ?? '(No title)',
+              direction: 'later' as const,
+              fromStartMs: ev.startMs,
+              fromEndMs: ev.endMs,
+              toStartMs: ev.startMs + entry.shiftMs,
+              toEndMs: ev.endMs + entry.shiftMs,
+              shiftMinutes,
+              maxShiftMinutes,
+            };
+          })
+          .sort((a, b) => a.fromStartMs - b.fromStartMs);
+
+        if (prev.type === 'event') {
+          prevShiftUsedMs = prevDominoPlan.shiftById.get(prev.id) ?? prevShiftUsedMs;
+          prevDepartMs = prevDepartBaseMs - prevShiftUsedMs;
+        }
+        if (next.type === 'event') {
+          nextShiftUsedMs = nextDominoPlan.shiftById.get(next.id) ?? nextShiftUsedMs;
+          nextArriveByMs = nextArriveByBaseMs + nextShiftUsedMs;
+        }
 
         const baselineKm = haversineKm(prev.coord, next.coord);
         const newPathKm = haversineKm(prev.coord, newLoc) + haversineKm(newLoc, next.coord);
@@ -753,7 +1151,9 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         const newPathMinutes = travelToMinutes + travelFromMinutes;
         const detourMinutes = newPathMinutes - baselineMinutes;
         const detourKm = Math.round(detourKmVal * 10) / 10;
-        let score = detourKm * 10;
+        const detourWeight = 10;
+        const detourBaseScore = detourKm * detourWeight;
+        let slackPenaltyScore = 0;
 
         // Smooth slack penalty — replaces the old hard cliff at 10 min.
         // < 2 min: still a hard veto (truly impossible, no margin at all)
@@ -761,17 +1161,19 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         // > 60 min: gentle penalty for long waits between meetings
         if (!bufferWaivedAtEnd) {
           if (slackMinutes < 2) {
-            score += 5000;
+            slackPenaltyScore += 5000;
           } else if (slackMinutes < 20) {
-            score += 200 / slackMinutes;
+            slackPenaltyScore += 200 / slackMinutes;
           } else if (slackMinutes > 60) {
-            score += (slackMinutes - 60) * 1.5;
+            slackPenaltyScore += (slackMinutes - 60) * 1.5;
           }
         }
 
         // Busy day penalty: lightly prefer adding to a day that already has fewer meetings.
         // Days with 1–3 meetings: no penalty. Each extra meeting beyond 3 adds 15 points.
-        score += Math.max(0, dayEvents.length - 3) * 15;
+        const busyDayPenaltyScore = Math.max(0, dayEvents.length - 3) * 15;
+        let crossDayBonusScore = 0;
+        let score = detourBaseScore + slackPenaltyScore + busyDayPenaltyScore + crossDayBonusScore;
 
         const arriveByMs = meetingStartMs - preBuffer * MS_PER_MIN;
         const travelFeasibleFromNow = bufferWaivedAtStart && isToday
@@ -849,6 +1251,19 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
             reachableFromWorkStart,
             arrivalMarginMinutes,
             arriveEarlyPreferred,
+            prevShiftMinutes: prevShiftUsedMs > 0 ? Math.round(prevShiftUsedMs / MS_PER_MIN) : undefined,
+            nextShiftMinutes: nextShiftUsedMs > 0 ? Math.round(nextShiftUsedMs / MS_PER_MIN) : undefined,
+            prevShiftMaxMinutes: prevShiftEarlierMaxMs > 0 ? Math.round(prevShiftEarlierMaxMs / MS_PER_MIN) : undefined,
+            nextShiftMaxMinutes: nextShiftLaterMaxMs > 0 ? Math.round(nextShiftLaterMaxMs / MS_PER_MIN) : undefined,
+            shiftedEvents: shiftedEventsForExplain.length > 0 ? shiftedEventsForExplain : undefined,
+            scoreBreakdown: {
+              detourWeight,
+              detourBase: detourBaseScore,
+              slackPenalty: slackPenaltyScore,
+              busyDayPenalty: busyDayPenaltyScore,
+              crossDayBonus: crossDayBonusScore,
+              total: score,
+            },
             eventsWithMissingCoordsUsed,
           };
         }
@@ -857,6 +1272,12 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
           const detourStr = detourMinutes >= 0 ? `+${detourMinutes} min` : `Saves ${Math.abs(detourMinutes)} min`;
           const kmStr = detourKm >= 0 ? `+${detourKm.toFixed(1)} km` : `Saves ${(-detourKm).toFixed(1)} km`;
           const tierLabel = tier === 1 ? ' On Route.' : tier === 2 ? ' Nearby.' : ' New Day.';
+          const flexSummary =
+            shiftedEventsForExplain.length > 0
+              ? ` Flex used: ${shiftedEventsForExplain
+                  .map((shift) => `${shift.title} moved ${shift.shiftMinutes}m ${shift.direction}`)
+                  .join('; ')}.`
+              : '';
           onSlotConsidered({
             dayIso,
             dayLabel: dayLabelSlot,
@@ -871,7 +1292,7 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
             label,
             prev: prev.title,
             next: next.title,
-            summary: `Tier ${tier}${tierLabel} ${detourStr} (${kmStr}), ${slackMinutes} min slack. Score ${score.toFixed(1)}.`,
+            summary: `Tier ${tier}${tierLabel} ${detourStr} (${kmStr}), ${slackMinutes} min slack. Score ${score.toFixed(1)}.${flexSummary}`,
           });
         }
       }
@@ -909,7 +1330,17 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       });
       // Within 15 km = "in the same area as tomorrow's first stop" → small bonus
       if (distKm <= 15) {
-        slot.score = Math.max(0, slot.score - 20);
+        const prevScore = slot.score;
+        const nextScore = Math.max(0, prevScore - 20);
+        const appliedBonus = prevScore - nextScore;
+        slot.score = nextScore;
+        if (slot.explain?.scoreBreakdown) {
+          slot.explain.scoreBreakdown.crossDayBonus -= appliedBonus;
+          slot.explain.scoreBreakdown.total = slot.score;
+        }
+        if (slot.explain) {
+          slot.explain.score = slot.score;
+        }
       }
     }
   } } // end cross-day bonus loop + if (!startFromHomeBase)
@@ -920,10 +1351,7 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       if (dayCmp !== 0) return dayCmp;
       return a.startMs - b.startMs;
     }
-    if (a.tier !== b.tier) return a.tier - b.tier;
-    if (a.score !== b.score) return a.score - b.score;
-    if (a.startMs !== b.startMs) return a.startMs - b.startMs;
-    return a.dayIso.localeCompare(b.dayIso);
+    return compareScoredSlots(a, b);
   });
 
   const hasSameDaySlots = slots.some((s) => s.tier === 1 || s.tier === 2);
@@ -944,6 +1372,51 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
 /** Unique id for a slot (for selection, keys) */
 export function slotId(slot: ScoredSlot): string {
   return `${slot.dayIso}-${slot.startMs}`;
+}
+
+/**
+ * Canonical ranking comparator used by scheduler + UI.
+ * Lower value means better slot.
+ */
+export function compareScoredSlots(a: ScoredSlot, b: ScoredSlot): number {
+  if (a.tier !== b.tier) return a.tier - b.tier;
+  if (a.score !== b.score) return a.score - b.score;
+  if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+  return a.dayIso.localeCompare(b.dayIso);
+}
+
+/**
+ * Pick top options with day-level diversity while preserving canonical ranking.
+ */
+export function pickBestOptionsWithDayDiversity(slots: ScoredSlot[], maxOptions = 3): ScoredSlot[] {
+  if (maxOptions <= 0 || slots.length === 0) return [];
+  const ranked = [...slots].sort(compareScoredSlots);
+  if (ranked.length <= maxOptions) return ranked;
+
+  const result: ScoredSlot[] = [];
+  const seenDays = new Set<string>();
+  for (const slot of ranked) {
+    if (seenDays.has(slot.dayIso)) continue;
+    seenDays.add(slot.dayIso);
+    result.push(slot);
+    if (result.length >= maxOptions) return result;
+  }
+
+  const seenIds = new Set(result.map((s) => slotId(s)));
+  for (const slot of ranked) {
+    const id = slotId(slot);
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+    result.push(slot);
+    if (result.length >= maxOptions) return result;
+  }
+  return result;
+}
+
+/** UI helper: "Best" badge should always point to the top-ranked option in the rendered list. */
+export function getBestBadgeSlotId(bestOptions: ScoredSlot[]): string | null {
+  if (bestOptions.length === 0) return null;
+  return slotId(bestOptions[0]!);
 }
 
 const DEFAULT_PREFS: UserPreferences = {
@@ -1267,6 +1740,143 @@ export function runFakeMeetingsQA(): { pass: boolean; message: string } {
 }
 
 /**
+ * QA: ranking consistency for pusher variants of the same meeting.
+ * Scenario: same pushed meeting can move earlier or later; one variant has 0 km detour
+ * and the other has much larger detour. Lower-detour variant must rank first when no
+ * stronger penalty is present.
+ */
+export function runPusherRankingQA(): { pass: boolean; message: string } {
+  const tomorrow = addDays(startOfDay(new Date()), 1);
+  const dayIso = toLocalDayKey(tomorrow);
+  const dayStartMs = startOfDay(tomorrow).getTime();
+  const pushId = 'm2-l1';
+
+  const makeSlot = (
+    key: string,
+    startOffsetMin: number,
+    detourKm: number,
+    score: number,
+    direction: 'earlier' | 'later'
+  ): ScoredSlot => {
+    const startMs = dayStartMs + startOffsetMin * MS_PER_MIN;
+    const endMs = startMs + 30 * MS_PER_MIN;
+    const fromStartMs = dayStartMs + 13 * 60 * MS_PER_MIN;
+    const fromEndMs = fromStartMs + 30 * MS_PER_MIN;
+    const shiftMs = Math.abs(startMs - fromStartMs);
+    const toStartMs = direction === 'earlier' ? fromStartMs - shiftMs : fromStartMs + shiftMs;
+    const toEndMs = direction === 'earlier' ? fromEndMs - shiftMs : fromEndMs + shiftMs;
+
+    return {
+      dayIso,
+      startMs,
+      endMs,
+      score,
+      tier: detourKm <= 5 ? 1 : 2,
+      metrics: {
+        detourKm,
+        detourMinutes: Math.round(detourKm * 2),
+        slackMinutes: 20,
+        travelToMinutes: 10,
+        travelFromMinutes: 10,
+      },
+      label: `QA ${key}`,
+      explain: {
+        dayKey: dayIso,
+        prev: { id: 'prev', title: 'Prev', type: 'event', startMs: dayStartMs + 12 * 60 * MS_PER_MIN, endMs: dayStartMs + 12 * 60 * MS_PER_MIN + 30 * MS_PER_MIN, hasCoord: true },
+        next: { id: 'next', title: 'Next', type: 'event', startMs: dayStartMs + 16 * 60 * MS_PER_MIN, endMs: dayStartMs + 16 * 60 * MS_PER_MIN + 30 * MS_PER_MIN, hasCoord: true },
+        prevDepartMs: dayStartMs + 12 * 60 * MS_PER_MIN + 45 * MS_PER_MIN,
+        arriveByMs: startMs - 15 * MS_PER_MIN,
+        meetingStartMs: startMs,
+        meetingEndMs: endMs,
+        departAtMs: endMs + 15 * MS_PER_MIN,
+        nextArriveByMs: dayStartMs + 16 * 60 * MS_PER_MIN - 15 * MS_PER_MIN,
+        gapMinutes: 180,
+        travelToMinutes: 10,
+        travelFromMinutes: 10,
+        travelToUsedFallback: false,
+        travelFromUsedFallback: false,
+        preBuffer: 15,
+        postBuffer: 15,
+        baselineMinutes: 20,
+        newPathMinutes: 20 + Math.round(detourKm * 2),
+        detourMinutes: Math.round(detourKm * 2),
+        detourKm,
+        slackMinutes: 20,
+        score,
+        tier: detourKm <= 5 ? 1 : 2,
+        fitsGap: true,
+        withinWorkingHours: true,
+        notPast: true,
+        workingDayAllowed: true,
+        noOverlap: true,
+        travelFeasible: true,
+        shiftedEvents: [{
+          id: pushId,
+          title: 'm2 l1',
+          direction,
+          fromStartMs,
+          fromEndMs,
+          toStartMs,
+          toEndMs,
+          shiftMinutes: Math.round(shiftMs / MS_PER_MIN),
+          maxShiftMinutes: 600,
+        }],
+        scoreBreakdown: {
+          detourWeight: 10,
+          detourBase: detourKm * 10,
+          slackPenalty: score - detourKm * 10,
+          busyDayPenalty: 0,
+          crossDayBonus: 0,
+          total: score,
+        },
+        eventsWithMissingCoordsUsed: [],
+      },
+    };
+  };
+
+  const zeroDetourEarlier = makeSlot('zero-earlier', 15 * 60 + 15, 0, 0, 'earlier');
+  const highDetourLater = makeSlot('high-later', 15 * 60 + 45, 15.8, 158, 'later');
+
+  const unsorted = [highDetourLater, zeroDetourEarlier];
+  const ranked = [...unsorted].sort(compareScoredSlots);
+  if (slotId(ranked[0]!) !== slotId(zeroDetourEarlier)) {
+    return {
+      pass: false,
+      message: 'FAIL: 0 km detour pusher slot did not rank ahead of +15.8 km slot.',
+    };
+  }
+
+  const bestOptions = pickBestOptionsWithDayDiversity(unsorted, 3);
+  if (slotId(bestOptions[0]!) !== slotId(zeroDetourEarlier)) {
+    return {
+      pass: false,
+      message: 'FAIL: best-options picker did not keep 0 km variant first.',
+    };
+  }
+
+  const bestBadgeId = getBestBadgeSlotId(bestOptions);
+  if (bestBadgeId !== slotId(zeroDetourEarlier)) {
+    return {
+      pass: false,
+      message: 'FAIL: Best badge id does not match top-ranked best option.',
+    };
+  }
+
+  const detourValuesAreNumeric = bestOptions.every((s) => typeof s.metrics.detourKm === 'number' && Number.isFinite(s.metrics.detourKm));
+  if (!detourValuesAreNumeric) {
+    return {
+      pass: false,
+      message: 'FAIL: Detour values are not numeric; potential string-sort risk.',
+    };
+  }
+
+  return {
+    pass: true,
+    message: 'PASS: pusher variants rank numerically, 0 km wins, and Best badge points to rank 0.',
+  };
+}
+
+/**
  * Run full QA suite. Call from dev: require('./utils/scheduler').runFullQASuite()
  */
 export function runFullQASuite(): void {
@@ -1280,6 +1890,9 @@ export function runFullQASuite(): void {
 
   const fakeRes = runFakeMeetingsQA();
   results.push({ name: 'Fake meetings QA (multi-day)', ok: fakeRes.pass, msg: fakeRes.message });
+
+  const rankRes = runPusherRankingQA();
+  results.push({ name: 'Pusher ranking QA (0 km vs +15.8 km)', ok: rankRes.pass, msg: rankRes.message });
 
   console.log('=== Scheduler QA Suite ===');
   results.forEach((r) => {
