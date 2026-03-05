@@ -9,6 +9,17 @@ export type BackendGeocodeResponse = {
   advancedGeocodingEnabled?: boolean;
 };
 
+export type BackendAddressSuggestResponse = {
+  suggestions: Array<{
+    displayName: string;
+    lat?: number;
+    lon?: number;
+    placeId?: string;
+  }>;
+  source: 'google_places' | 'nominatim';
+  advancedGeocodingEnabled?: boolean;
+};
+
 export type BackendRouteResponse = {
   source: 'cache' | 'live';
   routeKey: string;
@@ -275,6 +286,18 @@ export async function backendGeocode(
 ) {
   return requestJson<BackendGeocodeResponse>({
     path: '/api/geocode',
+    method: 'POST',
+    authToken,
+    body: input,
+  });
+}
+
+export async function backendAddressSuggest(
+  input: { query: string; countryCode?: string },
+  authToken: string
+) {
+  return requestJson<BackendAddressSuggestResponse>({
+    path: '/api/geocode/suggest',
     method: 'POST',
     authToken,
     body: input,

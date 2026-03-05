@@ -9,8 +9,11 @@ import {
   Keyboard,
   Pressable,
   ScrollView,
+  type StyleProp,
+  type TextStyle,
+  type ViewStyle,
 } from 'react-native';
-import { X } from 'lucide-react-native';
+import { MapPin, X } from 'lucide-react-native';
 import type { ContactSearchResult } from '../services/graph';
 import type { AddressSuggestion } from '../utils/geocoding';
 import type { Coordinate } from '../utils/scheduler';
@@ -60,6 +63,13 @@ export type LocationSearchProps = {
   onSelectionChange: (sel: LocationSelection) => void;
   onGraphError?: (msg: string, needsConsent?: boolean) => void;
   placeholder?: string;
+  /** When true, pressing Enter geocodes the typed query and commits selection immediately. */
+  allowDirectAddressSubmit?: boolean;
+  /** Visual variant used for Profile Home Base. */
+  variant?: 'default' | 'profile_home_base';
+  containerStyle?: StyleProp<ViewStyle>;
+  inputRowStyle?: StyleProp<ViewStyle>;
+  inputStyle?: StyleProp<TextStyle>;
   /** DEV: callback for diagnostics */
   onDebug?: (info: Record<string, unknown>) => void;
 };
@@ -78,6 +88,11 @@ export default function LocationSearch({
   onSelectionChange,
   onGraphError,
   placeholder = 'Search Client or Address',
+  allowDirectAddressSubmit = false,
+  variant = 'default',
+  containerStyle,
+  inputRowStyle,
+  inputStyle,
   onDebug,
 }: LocationSearchProps) {
   const [query, setQuery] = useState('');
@@ -202,7 +217,8 @@ export default function LocationSearch({
     selectingRef.current = true;
     setContacts([]);
     setAddressSuggestions([]);
-    setQuery('');
+    setQuery(contact.displayName);
+    setClearPending(false);
     setResolvingContact(contact);
     Keyboard.dismiss();
     cancelSelectRef.current = false;
@@ -238,6 +254,8 @@ export default function LocationSearch({
         contact,
         coords: { lat: result.lat!, lon: result.lon! },
       });
+      setQuery('');
+      setClearPending(false);
 
       propsRef.current.onDebug?.({
         selectedContact: contact.displayName,
@@ -256,7 +274,8 @@ export default function LocationSearch({
     selectingRef.current = true;
     setContacts([]);
     setAddressSuggestions([]);
-    setQuery('');
+    setQuery(suggestion.displayName);
+    setClearPending(false);
     Keyboard.dismiss();
 
     let lat = suggestion.lat;
@@ -291,6 +310,8 @@ export default function LocationSearch({
       address: suggestion.displayName,
       coords: { lat, lon },
     });
+    setQuery('');
+    setClearPending(false);
 
     propsRef.current.onDebug?.({
       selectedAddress: suggestion.displayName,
@@ -312,8 +333,48 @@ export default function LocationSearch({
     setAddressError(null);
   };
 
+  const handleSubmitTypedAddress = useCallback(async () => {
+    if (!allowDirectAddressSubmit) return;
+    const trimmed = query.trim();
+    if (!trimmed || selectingRef.current) return;
+    selectingRef.current = true;
+    setLoading(true);
+    setGraphError(null);
+    setAddressError(null);
+    Keyboard.dismiss();
+    try {
+      const result = await propsRef.current.geocodeAddress(trimmed);
+      if (!result.success || result.lat == null || result.lon == null) {
+        setAddressError(result.error ?? 'Could not find this address');
+        propsRef.current.onDebug?.({
+          submittedAddress: trimmed,
+          geocodeError: result.error ?? 'Could not find this address',
+        });
+        return;
+      }
+      propsRef.current.onSelectionChange({
+        type: 'address',
+        address: trimmed,
+        coords: { lat: result.lat, lon: result.lon },
+      });
+      setClearPending(false);
+      setQuery('');
+      setContacts([]);
+      setAddressSuggestions([]);
+      propsRef.current.onDebug?.({
+        submittedAddress: trimmed,
+        geocodeResult: `${result.lat}, ${result.lon}`,
+        geocodeSource: 'submit',
+      });
+    } finally {
+      setLoading(false);
+      selectingRef.current = false;
+    }
+  }, [allowDirectAddressSubmit, query]);
+
   const hasSelection = selection.type !== 'none';
   const effectiveHasSelection = hasSelection && !clearPending;
+  const isProfileHomeBase = variant === 'profile_home_base';
   const displayValue = resolvingContact
     ? `${resolvingContact.displayName} · Resolving…`
     : resolvingPlaceId
@@ -330,12 +391,22 @@ export default function LocationSearch({
     !effectiveHasSelection && (contacts.length > 0 || addressSuggestions.length > 0);
 
   return (
-    <View style={styles.container}>
-      <View style={styles.inputRow}>
+    <View style={[styles.container, isProfileHomeBase && styles.containerProfileHomeBase, containerStyle]}>
+      <View style={[styles.inputRow, isProfileHomeBase && styles.inputRowProfileHomeBase, inputRowStyle]}>
+        {isProfileHomeBase ? (
+          <View style={styles.leadingIconWrap}>
+            <MapPin size={16} color="#3B82F6" />
+          </View>
+        ) : null}
         <TextInput
-          style={[styles.input, effectiveHasSelection && styles.inputSelected]}
+          style={[
+            styles.input,
+            effectiveHasSelection && !isProfileHomeBase && styles.inputSelected,
+            isProfileHomeBase && styles.inputProfileHomeBase,
+            inputStyle,
+          ]}
           placeholder={placeholder}
-          placeholderTextColor="#605E5C"
+          placeholderTextColor={isProfileHomeBase ? '#475569' : '#605E5C'}
           value={displayValue}
           onChangeText={(t) => {
             if (hasSelection && !clearPending) handleClear();
@@ -344,6 +415,10 @@ export default function LocationSearch({
           autoCapitalize="none"
           autoCorrect={false}
           editable={true}
+          returnKeyType={allowDirectAddressSubmit ? 'done' : 'default'}
+          onSubmitEditing={() => {
+            void handleSubmitTypedAddress();
+          }}
         />
         {(effectiveHasSelection || query.length > 0 || resolvingContact || resolvingPlaceId) && (
           <TouchableOpacity
@@ -436,12 +511,29 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 8,
   },
+  containerProfileHomeBase: {
+    marginHorizontal: 0,
+    marginTop: 12,
+    marginBottom: 20,
+  },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#E1DFDD',
     borderRadius: 8,
     paddingRight: 12,
+  },
+  inputRowProfileHomeBase: {
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderStyle: 'dashed',
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    paddingRight: 8,
+  },
+  leadingIconWrap: {
+    marginLeft: 12,
+    marginRight: 2,
   },
   input: {
     flex: 1,
@@ -453,6 +545,13 @@ const styles = StyleSheet.create({
   },
   inputSelected: {
     color: '#107C10',
+  },
+  inputProfileHomeBase: {
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    minHeight: 48,
+    fontSize: 13,
+    color: '#475569',
   },
   clearBtn: {
     padding: 4,

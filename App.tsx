@@ -11,6 +11,7 @@ import { AuthProvider } from './src/context/AuthContext';
 import { RouteProvider } from './src/context/RouteContext';
 import { QALogProvider } from './src/context/QALogContext';
 import { UserPreferencesProvider } from './src/context/UserPreferencesContext';
+import { DevUIProvider } from './src/context/DevUIContext';
 import RootNavigator from './src/navigation/RootNavigator';
 
 const WEB_OAUTH_FALLBACK_REDIRECT_KEY = 'wiseplanOAuthFallbackRedirectUrl';
@@ -154,6 +155,7 @@ export default function App() {
     <RootWrapper style={{ flex: 1 }}>
       <AuthProvider>
       <UserPreferencesProvider>
+      <DevUIProvider>
         <RouteProvider>
           <QALogProvider>
           <NavigationContainer>
@@ -162,6 +164,7 @@ export default function App() {
             </NavigationContainer>
           </QALogProvider>
         </RouteProvider>
+      </DevUIProvider>
       </UserPreferencesProvider>
     </AuthProvider>
     </RootWrapper>

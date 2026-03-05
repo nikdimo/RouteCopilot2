@@ -280,6 +280,22 @@ export const styles = StyleSheet.create({
     sliderBlock: {
         marginBottom: 24,
     },
+    rangeTrack: {
+        width: '100%',
+        backgroundColor: '#E2E8F0',
+        borderRadius: 4,
+        position: 'relative',
+    },
+    rangeFill: {
+        backgroundColor: '#2563EB',
+        borderRadius: 4,
+        top: 0,
+    },
+    rangeThumb: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 2,
+        borderColor: '#2563EB',
+    },
 
     // Footer Items
     footerLinkCard: {

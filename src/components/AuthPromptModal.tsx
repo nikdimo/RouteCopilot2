@@ -113,6 +113,13 @@ export default function AuthPromptModal({
                                         setErrorMsg('');
                                     }}
                                     editable={!loading}
+                                    returnKeyType="send"
+                                    blurOnSubmit
+                                    onSubmitEditing={() => {
+                                        if (!loading) {
+                                            void handleSendLink();
+                                        }
+                                    }}
                                 />
                             </View>
 

@@ -11,6 +11,7 @@ import { useNavigation } from '@react-navigation/native';
 import { runFullQASuite, runTravelFeasibilityQA, runOverlapSanityCheck, runFakeMeetingsQA, getFakeQASchedule } from '../utils/scheduler';
 import { useRoute } from '../context/RouteContext';
 import { useQALog } from '../context/QALogContext';
+import { useDevUI } from '../context/DevUIContext';
 import { MS_SCOPES } from '../config/auth';
 import { BACKEND_API_BASE_URL, BACKEND_API_ENABLED } from '../config/backend';
 
@@ -25,7 +26,7 @@ const SCOPE_PURPOSE: Record<string, string> = {
   'Contacts.ReadWrite': 'Read and create Outlook contacts. Used when saving a contact from Plan Visit Confirm sheet.',
 };
 
-type Section = 'User Story' | 'Roadmap' | 'Architecture' | 'Logic Specs' | 'Scopes' | 'QA' | 'QA Log';
+type Section = 'User Story' | 'Roadmap' | 'Architecture' | 'Logic Specs' | 'Scopes' | 'QA' | 'QA Log' | 'UI';
 
 const SECTIONS: Section[] = [
   'User Story',
@@ -35,6 +36,7 @@ const SECTIONS: Section[] = [
   'Scopes',
   'QA',
   'QA Log',
+  'UI',
 ];
 
 export default function DevDocsScreen() {
@@ -83,6 +85,7 @@ export default function DevDocsScreen() {
         {section === 'Scopes' && <ScopesSection />}
         {section === 'QA' && <QASection />}
         {section === 'QA Log' && <QALogViewerSection />}
+        {section === 'UI' && <UISection />}
       </ScrollView>
     </View>
   );
@@ -512,6 +515,76 @@ function ScopesSection() {
   );
 }
 
+function UISection() {
+  const {
+    showOldUI,
+    setShowOldUI,
+    mockMapStyleIndex,
+    setMockMapStyleIndex,
+    mockMapStyleCount,
+  } = useDevUI();
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.h1}>UI Controls</Text>
+      <Text style={styles.body}>
+        Development-only UI controls are centralized here so they do not cover the map or route list on the main Schedule screen.
+      </Text>
+
+      <View style={styles.uiCard}>
+        <Text style={styles.h2}>Schedule UI Mode</Text>
+        <Text style={styles.body}>
+          Select which schedule implementation is used in the main app.
+        </Text>
+        <View style={styles.uiOptionsRow}>
+          <TouchableOpacity
+            style={[styles.uiOption, !showOldUI && styles.uiOptionActive]}
+            onPress={() => setShowOldUI(false)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.uiOptionText, !showOldUI && styles.uiOptionTextActive]}>
+              New UI
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.uiOption, showOldUI && styles.uiOptionActive]}
+            onPress={() => setShowOldUI(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.uiOptionText, showOldUI && styles.uiOptionTextActive]}>
+              Old UI
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.uiCard}>
+        <Text style={styles.h2}>Mock Map Style</Text>
+        <Text style={styles.body}>
+          Choose the mock map style (1-{mockMapStyleCount}) used in empty-state map previews.
+        </Text>
+        <View style={styles.uiOptionsRow}>
+          {Array.from({ length: mockMapStyleCount }).map((_, index) => {
+            const selected = index === mockMapStyleIndex;
+            return (
+              <TouchableOpacity
+                key={index}
+                style={[styles.uiCircleOption, selected && styles.uiCircleOptionActive]}
+                onPress={() => setMockMapStyleIndex(index)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.uiCircleOptionText, selected && styles.uiCircleOptionTextActive]}>
+                  {index + 1}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function QALogViewerSection() {
   const qaLog = useQALog();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -738,6 +811,56 @@ const styles = StyleSheet.create({
   },
   section: {
     marginBottom: 24,
+  },
+  uiCard: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbe5f1',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+  },
+  uiOptionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  uiOption: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#e2e8f0',
+  },
+  uiOptionActive: {
+    backgroundColor: MS_BLUE,
+  },
+  uiOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  uiOptionTextActive: {
+    color: '#ffffff',
+  },
+  uiCircleOption: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e2e8f0',
+  },
+  uiCircleOptionActive: {
+    backgroundColor: MS_BLUE,
+  },
+  uiCircleOptionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  uiCircleOptionTextActive: {
+    color: '#ffffff',
   },
   h1: {
     fontSize: 22,

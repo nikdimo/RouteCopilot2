@@ -63,6 +63,11 @@ function LegBetweenRow({
       </View>
 
       <View style={styles.contentCol}>
+        {label ? (
+          <Text style={styles.legLabel} numberOfLines={1}>
+            {label.toUpperCase()}
+          </Text>
+        ) : null}
         <View style={[styles.pill, { backgroundColor: bgColor, borderColor: stressColor + '40' }]}>
           <Car size={12} color={stressColor} style={styles.icon} />
 
@@ -75,10 +80,11 @@ function LegBetweenRow({
               · {waitStr}
             </Text>
           ) : null}
+
+          <Text style={styles.etaInPill}>
+            · {isToHome ? `Arrive ~${etaStr}` : `ETA ${etaStr}`}
+          </Text>
         </View>
-        <Text style={styles.etaText}>
-          {isToHome ? `Arrive ~${etaStr}` : `Expected ETA: ${etaStr}`}
-        </Text>
       </View>
     </View>
   );
@@ -110,6 +116,13 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 12,
   },
+  legLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: GRAY,
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -131,11 +144,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 4,
   },
-  etaText: {
-    fontSize: 10,
-    color: '#94A3B8',
-    marginTop: 4,
-    marginLeft: 2,
-    fontWeight: '500',
-  }
+  etaInPill: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: GRAY,
+    marginLeft: 6,
+  },
 });

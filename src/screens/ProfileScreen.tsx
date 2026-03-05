@@ -1,8 +1,9 @@
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  LayoutChangeEvent,
   Linking,
   Platform,
   ScrollView,
@@ -11,7 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import Slider from '@react-native-community/slider';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import {
   Calendar,
   Car,
@@ -60,7 +61,7 @@ import {
 import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
 import { DEFAULT_USER_PREFERENCES, DEFAULT_WORKING_DAYS, type WorkingDays } from '../types';
 import { styles } from '../components/profile/ProfileStyles';
-import { clearLocalDataNow, MAX_SLOT, parseNumber, slotToTime, timeToSlot } from '../components/profile/ProfileHelpers';
+import { clearLocalDataNow, MAX_SLOT, MAX_SLOT_15, parseNumber, slot15ToSlot5, slot5ToSlot15, slotToTime, timeToSlot } from '../components/profile/ProfileHelpers';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DEFAULT_BILLING_URL = 'https://www.wiseplan.dk/account/billing';
@@ -139,6 +140,284 @@ function confirmDestructiveAction(
   ]);
 }
 
+const RANGE_THUMB_SIZE = 28;
+const RANGE_TRACK_HEIGHT = 8;
+const BUFFER_SLIDER_MAX = 60;
+
+type BufferCircleSliderProps = {
+  value: number;
+  onValueChange: (v: number) => void;
+  onSlidingComplete: () => void;
+  canEdit: boolean;
+};
+
+function BufferCircleSlider({ value, onValueChange, onSlidingComplete, canEdit }: BufferCircleSliderProps) {
+  const trackRef = useRef<View>(null);
+  const trackLayout = useRef({ x: 0, width: 300 });
+  const [trackWidth, setTrackWidth] = useState(300);
+
+  const onTrackLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = Math.max(1, e.nativeEvent.layout.width);
+    setTrackWidth(w);
+    trackRef.current?.measureInWindow((x) => {
+      trackLayout.current = { x, width: w };
+    });
+  }, []);
+
+  const pixelToValue = useCallback((moveX: number) => {
+    const { x, width } = trackLayout.current;
+    const p = (moveX - x) / width;
+    const v = Math.round(p * BUFFER_SLIDER_MAX / 5) * 5;
+    return Math.min(BUFFER_SLIDER_MAX, Math.max(0, v));
+  }, []);
+
+  const panGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(canEdit)
+        .onUpdate((e) => {
+          onValueChange(pixelToValue(e.absoluteX));
+        })
+        .onEnd(() => {
+          onSlidingComplete();
+        }),
+    [canEdit, pixelToValue, onValueChange, onSlidingComplete]
+  );
+
+  const thumbLeft = (value / BUFFER_SLIDER_MAX) * trackWidth - RANGE_THUMB_SIZE / 2;
+  const fillWidth = (value / BUFFER_SLIDER_MAX) * trackWidth;
+  const thumbShadow = useMemo(
+    () =>
+      Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3 },
+        android: { elevation: 4 },
+        default: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3 },
+      }),
+    []
+  );
+
+  return (
+    <View ref={trackRef} onLayout={onTrackLayout} style={{ height: 40, justifyContent: 'center', width: '100%' }} pointerEvents="box-none">
+      <View style={[styles.rangeTrack, { height: RANGE_TRACK_HEIGHT }]} pointerEvents="none">
+        <View
+          style={[styles.rangeFill, { position: 'absolute', left: 0, width: Math.max(0, fillWidth), height: RANGE_TRACK_HEIGHT }]}
+        />
+      </View>
+      <GestureDetector gesture={panGesture}>
+        <View
+          style={{
+            position: 'absolute',
+            left: thumbLeft - 8,
+            top: (40 - (RANGE_THUMB_SIZE + 16)) / 2,
+            width: RANGE_THUMB_SIZE + 16,
+            height: RANGE_THUMB_SIZE + 16,
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 10,
+          }}
+        >
+          <View
+            style={[
+              styles.rangeThumb,
+              { width: RANGE_THUMB_SIZE, height: RANGE_THUMB_SIZE, borderRadius: RANGE_THUMB_SIZE / 2, ...thumbShadow },
+            ]}
+          />
+        </View>
+      </GestureDetector>
+    </View>
+  );
+}
+
+type WorkingHoursRangeSliderProps = {
+  workStartSlot: number;
+  workEndSlot: number;
+  onStartChange: (slot: number) => void;
+  onEndChange: (slot: number) => void;
+  onSlidingComplete: (start: number, end: number) => void;
+  canEdit: boolean;
+};
+
+function WorkingHoursRangeSlider({
+  workStartSlot,
+  workEndSlot,
+  onStartChange,
+  onEndChange,
+  onSlidingComplete,
+  canEdit,
+}: WorkingHoursRangeSliderProps) {
+  const trackRef = useRef<View>(null);
+  const trackLayout = useRef({ x: 0, width: 300 });
+  const [trackWidth, setTrackWidth] = useState(300);
+
+  const onTrackLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = Math.max(1, e.nativeEvent.layout.width);
+    setTrackWidth(w);
+    trackRef.current?.measureInWindow((x) => {
+      trackLayout.current = { x, width: w };
+    });
+  }, []);
+
+  const pixelToSlot15 = useCallback((moveX: number) => {
+    const { x, width } = trackLayout.current;
+    const p = (moveX - x) / width;
+    const slot = Math.round(p * MAX_SLOT_15);
+    return Math.min(MAX_SLOT_15, Math.max(0, slot));
+  }, []);
+
+  const leftThumbGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(canEdit)
+        .onUpdate((e) => {
+          const slot15 = pixelToSlot15(e.absoluteX);
+          const end15 = slot5ToSlot15(workEndSlot);
+          const clamped = Math.min(slot15, end15 - 1);
+          if (clamped >= 0) onStartChange(slot15ToSlot5(clamped));
+        })
+        .onEnd(() => {
+          onSlidingComplete(workStartSlot, workEndSlot);
+        }),
+    [canEdit, pixelToSlot15, workEndSlot, workStartSlot, onStartChange, onSlidingComplete]
+  );
+
+  const rightThumbGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(canEdit)
+        .onUpdate((e) => {
+          const slot15 = pixelToSlot15(e.absoluteX);
+          const start15 = slot5ToSlot15(workStartSlot);
+          const clamped = Math.max(slot15, start15 + 1);
+          if (clamped <= MAX_SLOT_15) onEndChange(slot15ToSlot5(clamped));
+        })
+        .onEnd(() => {
+          onSlidingComplete(workStartSlot, workEndSlot);
+        }),
+    [canEdit, pixelToSlot15, workStartSlot, workEndSlot, onEndChange, onSlidingComplete]
+  );
+
+  const start15 = slot5ToSlot15(workStartSlot);
+  const end15 = slot5ToSlot15(workEndSlot);
+  const startPercent = start15 / MAX_SLOT_15;
+  const endPercent = end15 / MAX_SLOT_15;
+  const leftThumbLeft = startPercent * trackWidth - RANGE_THUMB_SIZE / 2;
+  const rightThumbLeft = endPercent * trackWidth - RANGE_THUMB_SIZE / 2;
+  const fillLeft = startPercent * trackWidth;
+  const fillWidth = (endPercent - startPercent) * trackWidth;
+
+  const thumbShadow = useMemo(
+    () =>
+      Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.25,
+          shadowRadius: 3,
+        },
+        android: { elevation: 4 },
+        default: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.25,
+          shadowRadius: 3,
+        },
+      }),
+    []
+  );
+
+  return (
+    <View style={styles.sliderBlock}>
+      <View style={styles.sliderLabelRow}>
+        <View>
+          <Text style={styles.formValueBold}>Working hours</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+          <Text style={styles.sliderValueText}>
+            {slotToTime(workStartSlot)} – {slotToTime(workEndSlot)}
+          </Text>
+        </View>
+      </View>
+      <View
+        ref={trackRef}
+        onLayout={onTrackLayout}
+        style={{ height: 40, justifyContent: 'center', width: '100%' }}
+        pointerEvents="box-none"
+      >
+        <View style={[styles.rangeTrack, { height: RANGE_TRACK_HEIGHT }]} pointerEvents="none" collapsable={false}>
+          <View
+            style={[
+              styles.rangeFill,
+              {
+                position: 'absolute',
+                left: fillLeft,
+                width: Math.max(0, fillWidth),
+                height: RANGE_TRACK_HEIGHT,
+              },
+            ]}
+          />
+        </View>
+        <GestureDetector gesture={leftThumbGesture}>
+          <View
+            style={{
+              position: 'absolute',
+              left: leftThumbLeft - 8,
+              top: (40 - (RANGE_THUMB_SIZE + 16)) / 2,
+              width: RANGE_THUMB_SIZE + 16,
+              height: RANGE_THUMB_SIZE + 16,
+              justifyContent: 'center',
+              alignItems: 'center',
+              zIndex: 10,
+            }}
+          >
+            <View
+              style={[
+                styles.rangeThumb,
+                {
+                  width: RANGE_THUMB_SIZE,
+                  height: RANGE_THUMB_SIZE,
+                  borderRadius: RANGE_THUMB_SIZE / 2,
+                  ...thumbShadow,
+                },
+              ]}
+            />
+          </View>
+        </GestureDetector>
+        <GestureDetector gesture={rightThumbGesture}>
+          <View
+            style={{
+              position: 'absolute',
+              left: rightThumbLeft - 8,
+              top: (40 - (RANGE_THUMB_SIZE + 16)) / 2,
+              width: RANGE_THUMB_SIZE + 16,
+              height: RANGE_THUMB_SIZE + 16,
+              justifyContent: 'center',
+              alignItems: 'center',
+              zIndex: 10,
+            }}
+          >
+            <View
+              style={[
+                styles.rangeThumb,
+                {
+                  width: RANGE_THUMB_SIZE,
+                  height: RANGE_THUMB_SIZE,
+                  borderRadius: RANGE_THUMB_SIZE / 2,
+                  ...thumbShadow,
+                },
+              ]}
+            />
+          </View>
+        </GestureDetector>
+      </View>
+      <View style={styles.sliderMarksRow}>
+        <Text style={styles.sliderMarkText}>00:00</Text>
+        <Text style={styles.sliderMarkText}>12:00</Text>
+        <Text style={styles.sliderMarkText}>23:45</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function ProfileScreen() {
   const { userToken, userData, signOut, getValidToken } = useAuth();
   const { triggerRefresh, resetRouteState } = useRouteContext();
@@ -152,7 +431,6 @@ export default function ProfileScreen() {
   const [workEndSlot, setWorkEndSlot] = useState(() =>
     timeToSlot(preferences.workingHours?.end ?? '17:00')
   );
-  const [showHomeBaseEditor, setShowHomeBaseEditor] = useState(false);
   const [authModalVisible, setAuthModalVisible] = useState(false);
   const [authModalTitle, setAuthModalTitle] = useState('Sync your data');
   const [authModalSubtitle, setAuthModalSubtitle] = useState(
@@ -630,17 +908,23 @@ export default function ProfileScreen() {
     }
 
     if (sel.type === 'contact' && sel.contact.hasAddress) {
-      void saveProfilePatch({
+      const patch: BackendProfileSettingsPatch = {
         homeBase: { lat: sel.coords.lat, lon: sel.coords.lon },
         homeBaseLabel: sel.contact.formattedAddress || sel.contact.displayName,
-      });
+      };
+      applyLocalPatch(patch);
+      void saveProfilePatch(patch);
     } else if (sel.type === 'address') {
-      void saveProfilePatch({
+      const patch: BackendProfileSettingsPatch = {
         homeBase: { lat: sel.coords.lat, lon: sel.coords.lon },
         homeBaseLabel: sel.address,
-      });
+      };
+      applyLocalPatch(patch);
+      void saveProfilePatch(patch);
     } else if (sel.type === 'none') {
-      void saveProfilePatch({ homeBase: null, homeBaseLabel: null });
+      const patch: BackendProfileSettingsPatch = { homeBase: null, homeBaseLabel: null };
+      applyLocalPatch(patch);
+      void saveProfilePatch(patch);
     }
   };
 
@@ -928,114 +1212,41 @@ export default function ProfileScreen() {
 
       <View style={styles.sectionCard}>
         <Text style={styles.formLabelTop}>STARTING POINT</Text>
-        <View style={styles.formRowBetween}>
-          <Text style={styles.formValueBold}>Home Base Address</Text>
-          <TouchableOpacity
-            style={styles.changePill}
-            onPress={() => {
-              if (!canEditSettings) {
-                showLockedSettingsMessage();
-                return;
-              }
-              setShowHomeBaseEditor((prev) => !prev);
-            }}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.changePillText}>{showHomeBaseEditor ? 'Done' : 'Change'}</Text>
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={styles.dashedBox}
-          onPress={() => {
-            if (!canEditSettings) {
-              showLockedSettingsMessage();
-              return;
-            }
-            setShowHomeBaseEditor((prev) => !prev);
+        <Text style={styles.formValueBold}>Home Base Address</Text>
+        <LocationSearch
+          token={token}
+          searchContacts={async (t, q) => {
+            const r = await searchContacts(t, q);
+            return {
+              success: r.success,
+              contacts: r.success ? r.contacts : undefined,
+              error: r.success === false ? r.error : undefined,
+              needsConsent: r.success === false ? r.needsConsent : undefined,
+            };
           }}
-          activeOpacity={0.85}
-        >
-          <MapPin size={16} color="#3B82F6" />
-          <Text style={styles.dashedBoxText} numberOfLines={1}>
-            {preferences.homeBaseLabel || 'Search contacts or address...'}
-          </Text>
-        </TouchableOpacity>
-
-        {showHomeBaseEditor ? (
-          <LocationSearch
-            token={token}
-            searchContacts={async (t, q) => {
-              const r = await searchContacts(t, q);
-              return {
-                success: r.success,
-                contacts: r.success ? r.contacts : undefined,
-                error: r.success === false ? r.error : undefined,
-                needsConsent: r.success === false ? r.needsConsent : undefined,
-              };
-            }}
-            getAddressSuggestions={async (q) => {
-              if (useGoogleWithKey) {
-                const r = await getAddressSuggestionsGoogle(q, googleApiKey);
-                return {
-                  success: r.success,
-                  suggestions: r.success ? r.suggestions : undefined,
-                  error: r.success === false ? r.error : undefined,
-                };
-              }
-              const authToken = await resolveAuthToken();
-              const r = await getAddressSuggestions(q, {
-                authToken,
-                ...(preferredCountryCode ? { countryCode: preferredCountryCode } : {}),
-              });
+          getAddressSuggestions={async (q) => {
+            if (useGoogleWithKey) {
+              const r = await getAddressSuggestionsGoogle(q, googleApiKey);
               return {
                 success: r.success,
                 suggestions: r.success ? r.suggestions : undefined,
                 error: r.success === false ? r.error : undefined,
               };
-            }}
-            geocodeAddress={async (addr) => {
-              if (useGoogleWithKey) {
-                const r = await geocodeAddressGoogle(addr, googleApiKey);
-                return {
-                  success: r.success,
-                  lat: r.success ? r.lat : undefined,
-                  lon: r.success ? r.lon : undefined,
-                  fromCache: r.success ? r.fromCache : undefined,
-                  error: r.success === false ? r.error : undefined,
-                };
-              }
-              const authToken = await resolveAuthToken();
-              const r = await geocodeAddress(addr, { authToken });
-              return {
-                success: r.success,
-                lat: r.success ? r.lat : undefined,
-                lon: r.success ? r.lon : undefined,
-                fromCache: r.success ? r.fromCache : undefined,
-                error: r.success === false ? r.error : undefined,
-              };
-            }}
-            getCoordsForPlaceId={
-              useGoogleWithKey
-                ? async (placeId) => {
-                    const r = await getCoordsForPlaceId(placeId, googleApiKey);
-                    return r.success === true ? { lat: r.lat, lon: r.lon } : { error: r.error };
-                  }
-                : undefined
             }
-            geocodeContactAddress={async (addr, parts) => {
-              if (useGoogleWithKey) {
-                const r = await geocodeAddressGoogle(addr, googleApiKey);
-                return {
-                  success: r.success,
-                  lat: r.success ? r.lat : undefined,
-                  lon: r.success ? r.lon : undefined,
-                  fromCache: r.success ? r.fromCache : undefined,
-                  error: r.success === false ? r.error : undefined,
-                };
-              }
-              const authToken = await resolveAuthToken();
-              const r = await geocodeContactAddress(addr, parts, { authToken });
+            const authToken = await resolveAuthToken();
+            const r = await getAddressSuggestions(q, {
+              authToken,
+              ...(preferredCountryCode ? { countryCode: preferredCountryCode } : {}),
+            });
+            return {
+              success: r.success,
+              suggestions: r.success ? r.suggestions : undefined,
+              error: r.success === false ? r.error : undefined,
+            };
+          }}
+          geocodeAddress={async (addr) => {
+            if (useGoogleWithKey) {
+              const r = await geocodeAddressGoogle(addr, googleApiKey);
               return {
                 success: r.success,
                 lat: r.success ? r.lat : undefined,
@@ -1043,12 +1254,52 @@ export default function ProfileScreen() {
                 fromCache: r.success ? r.fromCache : undefined,
                 error: r.success === false ? r.error : undefined,
               };
-            }}
-            selection={homeBaseSelection}
-            onSelectionChange={handleHomeBaseChange}
-            placeholder="Search contacts or address (e.g. Copenhagen, Office)"
-          />
-        ) : null}
+            }
+            const authToken = await resolveAuthToken();
+            const r = await geocodeAddress(addr, { authToken });
+            return {
+              success: r.success,
+              lat: r.success ? r.lat : undefined,
+              lon: r.success ? r.lon : undefined,
+              fromCache: r.success ? r.fromCache : undefined,
+              error: r.success === false ? r.error : undefined,
+            };
+          }}
+          getCoordsForPlaceId={
+            useGoogleWithKey
+              ? async (placeId) => {
+                  const r = await getCoordsForPlaceId(placeId, googleApiKey);
+                  return r.success === true ? { lat: r.lat, lon: r.lon } : { error: r.error };
+                }
+              : undefined
+          }
+          geocodeContactAddress={async (addr, parts) => {
+            if (useGoogleWithKey) {
+              const r = await geocodeAddressGoogle(addr, googleApiKey);
+              return {
+                success: r.success,
+                lat: r.success ? r.lat : undefined,
+                lon: r.success ? r.lon : undefined,
+                fromCache: r.success ? r.fromCache : undefined,
+                error: r.success === false ? r.error : undefined,
+              };
+            }
+            const authToken = await resolveAuthToken();
+            const r = await geocodeContactAddress(addr, parts, { authToken });
+            return {
+              success: r.success,
+              lat: r.success ? r.lat : undefined,
+              lon: r.success ? r.lon : undefined,
+              fromCache: r.success ? r.fromCache : undefined,
+              error: r.success === false ? r.error : undefined,
+            };
+          }}
+          selection={homeBaseSelection}
+          onSelectionChange={handleHomeBaseChange}
+          placeholder="Search contacts or address (e.g. Copenhagen, Office)"
+          allowDirectAddressSubmit
+          variant="profile_home_base"
+        />
 
         <View style={styles.toggleRow}>
           <View style={styles.toggleTextCol}>
@@ -1245,17 +1496,11 @@ export default function ProfileScreen() {
               <Text style={styles.sliderValueUnit}> MIN</Text>
             </View>
           </View>
-          <Slider
-            style={{ width: '100%', height: 32 }}
-            minimumValue={0}
-            maximumValue={60}
-            step={5}
+          <BufferCircleSlider
             value={Math.round((parseInt(preBuffer, 10) || 0) / 5) * 5}
-            onValueChange={(v) => setPreBuffer(String(Math.round(v / 5) * 5))}
+            onValueChange={(v) => setPreBuffer(String(v))}
             onSlidingComplete={() => savePreBuffer()}
-            minimumTrackTintColor="#2563EB"
-            maximumTrackTintColor="#E2E8F0"
-            thumbTintColor="#FFFFFF"
+            canEdit={canEditSettings}
           />
           <View style={styles.sliderMarksRow}>
             <Text style={styles.sliderMarkText}>0m</Text>
@@ -1275,17 +1520,11 @@ export default function ProfileScreen() {
               <Text style={styles.sliderValueUnit}> MIN</Text>
             </View>
           </View>
-          <Slider
-            style={{ width: '100%', height: 32 }}
-            minimumValue={0}
-            maximumValue={60}
-            step={5}
+          <BufferCircleSlider
             value={Math.round((parseInt(postBuffer, 10) || 0) / 5) * 5}
-            onValueChange={(v) => setPostBuffer(String(Math.round(v / 5) * 5))}
+            onValueChange={(v) => setPostBuffer(String(v))}
             onSlidingComplete={() => savePostBuffer()}
-            minimumTrackTintColor="#2563EB"
-            maximumTrackTintColor="#E2E8F0"
-            thumbTintColor="#FFFFFF"
+            canEdit={canEditSettings}
           />
           <View style={styles.sliderMarksRow}>
             <Text style={styles.sliderMarkText}>0m</Text>
@@ -1294,70 +1533,27 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        <View style={styles.divider} />
+      </View>
 
-        <View style={styles.sliderBlock}>
-          <View style={styles.sliderLabelRow}>
-            <View>
-              <Text style={styles.formLabelTop}>SCHEDULE</Text>
-              <Text style={styles.formValueBold}>Work Start Time</Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-              <Text style={styles.sliderValueText}>{slotToTime(workStartSlot)}</Text>
-            </View>
-          </View>
-          <Slider
-            style={{ width: '100%', height: 32 }}
-            minimumValue={0}
-            maximumValue={MAX_SLOT}
-            step={1}
-            value={workStartSlot}
-            onValueChange={(v) => setWorkStartSlot(Math.round(v))}
-            onSlidingComplete={(v) => saveWorkingHours(Math.round(v), workEndSlot)}
-            minimumTrackTintColor="#2563EB"
-            maximumTrackTintColor="#E2E8F0"
-            thumbTintColor="#FFFFFF"
-          />
-          <View style={styles.sliderMarksRow}>
-            <Text style={styles.sliderMarkText}>00:00</Text>
-            <Text style={styles.sliderMarkText}>12:00</Text>
-            <Text style={styles.sliderMarkText}>23:55</Text>
-          </View>
+      <View style={styles.sectionHeader}>
+        <View style={[styles.sectionIconBox, { backgroundColor: '#D1FAE5' }]}>
+          <Clock size={18} color="#10B981" />
         </View>
+        <Text style={styles.sectionTitle}>Working hours</Text>
+      </View>
 
-        <View style={styles.sliderBlock}>
-          <View style={styles.sliderLabelRow}>
-            <View>
-              <Text style={styles.formLabelTop}>SCHEDULE</Text>
-              <Text style={styles.formValueBold}>Work End Time</Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-              <Text style={styles.sliderValueText}>{slotToTime(workEndSlot)}</Text>
-            </View>
-          </View>
-          <Slider
-            style={{ width: '100%', height: 32 }}
-            minimumValue={0}
-            maximumValue={MAX_SLOT}
-            step={1}
-            value={workEndSlot}
-            onValueChange={(v) => setWorkEndSlot(Math.round(v))}
-            onSlidingComplete={(v) => saveWorkingHours(workStartSlot, Math.round(v))}
-            minimumTrackTintColor="#2563EB"
-            maximumTrackTintColor="#E2E8F0"
-            thumbTintColor="#FFFFFF"
-          />
-          <View style={styles.sliderMarksRow}>
-            <Text style={styles.sliderMarkText}>00:00</Text>
-            <Text style={styles.sliderMarkText}>12:00</Text>
-            <Text style={styles.sliderMarkText}>23:55</Text>
-          </View>
-        </View>
-
+      <View style={styles.sectionCard}>
+        <WorkingHoursRangeSlider
+          workStartSlot={workStartSlot}
+          workEndSlot={workEndSlot}
+          onStartChange={setWorkStartSlot}
+          onEndChange={setWorkEndSlot}
+          onSlidingComplete={(start, end) => saveWorkingHours(start, end)}
+          canEdit={canEditSettings}
+        />
         <View style={styles.divider} />
-
         <View>
-          <Text style={styles.formLabelTop}>SCHEDULE</Text>
+          <Text style={styles.formLabelTop}>WORKING DAYS</Text>
           <Text style={styles.formValueBold}>Working Days</Text>
           <View style={styles.workingDaysRow}>
             {DAY_LABELS.map((label, i) => (

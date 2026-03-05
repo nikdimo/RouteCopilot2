@@ -47,6 +47,17 @@ export function parseNumber(s: string, min: number, max: number): number {
 export const SLOTS_PER_HOUR = 12; // 60/5
 export const MAX_SLOT = 24 * SLOTS_PER_HOUR - 1; // 287
 
+/** 15-min slot index 0–95 for working hours UI: 0 = 00:00, 95 = 23:45 */
+export const SLOTS_PER_HOUR_15 = 4; // 60/15
+export const MAX_SLOT_15 = 24 * SLOTS_PER_HOUR_15 - 1; // 95
+
+export function slot5ToSlot15(slot5: number): number {
+  return Math.min(MAX_SLOT_15, Math.max(0, Math.round(slot5 / 3)));
+}
+export function slot15ToSlot5(slot15: number): number {
+  return Math.min(MAX_SLOT, Math.max(0, slot15 * 3));
+}
+
 export function timeToSlot(time: string): number {
     const m = time.match(/^(\d{1,2}):(\d{2})$/);
     if (!m) return 96; // default 08:00

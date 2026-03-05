@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Image } from 'react-native';
+import React, { useEffect } from 'react';
+import { View, StyleSheet, Text, Image } from 'react-native';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -12,7 +12,8 @@ import Animated, {
     withSequence,
     cancelAnimation
 } from 'react-native-reanimated';
-import Svg, { Path, Circle, Rect, Polygon, G } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
+import { useDevUI } from '../../context/DevUIContext';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
@@ -109,7 +110,8 @@ const MAP_STYLES = [
 ];
 
 export const MockMap: React.FC<MockMapProps> = ({ animationState }) => {
-    const [layoutIndex, setLayoutIndex] = useState(0);
+    const { mockMapStyleIndex } = useDevUI();
+    const layoutIndex = mockMapStyleIndex;
     const styleDef = MAP_STYLES[layoutIndex] as any;
 
     // Background existing booked active route (1 -> 2 -> 3 -> 4)
@@ -132,8 +134,6 @@ export const MockMap: React.FC<MockMapProps> = ({ animationState }) => {
     // Floating interaction
     const newPinFloatY = useSharedValue(0);
     const newPinScale = useSharedValue(1); // Set to 1 initially so it is visible
-    const pinX = useSharedValue(MAP_STYLES[0].np.x);
-    const pinY = useSharedValue(MAP_STYLES[0].np.y);
 
     const isHovering = animationState <= 2;
 
@@ -317,20 +317,6 @@ export const MockMap: React.FC<MockMapProps> = ({ animationState }) => {
                     <MapPin x={styleDef.np.x} y={styleDef.np.y} color={activeColor} label="X" />
                 </View>
             </Animated.View>
-
-            <View style={styles.layoutSwitcher}>
-                {MAP_STYLES.map((L, i) => (
-                    <TouchableOpacity
-                        key={i}
-                        style={[styles.switcherBtn, layoutIndex === i && { backgroundColor: styleDef.activePin }]}
-                        onPress={() => setLayoutIndex(i)}
-                    >
-                        <Text style={[styles.switcherBtnText, layoutIndex === i && styles.switcherBtnTextActive]}>
-                            {i + 1}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
-            </View>
         </View>
     );
 };
@@ -353,37 +339,5 @@ const styles = StyleSheet.create({
     },
     customPinWrapper: {
         position: 'absolute',
-    },
-    layoutSwitcher: {
-        position: 'absolute',
-        top: 24,
-        right: 24,
-        flexDirection: 'row',
-        backgroundColor: '#ffffff',
-        borderRadius: 24,
-        padding: 4,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 10,
-        elevation: 6,
-        zIndex: 100,
-    },
-    switcherBtn: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginHorizontal: 4,
-        backgroundColor: '#f1f5f9',
-    },
-    switcherBtnText: {
-        fontSize: 13,
-        fontWeight: 'bold',
-        color: '#64748b',
-    },
-    switcherBtnTextActive: {
-        color: '#ffffff',
     },
 });

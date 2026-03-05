@@ -349,7 +349,7 @@ export default function AddMeetingScreen() {
       setSearchAppointments(sorted);
     } catch (e) {
       if (e instanceof GraphUnauthorizedError) {
-        await clearGraphSession().catch(() => {});
+        await clearGraphSession().catch(() => { });
         if (userToken && !isMagicAuthToken(userToken)) {
           signOut();
         }
@@ -561,50 +561,79 @@ export default function AddMeetingScreen() {
 
   return (
     <View style={[styles.container, isWide && styles.splitContainer]}>
-      <View style={[styles.formPane, isWide && styles.formPaneWide, isWide && { paddingLeft: insets.left }]}>
+      <View style={[
+        styles.formPane,
+        isWide && (hasSearched || hasValidLocation ? styles.formPaneWide : styles.formPaneCentered),
+        isWide && { paddingLeft: insets.left }
+      ]}>
         <ScrollView
           style={styles.formScroll}
-          contentContainerStyle={styles.formScrollContent}
+          contentContainerStyle={[
+            styles.formScrollContent,
+            isWide && !hasSearched && !hasValidLocation && styles.formScrollContentCentered
+          ]}
           showsVerticalScrollIndicator={true}
           keyboardShouldPersistTaps="handled"
         >
-          <LocationSearch
-            token={token}
-            searchContacts={async (t, q) => {
-              if (!canUseContactLookup) {
-                return { success: true, contacts: [] };
-              }
-              const r = await searchContactsGraph(t, q);
-              return {
-                success: r.success,
-                contacts: r.success ? r.contacts : undefined,
-                error: 'error' in r ? r.error : undefined,
-                needsConsent: 'needsConsent' in r ? r.needsConsent : undefined,
-              };
-            }}
-            getAddressSuggestions={async (q) => {
-              if (useGoogleWithKey) {
-                const r = await getAddressSuggestionsGoogle(q, googleApiKey);
+          {(!hasSearched) && (
+            <View style={{ alignItems: 'center', marginTop: 16, marginBottom: 24 }}>
+              <View style={[styles.sectionIconBox, { backgroundColor: '#DBEAFE' }]}>
+                <Text style={{ fontSize: 18 }}>📅</Text>
+              </View>
+              <Text style={styles.headerTitle}>Plan a Meeting</Text>
+            </View>
+          )}
+
+          <View style={!hasSearched ? styles.sectionCard : {}}>
+            <LocationSearch
+              token={token}
+              searchContacts={async (t, q) => {
+                if (!canUseContactLookup) {
+                  return { success: true, contacts: [] };
+                }
+                const r = await searchContactsGraph(t, q);
+                return {
+                  success: r.success,
+                  contacts: r.success ? r.contacts : undefined,
+                  error: 'error' in r ? r.error : undefined,
+                  needsConsent: 'needsConsent' in r ? r.needsConsent : undefined,
+                };
+              }}
+              getAddressSuggestions={async (q) => {
+                if (useGoogleWithKey) {
+                  const r = await getAddressSuggestionsGoogle(q, googleApiKey);
+                  return {
+                    success: r.success,
+                    suggestions: r.success ? r.suggestions : undefined,
+                    error: 'error' in r ? r.error : undefined,
+                  };
+                }
+                const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
+                const r = await getAddressSuggestions(q, {
+                  authToken,
+                  ...(preferredCountryCode ? { countryCode: preferredCountryCode } : {}),
+                });
                 return {
                   success: r.success,
                   suggestions: r.success ? r.suggestions : undefined,
                   error: 'error' in r ? r.error : undefined,
                 };
-              }
-              const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
-              const r = await getAddressSuggestions(q, {
-                authToken,
-                ...(preferredCountryCode ? { countryCode: preferredCountryCode } : {}),
-              });
-              return {
-                success: r.success,
-                suggestions: r.success ? r.suggestions : undefined,
-                error: 'error' in r ? r.error : undefined,
-              };
-            }}
-            geocodeAddress={async (addr) => {
-              if (useGoogleWithKey) {
-                const r = await geocodeAddressGoogle(addr, googleApiKey);
+              }}
+              geocodeAddress={async (addr) => {
+                if (useGoogleWithKey) {
+                  const r = await geocodeAddressGoogle(addr, googleApiKey);
+                  return {
+                    success: r.success,
+                    lat: r.success ? r.lat : undefined,
+                    lon: r.success ? r.lon : undefined,
+                    fromCache: r.success ? r.fromCache : undefined,
+                    error: 'error' in r ? r.error : undefined,
+                  };
+                }
+                const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
+                const r = await geocodeAddress(addr, {
+                  authToken,
+                });
                 return {
                   success: r.success,
                   lat: r.success ? r.lat : undefined,
@@ -612,30 +641,28 @@ export default function AddMeetingScreen() {
                   fromCache: r.success ? r.fromCache : undefined,
                   error: 'error' in r ? r.error : undefined,
                 };
-              }
-              const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
-              const r = await geocodeAddress(addr, {
-                authToken,
-              });
-              return {
-                success: r.success,
-                lat: r.success ? r.lat : undefined,
-                lon: r.success ? r.lon : undefined,
-                fromCache: r.success ? r.fromCache : undefined,
-                error: 'error' in r ? r.error : undefined,
-              };
-            }}
-            getCoordsForPlaceId={
-              useGoogleWithKey
-                ? async (placeId) => {
+              }}
+              getCoordsForPlaceId={
+                useGoogleWithKey
+                  ? async (placeId) => {
                     const r = await getCoordsForPlaceId(placeId, googleApiKey);
                     return r.success === true ? { lat: r.lat, lon: r.lon } : { error: r.error };
                   }
-                : undefined
-            }
-            geocodeContactAddress={async (addr, parts) => {
-              if (useGoogleWithKey) {
-                const r = await geocodeAddressGoogle(addr, googleApiKey);
+                  : undefined
+              }
+              geocodeContactAddress={async (addr, parts) => {
+                if (useGoogleWithKey) {
+                  const r = await geocodeAddressGoogle(addr, googleApiKey);
+                  return {
+                    success: r.success,
+                    lat: r.success ? r.lat : undefined,
+                    lon: r.success ? r.lon : undefined,
+                    fromCache: r.success ? r.fromCache : undefined,
+                    error: 'error' in r ? r.error : undefined,
+                  };
+                }
+                const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
+                const r = await geocodeContactAddress(addr, parts, { authToken });
                 return {
                   success: r.success,
                   lat: r.success ? r.lat : undefined,
@@ -643,69 +670,77 @@ export default function AddMeetingScreen() {
                   fromCache: r.success ? r.fromCache : undefined,
                   error: 'error' in r ? r.error : undefined,
                 };
-              }
-              const authToken = userToken ?? (getValidToken ? await getValidToken() : null);
-              const r = await geocodeContactAddress(addr, parts, { authToken });
-              return {
-                success: r.success,
-                lat: r.success ? r.lat : undefined,
-                lon: r.success ? r.lon : undefined,
-                fromCache: r.success ? r.fromCache : undefined,
-                error: 'error' in r ? r.error : undefined,
-              };
-            }}
-            selection={locationSelection}
-            onSelectionChange={setLocationSelection}
-            onGraphError={handleGraphError}
-            placeholder="Search Client or Address (e.g. Nikola, Køge)"
-            onDebug={__DEV__ ? handleLocationDebug : undefined}
-          />
+              }}
+              selection={locationSelection}
+              onSelectionChange={setLocationSelection}
+              onGraphError={handleGraphError}
+              placeholder="Search Client or Address (e.g. Nikola, Køge)"
+              onDebug={__DEV__ ? handleLocationDebug : undefined}
+              variant="profile_home_base"
+            />
 
-          <View style={styles.durationRow}>
-            <Text style={styles.durationLabel}>Duration</Text>
-            <View style={styles.durationPills}>
-              {DURATION_OPTS.map((d) => (
-                <TouchableOpacity
-                  key={d}
-                  style={[
-                    styles.durationPill,
-                    durationMinutes === d && styles.durationPillActive,
-                  ]}
-                  onPress={() => setDurationMinutes(d)}
-                >
-                  <Text
+            <View style={styles.durationRow}>
+              <Text style={styles.formLabelTop}>DURATION</Text>
+              <View style={styles.durationPills}>
+                {DURATION_OPTS.map((d) => (
+                  <TouchableOpacity
+                    key={d}
                     style={[
-                      styles.durationPillText,
-                      durationMinutes === d && styles.durationPillTextActive,
+                      styles.durationPill,
+                      durationMinutes === d && styles.durationPillActive,
                     ]}
+                    onPress={() => setDurationMinutes(d)}
                   >
-                    {d} min
-                  </Text>
-                </TouchableOpacity>
-              ))}
+                    <Text
+                      style={[
+                        styles.durationPillText,
+                        durationMinutes === d && styles.durationPillTextActive,
+                      ]}
+                    >
+                      {d} min
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={{ marginBottom: 16 }}>
+              <Text style={[styles.formLabelTop, { paddingHorizontal: 16 }]}>TIMEFRAME</Text>
+              <TimeframeSelector selected={timeframe} onSelect={setTimeframe} />
             </View>
           </View>
 
-          <TimeframeSelector selected={timeframe} onSelect={setTimeframe} />
-
-          <TouchableOpacity
-            style={[
-              styles.ctaButton,
-              (!canFindBestTime || searchLoading) && styles.ctaButtonDisabled,
-            ]}
-            onPress={handleFindBestTime}
-            activeOpacity={0.85}
-            disabled={!canFindBestTime || searchLoading}
-          >
-            <Text
+          <View style={!hasSearched ? { width: '100%', maxWidth: 600, alignSelf: 'center' } : {}}>
+            <TouchableOpacity
               style={[
-                styles.ctaButtonText,
-                (!canFindBestTime || searchLoading) && styles.ctaButtonTextDisabled,
+                styles.ctaButton,
+                (!hasSearched && isWide) && { marginHorizontal: 0 },
+                (!canFindBestTime || searchLoading) && styles.ctaButtonDisabled,
               ]}
+              onPress={handleFindBestTime}
+              activeOpacity={0.85}
+              disabled={!canFindBestTime || searchLoading}
             >
-              {searchLoading ? 'Searching…' : 'Find best time'}
-            </Text>
-          </TouchableOpacity>
+              <Text
+                style={[
+                  styles.ctaButtonText,
+                  (!canFindBestTime || searchLoading) && styles.ctaButtonTextDisabled,
+                ]}
+              >
+                {searchLoading ? 'Searching…' : 'Find best time'}
+              </Text>
+            </TouchableOpacity>
+
+            {!hasSearched && (
+              <View style={styles.setupState}>
+                <Text style={styles.setupHint}>
+                  {canFindBestTime
+                    ? 'Tap "Find best time" to see slots.'
+                    : 'Select a location (contact or address) to see best slots.'}
+                </Text>
+              </View>
+            )}
+          </View>
 
           {__DEV__ && (Object.keys(devDebug).length > 0 || hasSearched) && (
             <TouchableOpacity
@@ -762,119 +797,115 @@ export default function AddMeetingScreen() {
             </TouchableOpacity>
           )}
 
-          {!hasSearched ? (
-            <View style={styles.setupState}>
-              <Text style={styles.setupHint}>
-                {canFindBestTime
-                  ? 'Tap "Find best time" to see slots.'
-                  : 'Select a location (contact or address) to see best slots.'}
-              </Text>
-            </View>
-          ) : searchLoading ? (
-            <View style={styles.loadingState}>
-              <ActivityIndicator size="large" color={MS_BLUE} />
-              <Text style={styles.loadingText}>Loading your schedule…</Text>
-            </View>
-          ) : (
-            <>
-              <Text style={styles.sectionTitle}>Best Options</Text>
-              {bestOptions.length === 0 ? (
-                <Text style={styles.emptyHint}>
-                  No slots found. Try a different timeframe or client.
-                </Text>
-              ) : (
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.bestOptionsRow}
-                  style={styles.bestOptionsScroll}
-                >
-                  {bestOptions.map((slot) => (
-                    <View key={slotId(slot)} style={styles.bestOptionCard}>
-                      <GhostSlotCard
-                        slot={slot}
-                        preBuffer={preBuffer}
-                        postBuffer={postBuffer}
-                        isSelected={selectedSlotId === slotId(slot)}
-                        isBestOption={true}
-                        showDate={true}
-                        onSelect={() => handleSelectSlot(slot)}
-                        onMapPress={() => handleMapPress(slot)}
-                        onBookPress={() => handleBookSlot(slot)}
-                      />
-                    </View>
-                  ))}
-                </ScrollView>
-              )}
+          {hasSearched && (
+            searchLoading ? (
+              <View style={styles.loadingState}>
+                <ActivityIndicator size="large" color={MS_BLUE} />
+                <Text style={styles.loadingText}>Loading your schedule…</Text>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.sectionTitle}>Best Options</Text>
+                {bestOptions.length === 0 ? (
+                  <Text style={styles.emptyHint}>
+                    No slots found. Try a different timeframe or client.
+                  </Text>
+                ) : (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.bestOptionsRow}
+                    style={styles.bestOptionsScroll}
+                  >
+                    {bestOptions.map((slot) => (
+                      <View key={slotId(slot)} style={styles.bestOptionCard}>
+                        <GhostSlotCard
+                          slot={slot}
+                          preBuffer={preBuffer}
+                          postBuffer={postBuffer}
+                          isSelected={selectedSlotId === slotId(slot)}
+                          isBestOption={true}
+                          showDate={true}
+                          onSelect={() => handleSelectSlot(slot)}
+                          onMapPress={() => handleMapPress(slot)}
+                          onBookPress={() => handleBookSlot(slot)}
+                        />
+                      </View>
+                    ))}
+                  </ScrollView>
+                )}
 
-              <Text style={[styles.sectionTitle, styles.sectionTitleSpaced]}>
-                By Day
-              </Text>
-              {dayGroups.length === 0 ? (
-                <Text style={styles.emptyHint}>
-                  No schedule in this window. Add meetings or choose another
-                  timeframe.
+                <Text style={[styles.sectionTitle, styles.sectionTitleSpaced]}>
+                  By Day
                 </Text>
-              ) : (
-                dayGroups.map((group) => (
-                  <DayTimeline
-                    key={group.dayIso}
-                    dayIso={group.dayIso}
-                    dayLabel={group.dayLabel}
-                    entries={group.entries}
-                    preBuffer={preBuffer}
-                    postBuffer={postBuffer}
-                    selectedSlotId={selectedSlotId}
-                    bestOptionIds={bestOptionIds}
-                    onSelectSlot={handleSelectSlot}
-                    onMapPress={handleMapPress}
-                    onBookSlot={handleBookSlot}
-                  />
-                ))
-              )}
-            </>
+                {dayGroups.length === 0 ? (
+                  <Text style={styles.emptyHint}>
+                    No schedule in this window. Add meetings or choose another
+                    timeframe.
+                  </Text>
+                ) : (
+                  dayGroups.map((group) => (
+                    <DayTimeline
+                      key={group.dayIso}
+                      dayIso={group.dayIso}
+                      dayLabel={group.dayLabel}
+                      entries={group.entries}
+                      preBuffer={preBuffer}
+                      postBuffer={postBuffer}
+                      selectedSlotId={selectedSlotId}
+                      bestOptionIds={bestOptionIds}
+                      onSelectSlot={handleSelectSlot}
+                      onMapPress={handleMapPress}
+                      onBookSlot={handleBookSlot}
+                    />
+                  ))
+                )}
+              </>
+            )
           )}
         </ScrollView>
 
-        {!isWide && mapSlot && newLocation && (
-          isExpoGo ? (
-            <Modal visible transparent animationType="fade">
-              <TouchableOpacity
-                style={styles.expoGoModalOverlay}
-                activeOpacity={1}
-                onPress={() => setMapSlot(null)}
-              >
-                <View style={styles.expoGoModalBox}>
-                  <Text style={styles.expoGoModalTitle}>Map preview</Text>
-                  <Text style={styles.expoGoModalText}>
-                    Map preview is available in the development build (EAS Build / TestFlight).
-                  </Text>
-                  <TouchableOpacity style={styles.expoGoModalButton} onPress={() => setMapSlot(null)}>
-                    <Text style={styles.expoGoModalButtonText}>Close</Text>
-                  </TouchableOpacity>
-                </View>
-              </TouchableOpacity>
-            </Modal>
-          ) : (
-            <Suspense fallback={null}>
-              <MapPreviewModal
-                visible={!!mapSlot}
-                onClose={() => setMapSlot(null)}
-                onConfirmBooking={() => {
-                  if (mapSlot) {
-                    setConfirmSlot(mapSlot);
-                    setMapSlot(null);
-                  }
-                }}
-                dayEvents={eventsForDay(filteredAppointments, mapSlot.dayIso)}
-                insertionCoord={newLocation}
-                slot={mapSlot}
-                homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
-              />
-            </Suspense>
+        {
+          !isWide && mapSlot && newLocation && (
+            isExpoGo ? (
+              <Modal visible transparent animationType="fade">
+                <TouchableOpacity
+                  style={styles.expoGoModalOverlay}
+                  activeOpacity={1}
+                  onPress={() => setMapSlot(null)}
+                >
+                  <View style={styles.expoGoModalBox}>
+                    <Text style={styles.expoGoModalTitle}>Map preview</Text>
+                    <Text style={styles.expoGoModalText}>
+                      Map preview is available in the development build (EAS Build / TestFlight).
+                    </Text>
+                    <TouchableOpacity style={styles.expoGoModalButton} onPress={() => setMapSlot(null)}>
+                      <Text style={styles.expoGoModalButtonText}>Close</Text>
+                    </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
+              </Modal>
+            ) : (
+              <Suspense fallback={null}>
+                <MapPreviewModal
+                  visible={!!mapSlot}
+                  onClose={() => setMapSlot(null)}
+                  onConfirmBooking={() => {
+                    if (mapSlot) {
+                      setConfirmSlot(mapSlot);
+                      setMapSlot(null);
+                    }
+                  }}
+                  dayEvents={eventsForDay(filteredAppointments, mapSlot.dayIso)}
+                  insertionCoord={newLocation}
+                  slot={mapSlot}
+                  homeBase={preferences.homeBase ?? DEFAULT_HOME_BASE}
+                />
+              </Suspense>
+            )
           )
-        )}
-      </View>
+        }
+      </View >
 
       {isWide && hasValidLocation && (
         <View style={styles.mapPane}>
@@ -883,7 +914,11 @@ export default function AddMeetingScreen() {
               <Text style={styles.expoGoMapPlaceholderText}>Map available in development build</Text>
             </View>
           ) : (
-            <Suspense fallback={<View style={styles.expoGoMapPlaceholder}><ActivityIndicator size="large" color={MS_BLUE} /></View>}>
+            <Suspense fallback={
+              <View style={styles.expoGoMapPlaceholder}>
+                <ActivityIndicator size="large" color={MS_BLUE} />
+              </View>
+            }>
               <PlanVisitMapPanel
                 newLocation={newLocation}
                 slot={displayedMapSlot ?? undefined}
@@ -897,7 +932,8 @@ export default function AddMeetingScreen() {
             </Suspense>
           )}
         </View>
-      )}
+      )
+      }
 
       <ConfirmBookingSheet
         visible={!!confirmSlot}
@@ -910,7 +946,7 @@ export default function AddMeetingScreen() {
         }}
         onConfirm={handleConfirmBooking}
       />
-    </View>
+    </View >
   );
 }
 
@@ -921,10 +957,17 @@ const styles = StyleSheet.create({
   },
   splitContainer: {
     flexDirection: 'row',
+    justifyContent: 'center',
   },
   formPane: {
     flex: 1,
     minWidth: 0,
+  },
+  formPaneCentered: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 600,
+    alignSelf: 'center',
   },
   formPaneWide: {
     maxWidth: 420,
@@ -981,13 +1024,8 @@ const styles = StyleSheet.create({
   },
   durationRow: {
     paddingHorizontal: 16,
-    marginBottom: 4,
-  },
-  durationLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#605E5C',
-    marginBottom: 8,
+    marginBottom: 16,
+    marginTop: 8,
   },
   durationPills: {
     flexDirection: 'row',
@@ -997,9 +1035,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 8,
-    backgroundColor: '#E1DFDD',
-    borderWidth: 2,
-    borderColor: 'transparent',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   durationPillActive: {
     backgroundColor: MS_BLUE,
@@ -1063,6 +1101,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 32,
   },
+  formScrollContentCentered: {
+    alignItems: 'center',
+    paddingTop: 16,
+  },
   scroll: {
     flex: 1,
   },
@@ -1113,5 +1155,42 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#605E5C',
     marginBottom: 16,
+  },
+  sectionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    width: '100%',
+    maxWidth: 600,
+    alignSelf: 'center',
+  },
+  sectionIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 4,
+  },
+  formLabelTop: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 0.5,
+    marginBottom: 6,
   },
 });

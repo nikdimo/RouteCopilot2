@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { addDays, endOfDay, startOfDay, isAfter } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
@@ -14,6 +14,18 @@ export function useEnsureMeetingCountsForDate() {
   const { preferences } = useUserPreferences();
   const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
   const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
+  const shouldSyncCalendar = canSyncCalendar || Boolean(userToken);
+  const syncModeRef = useRef<'local' | 'remote'>(shouldSyncCalendar ? 'remote' : 'local');
+
+  // Avoid startup races: if mode flips local<->remote (e.g. prefs hydrate after auth),
+  // invalidate the loaded range so we do not skip the first fetch for the new mode.
+  useEffect(() => {
+    const nextMode: 'local' | 'remote' = shouldSyncCalendar ? 'remote' : 'local';
+    if (syncModeRef.current !== nextMode) {
+      syncModeRef.current = nextMode;
+      setLoadedRange(null);
+    }
+  }, [shouldSyncCalendar, setLoadedRange]);
 
   return useCallback(
     async (date: Date, forceRefetch?: boolean) => {
@@ -22,7 +34,7 @@ export function useEnsureMeetingCountsForDate() {
       const startKey = toLocalDayKey(windowStart);
       const endKey = toLocalDayKey(windowEnd);
 
-      if (!canSyncCalendar) {
+      if (!shouldSyncCalendar) {
         const counts = await getLocalMeetingCountsInRange(windowStart, windowEnd);
         setMeetingCountByDay((prev) => {
           let changed = false;
@@ -95,6 +107,6 @@ export function useEnsureMeetingCountsForDate() {
         })
         .catch(() => { });
     },
-    [canSyncCalendar, userToken, getValidToken, loadedRange, setMeetingCountByDay, setLoadedRange]
+    [shouldSyncCalendar, userToken, getValidToken, loadedRange, setMeetingCountByDay, setLoadedRange]
   );
 }

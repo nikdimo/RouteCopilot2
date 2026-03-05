@@ -65,8 +65,10 @@ function TabBarWithSafeArea(props: React.ComponentProps<typeof BottomTabBar>) {
   const isAndroid = Platform.OS === 'android';
   const bottomInset = isAndroid ? Math.max(insets.bottom, 48) : Math.max(0, insets.bottom - 8);
   return (
-    <View style={{ paddingBottom: bottomInset, backgroundColor: '#ffffff' }}>
-      <BottomTabBar {...props} />
+    <View style={{ paddingBottom: bottomInset, backgroundColor: '#ffffff', alignItems: 'center', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#e2e8f0' }}>
+      <View style={{ width: '100%', maxWidth: 500 }}>
+        <BottomTabBar {...props} />
+      </View>
     </View>
   );
 }
@@ -91,7 +93,8 @@ export default function AppNavigator() {
         tabBarStyle: {
           height: 56,
           backgroundColor: Platform.OS === 'android' ? 'transparent' : '#ffffff',
-          ...(Platform.OS === 'android' && { elevation: 0 }),
+          borderTopWidth: 0,
+          elevation: 0,
         },
       }}
     >

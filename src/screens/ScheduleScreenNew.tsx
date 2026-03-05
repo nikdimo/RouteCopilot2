@@ -55,6 +55,7 @@ import { EmptyStateScanner } from '../components/emptyState/EmptyStateScanner';
 import { useEmptyStateAnimation } from '../components/emptyState/useEmptyStateAnimation';
 import { MockSchedule } from '../components/emptyState/MockSchedule';
 import { SignedInEmptyStateLeft, SignedInEmptyStateRight } from '../components/emptyState/SignedInEmptyState';
+import TrialSubscribeBanner from '../components/TrialSubscribeBanner';
 
 const MapScreen = React.lazy(() => import('./MapScreen'));
 const isExpoGo = Constants.appOwnership === 'expo';
@@ -185,6 +186,8 @@ function buildScheduleListItems(
 const TODAY_FOR_EMPTY = startOfDay(new Date());
 
 const SKELETON_CARD_COUNT = 4;
+const DEFAULT_WIDE_HEADER_SPACER = 56;
+const DEFAULT_PORTRAIT_HEADER_SPACER = 220;
 
 function ScheduleSkeletonCards() {
   return (
@@ -278,6 +281,8 @@ function ScheduleScreenNew() {
   const [refreshing, setRefreshing] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
   const [ctaVisible, setCtaVisible] = useState(true);
+  const [wideHeaderHeight, setWideHeaderHeight] = useState(DEFAULT_WIDE_HEADER_SPACER);
+  const [portraitHeaderHeight, setPortraitHeaderHeight] = useState(DEFAULT_PORTRAIT_HEADER_SPACER);
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
@@ -303,14 +308,21 @@ function ScheduleScreenNew() {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
   // Sidebar Resizer State
-  const [sidebarWidth, setSidebarWidth] = useState(400); // Default to 400px width
+  const MIN_SIDEBAR = 300;
+  const MIN_MAP = 300;
+  const RESIZER_HANDLE_WIDTH = 16;
+  const [sidebarWidth, setSidebarWidth] = useState(400);
   const [isResizing, setIsResizing] = useState(false);
   const sidebarWidthRef = useRef(400);
   const initialSidebarWidthRef = useRef(400);
+  const windowWidthRef = useRef(windowWidth);
 
   useEffect(() => {
     sidebarWidthRef.current = sidebarWidth;
   }, [sidebarWidth]);
+  useEffect(() => {
+    windowWidthRef.current = windowWidth;
+  }, [windowWidth]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -322,16 +334,44 @@ function ScheduleScreenNew() {
         setIsResizing(true);
         initialSidebarWidthRef.current = sidebarWidthRef.current;
       },
-      onPanResponderMove: (evt, gestureState) => {
+      onPanResponderMove: (_evt, gestureState) => {
+        const w = windowWidthRef.current;
+        const maxSidebar = w - MIN_MAP - RESIZER_HANDLE_WIDTH;
         let newWidth = initialSidebarWidthRef.current + gestureState.dx;
-        if (newWidth < 300) newWidth = 300;
-        if (newWidth > windowWidth - 300) newWidth = windowWidth - 300;
+        if (newWidth < MIN_SIDEBAR) newWidth = MIN_SIDEBAR;
+        if (newWidth > maxSidebar) newWidth = maxSidebar;
         setSidebarWidth(newWidth);
       },
       onPanResponderRelease: () => setIsResizing(false),
       onPanResponderTerminate: () => setIsResizing(false),
     })
   ).current;
+
+  // Web: mouse drag for resizer (PanResponder does not work with mouse on web)
+  const handleResizerMouseDown = useCallback((e: any) => {
+    if (Platform.OS !== 'web') return;
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    const native = e?.nativeEvent ?? e;
+    const startX = (native.clientX != null ? native.clientX : e?.clientX) ?? 0;
+    const startWidth = sidebarWidthRef.current;
+    const onMove = (e2: MouseEvent) => {
+      const w = windowWidthRef.current;
+      const maxSidebar = Math.max(MIN_SIDEBAR, w - MIN_MAP - RESIZER_HANDLE_WIDTH);
+      let newWidth = startWidth + (e2.clientX - startX);
+      if (newWidth < MIN_SIDEBAR) newWidth = MIN_SIDEBAR;
+      if (newWidth > maxSidebar) newWidth = maxSidebar;
+      setSidebarWidth(newWidth);
+    };
+    const onUp = () => {
+      setIsResizing(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    setIsResizing(true);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
 
   // Day Slider ref for custom scrolling navigation
   const daySliderRef = useRef<DaySliderRef>(null);
@@ -375,19 +415,13 @@ function ScheduleScreenNew() {
     if (legStats.length === 0) return null;
     const totalDriveSec = legStats.reduce((s, l) => s + l.durationSec, 0);
     const totalDistanceM = legStats.reduce((s, l) => s + l.distanceM, 0);
-    const lateCount = waitTimeBeforeMeetingMin.filter((w) => w < 0).length;
-    const tightCount = waitTimeBeforeMeetingMin.filter((w) => w >= 0 && w < 5).length;
-    const longWaitCount = waitTimeBeforeMeetingMin.filter((w) => w >= 30).length;
     return {
       totalDriveSec,
       totalDistanceM,
       departByMs,
       returnByMs,
-      tightCount,
-      lateCount,
-      longWaitCount,
     };
-  }, [legStats, waitTimeBeforeMeetingMin, departByMs, returnByMs]);
+  }, [legStats, departByMs, returnByMs]);
 
   useFocusEffect(
     useCallback(() => {
@@ -431,6 +465,33 @@ function ScheduleScreenNew() {
   const headerTitle = isSameDay(selectedDate, TODAY)
     ? "Today's Route"
     : format(selectedDate, 'EEE, MMM d');
+
+  const updateMeasuredHeaderHeight = useCallback(
+    (nextHeight: number, setHeight: React.Dispatch<React.SetStateAction<number>>) => {
+      if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
+      const rounded = Math.ceil(nextHeight);
+      setHeight((prev) => (Math.abs(prev - rounded) > 1 ? rounded : prev));
+    },
+    []
+  );
+
+  const handleWideHeaderLayout = useCallback(
+    (event: any) => {
+      const nextHeight = event?.nativeEvent?.layout?.height;
+      updateMeasuredHeaderHeight(nextHeight, setWideHeaderHeight);
+    },
+    [updateMeasuredHeaderHeight]
+  );
+
+  const handlePortraitHeaderLayout = useCallback(
+    (event: any) => {
+      const nextHeight = event?.nativeEvent?.layout?.height;
+      updateMeasuredHeaderHeight(nextHeight, setPortraitHeaderHeight);
+    },
+    [updateMeasuredHeaderHeight]
+  );
+
+  const topHeaderSpacerHeight = isWide ? wideHeaderHeight : portraitHeaderHeight;
 
   const handleDragEnd = useCallback(
     ({ data }: { data: ScheduleBlockItem[] }) => {
@@ -478,6 +539,13 @@ function ScheduleScreenNew() {
     setReorderMode(false);
   }, [canOptimizeRoute, showProUpgradeAlert, optimize, homeBase.lat, homeBase.lon]);
 
+  const getLateWrapStyle = (minutesLate: number) => {
+    if (minutesLate <= 0) return null;
+    if (minutesLate <= 10) return styles.meetingRowLateYellow;
+    if (minutesLate <= 15) return styles.meetingRowLateOrange;
+    return styles.meetingRowLateRed;
+  };
+
   const renderItem: ListRenderItem<ScheduleListItem> = ({ item }) => {
     if (item.type === 'leg') {
       return (
@@ -494,7 +562,9 @@ function ScheduleScreenNew() {
     const meeting = meetings[item.appointmentIndex]!;
     const event = appointmentsList[item.appointmentIndex]!;
     const hasCoords = event?.coordinates != null;
-    const isLate = (waitTimeBeforeMeetingMin[item.appointmentIndex] ?? 0) < 0;
+    const waitMin = waitTimeBeforeMeetingMin[item.appointmentIndex] ?? 0;
+    const minutesLate = waitMin < 0 ? Math.abs(Math.round(waitMin)) : 0;
+    const lateStyle = getLateWrapStyle(minutesLate);
     const row = (
       <SwipeableMeetingRow
         timeRange={meeting.timeRange}
@@ -505,6 +575,16 @@ function ScheduleScreenNew() {
         phone={event.phone}
         email={event.email}
         isCompleted={meeting.status === 'completed'}
+        onNavigate={
+          hasCoords
+            ? () =>
+                openNativeDirections(
+                  event!.coordinates!.latitude,
+                  event!.coordinates!.longitude,
+                  meeting.client
+                )
+            : undefined
+        }
         onEdit={() => navigation.navigate('MeetingDetails', { eventId: meeting.id })}
         onPress={
           hasCoords ? () => setHighlightWaypointIndex(item.appointmentIndex) : undefined
@@ -515,7 +595,7 @@ function ScheduleScreenNew() {
     const useArrowReorder = reorderMode && (Platform.OS === 'web' || !useDragList);
     if (useArrowReorder) {
       return (
-        <View style={[styles.meetingRowWithReorder, isLate && styles.meetingRowLate]}>
+        <View style={[styles.meetingRowWithReorder, lateStyle]}>
           <View style={styles.meetingRowMain}>{row}</View>
           <View style={styles.moveButtons}>
             <TouchableOpacity
@@ -539,8 +619,8 @@ function ScheduleScreenNew() {
         </View>
       );
     }
-    if (isLate) {
-      return <View style={styles.meetingRowLateWrap}>{row}</View>;
+    if (lateStyle) {
+      return <View style={[styles.meetingRowLateWrap, lateStyle]}>{row}</View>;
     }
     return row;
   };
@@ -557,9 +637,11 @@ function ScheduleScreenNew() {
       const hasCoords = event?.coordinates != null;
       const legAfter = getLegAfterMeeting(scheduleListItems, item.appointmentIndex);
       const legFromHome = getIndex() === 0 ? getLegFromHome(scheduleListItems) : null;
-      const isLate = (waitTimeBeforeMeetingMin[item.appointmentIndex] ?? 0) < 0;
+      const waitMinBlock = waitTimeBeforeMeetingMin[item.appointmentIndex] ?? 0;
+      const minutesLateBlock = waitMinBlock < 0 ? Math.abs(Math.round(waitMinBlock)) : 0;
+      const lateStyleBlock = getLateWrapStyle(minutesLateBlock);
       const block = (
-        <View style={[styles.blockRow, isActive && styles.blockRowActive, isLate && styles.meetingRowLate]}>
+        <View style={[styles.blockRow, isActive && styles.blockRowActive, lateStyleBlock]}>
           {isWide ? (
             <TouchableOpacity
               onLongPress={drag}
@@ -594,6 +676,16 @@ function ScheduleScreenNew() {
               phone={event.phone}
               email={event.email}
               isCompleted={meeting.status === 'completed'}
+              onNavigate={
+                hasCoords
+                  ? () =>
+                      openNativeDirections(
+                        event!.coordinates!.latitude,
+                        event!.coordinates!.longitude,
+                        meeting.client
+                      )
+                  : undefined
+              }
               onEdit={() => navigation.navigate('MeetingDetails', { eventId: meeting.id })}
               onPress={
                 hasCoords ? () => setHighlightWaypointIndex(item.appointmentIndex) : undefined
@@ -631,7 +723,7 @@ function ScheduleScreenNew() {
 
   const listHeader = (
     <>
-      <View style={{ height: isWide ? 56 : (daySummary ? 130 : 95) }} />
+      <View style={{ height: topHeaderSpacerHeight }} />
 
       {isWide && reorderMode && appointmentsList.length > 0 ? (
         <View style={styles.reorderBar}>
@@ -751,7 +843,10 @@ function ScheduleScreenNew() {
     return (
       <View style={[styles.container, isResizing && Platform.OS === 'web' ? { userSelect: 'none' } as any : null]}>
         {/* GLOBAL HEADER */}
-        <Animated.View style={[styles.globalHeaderWide, { transform: [{ translateY: headerTranslateY }] }]}>
+        <Animated.View
+          onLayout={handleWideHeaderLayout}
+          style={[styles.globalHeaderWide, { transform: [{ translateY: headerTranslateY }] }]}
+        >
           {/* Left: Date & Title */}
           <View style={styles.globalHeaderLeft}>
             <View style={styles.calendarIconSquare}>
@@ -763,49 +858,45 @@ function ScheduleScreenNew() {
             </View>
           </View>
 
-          {/* Center: Summary Stats */}
-          <View style={styles.globalHeaderCenter}>
-            {daySummary ? (
-              <DaySummaryBar
-                totalDriveSec={daySummary.totalDriveSec}
-                totalDistanceM={daySummary.totalDistanceM}
-                departByMs={daySummary.departByMs}
-                returnByMs={daySummary.returnByMs}
-                tightCount={daySummary.tightCount}
-                lateCount={daySummary.lateCount}
-                longWaitCount={daySummary.longWaitCount}
-              />
-            ) : null}
-          </View>
-
-          {/* Right: Day Slider */}
-          <View style={styles.globalHeaderRight}>
-            <TouchableOpacity
-              style={styles.desktopTodayButton}
-              onPress={() => onSelectDate(TODAY)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.desktopTodayText}>Today</Text>
-            </TouchableOpacity>
-
-            <View style={styles.unifiedDayStripContainer}>
-              <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(-5)}>
-                <ChevronLeft color="#333" size={18} />
-              </TouchableOpacity>
-
-              <View style={styles.desktopDaySliderWrap}>
-                <DaySlider
-                  ref={daySliderRef}
-                  selectedDate={selectedDate}
-                  onSelectDate={onSelectDate}
-                  meetingCountByDay={meetingCountByDay}
-                  onVisibleMonthChange={setVisibleMonthDate}
+          {/* Center: Info boxes (Time, Distance, Start, End) */}
+          <View style={styles.globalHeaderCenterRightWrap}>
+            <View style={styles.globalHeaderCenter}>
+              {daySummary ? (
+                <DaySummaryBar
+                  totalDriveSec={daySummary.totalDriveSec}
+                  totalDistanceM={daySummary.totalDistanceM}
+                  departByMs={daySummary.departByMs}
+                  returnByMs={daySummary.returnByMs}
                 />
-              </View>
+              ) : null}
+            </View>
 
-              <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(5)}>
-                <ChevronRight color="#333" size={18} />
+            {/* Right: Today + Day selector */}
+            <View style={styles.globalHeaderRight}>
+              <TouchableOpacity
+                style={styles.desktopTodayButton}
+                onPress={() => onSelectDate(TODAY)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.desktopTodayText}>Today</Text>
               </TouchableOpacity>
+              <View style={styles.unifiedDayStripContainer}>
+                <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(-5)}>
+                  <ChevronLeft color="#333" size={18} />
+                </TouchableOpacity>
+                <View style={styles.desktopDaySliderWrap}>
+                  <DaySlider
+                    ref={daySliderRef}
+                    selectedDate={selectedDate}
+                    onSelectDate={onSelectDate}
+                    meetingCountByDay={meetingCountByDay}
+                    onVisibleMonthChange={setVisibleMonthDate}
+                  />
+                </View>
+                <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(5)}>
+                  <ChevronRight color="#333" size={18} />
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </Animated.View>
@@ -816,10 +907,12 @@ function ScheduleScreenNew() {
             {scheduleContent}
           </View>
 
-          {/* Draggable Divider */}
+          {/* Draggable Divider - on web use mouse only; on native use PanResponder */}
           <View
             style={styles.resizerHandle}
-            {...panResponder.panHandlers}
+            {...(Platform.OS === 'web'
+              ? { onMouseDown: handleResizerMouseDown }
+              : panResponder.panHandlers)}
           >
             <View style={styles.resizerLine} />
           </View>
@@ -845,6 +938,14 @@ function ScheduleScreenNew() {
               )}
             </View>
           </View>
+
+          {/* Floating trial subscribe banner – does not mix with layout; logic to wire visibility later */}
+          <TrialSubscribeBanner
+            visible
+            trialEndsAtLabel="Dec 15, 2025"
+            onSubscribe={() => {}}
+            onDismiss={() => {}}
+          />
 
           {/* Floating Onboarding CTA (Option 1) for Desktop */}
           {!isSignedIn && isEmptyData && ctaVisible && (
@@ -879,7 +980,10 @@ function ScheduleScreenNew() {
   // Portrait layout fallback (old mobile)
   return (
     <View style={styles.container}>
-      <Animated.View style={[styles.globalHeaderPortrait, { transform: [{ translateY: headerTranslateY }] }]}>
+      <Animated.View
+        onLayout={handlePortraitHeaderLayout}
+        style={[styles.globalHeaderPortrait, { transform: [{ translateY: headerTranslateY }] }]}
+      >
         <View style={styles.globalHeaderPortraitTop}>
           <View style={styles.calendarIconSquare}>
             <Calendar color="#3B82F6" size={20} />
@@ -897,9 +1001,6 @@ function ScheduleScreenNew() {
               totalDistanceM={daySummary.totalDistanceM}
               departByMs={daySummary.departByMs}
               returnByMs={daySummary.returnByMs}
-              tightCount={daySummary.tightCount}
-              lateCount={daySummary.lateCount}
-              longWaitCount={daySummary.longWaitCount}
             />
           ) : null}
         </View>
@@ -913,12 +1014,10 @@ function ScheduleScreenNew() {
             >
               <Text style={styles.desktopTodayText}>Today</Text>
             </TouchableOpacity>
-
             <View style={styles.unifiedDayStripContainer}>
               <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(-5)}>
                 <ChevronLeft color="#333" size={18} />
               </TouchableOpacity>
-
               <View style={styles.daySliderWrap}>
                 <DaySlider
                   ref={daySliderRef}
@@ -928,7 +1027,6 @@ function ScheduleScreenNew() {
                   onVisibleMonthChange={setVisibleMonthDate}
                 />
               </View>
-
               <TouchableOpacity style={styles.chevronButton} onPress={() => daySliderRef.current?.scrollByDays(5)}>
                 <ChevronRight color="#333" size={18} />
               </TouchableOpacity>
@@ -961,12 +1059,13 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   resizerHandle: {
-    width: 12,
-    backgroundColor: '#F3F2F1', // We can keep the handle slightly distinct or match the white. Let's keep it subtle gray to show it's draggable, or use white. I'll make it #FAFAFA.
+    width: 16,
+    minWidth: 16,
+    backgroundColor: '#E2E8F0',
     alignItems: 'center',
     justifyContent: 'center',
-    // @ts-ignore
-    cursor: 'col-resize', // Web specific styling
+    // @ts-ignore - web
+    cursor: 'col-resize',
     touchAction: 'none',
     userSelect: 'none',
     zIndex: 50,
@@ -1095,11 +1194,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  meetingRowLate: {
+  /** Timeline late indicator: pastel yellow 0–10 min, orange 10–15, red >15 */
+  meetingRowLateYellow: {
+    backgroundColor: '#FEF9C3',
+    borderLeftWidth: 4,
+    borderLeftColor: '#EAB308',
+  },
+  meetingRowLateOrange: {
+    backgroundColor: '#FFEDD5',
+    borderLeftWidth: 4,
+    borderLeftColor: '#F97316',
+  },
+  meetingRowLateRed: {
     backgroundColor: '#FDE7E9',
+    borderLeftWidth: 4,
+    borderLeftColor: '#DC2626',
   },
   meetingRowLateWrap: {
-    backgroundColor: '#FDE7E9',
     marginBottom: 12,
   },
   meetingRowMain: {
@@ -1346,11 +1457,12 @@ const styles = StyleSheet.create({
   },
   globalHeaderWide: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
-    paddingVertical: 6, // Optimization
+    paddingVertical: 6,
     borderBottomWidth: 1,
     borderColor: '#E2E8F0',
     zIndex: 10,
@@ -1359,19 +1471,29 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
   },
+  /** Month + Today + day selector grouped on the left; no flex so they stay next to the month */
   globalHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     flexShrink: 0,
   },
+  globalHeaderCenterRightWrap: {
+    flex: 1,
+    minWidth: 620,
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
   globalHeaderCenter: {
     flex: 1,
+    minWidth: 420,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: -8, // Compensate for internal DaySummaryBar margins
+    marginTop: -8,
     marginBottom: -20,
-    minWidth: 0,
   },
   globalHeaderRight: {
     flexDirection: 'row',

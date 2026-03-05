@@ -8,6 +8,12 @@ type NominatimResponse = Array<{
   type?: string;
 }>;
 
+type NominatimSuggestResult = {
+  displayName: string;
+  lat: number;
+  lon: number;
+};
+
 export type GeocodeProviderResult = {
   lat: number;
   lon: number;
@@ -26,6 +32,23 @@ type GoogleGeocodePayload = {
       location_type?: string;
     };
   }>;
+};
+
+type GooglePlacesAutocompletePayload = {
+  suggestions?: Array<{
+    placePrediction?: {
+      placeId?: string;
+      text?: { text?: string };
+    };
+  }>;
+  error?: {
+    message?: string;
+  };
+};
+
+type GooglePlacesSuggestResult = {
+  displayName: string;
+  placeId?: string;
 };
 
 function getGoogleMapsApiKey() {
@@ -76,6 +99,54 @@ export async function geocodeAddressViaNominatim(input: {
     confidence: typeof first.importance === "number" ? first.importance : undefined,
     raw: first
   } satisfies GeocodeProviderResult;
+}
+
+export async function suggestAddressesViaNominatim(input: {
+  query: string;
+  countryCode?: string;
+  limit?: number;
+}) {
+  const params = new URLSearchParams({
+    format: "json",
+    addressdetails: "1",
+    limit: String(input.limit ?? 8),
+    q: input.query
+  });
+
+  if (input.countryCode) {
+    params.set("countrycodes", input.countryCode.toLowerCase());
+  }
+
+  const url = `https://nominatim.openstreetmap.org/search?${params.toString()}`;
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": env.GEOCODE_USER_AGENT
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Nominatim suggest request failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as NominatimResponse;
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  const suggestions: NominatimSuggestResult[] = [];
+  for (const row of payload) {
+    if (!row?.display_name) continue;
+    const lat = Number(row.lat);
+    const lon = Number(row.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    suggestions.push({
+      displayName: row.display_name,
+      lat,
+      lon
+    });
+  }
+
+  return suggestions;
 }
 
 export async function geocodeAddressViaGoogle(input: {
@@ -136,4 +207,61 @@ export async function geocodeAddressViaGoogle(input: {
               ? 0.45
               : undefined
   } satisfies GeocodeProviderResult;
+}
+
+export async function suggestAddressesViaGoogle(input: {
+  query: string;
+  countryCode?: string;
+  limit?: number;
+}) {
+  const apiKey = getGoogleMapsApiKey();
+  if (!apiKey) return [];
+
+  const body = {
+    input: input.query,
+    regionCode: input.countryCode?.toUpperCase() ?? "DK",
+    locationBias: {
+      circle: {
+        center: { latitude: 55.6761, longitude: 12.5683 },
+        radius: 50000
+      }
+    }
+  };
+
+  const response = await fetch("https://places.googleapis.com/v1/places:autocomplete", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey
+    },
+    body: JSON.stringify(body)
+  });
+
+  const payload = (await response.json()) as GooglePlacesAutocompletePayload;
+  if (!response.ok) {
+    const detail =
+      payload?.error?.message?.slice(0, 200) ??
+      `status ${response.status}`;
+    throw new Error(`Google places suggest request failed (${detail})`);
+  }
+
+  const out: GooglePlacesSuggestResult[] = [];
+  const seen = new Set<string>();
+  const max = Math.max(1, Math.min(input.limit ?? 8, 12));
+
+  for (const item of payload.suggestions ?? []) {
+    const pred = item.placePrediction;
+    const displayName = pred?.text?.text?.trim();
+    if (!displayName) continue;
+    const dedupeKey = displayName.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push({
+      displayName,
+      ...(pred?.placeId ? { placeId: pred.placeId } : {})
+    });
+    if (out.length >= max) break;
+  }
+
+  return out;
 }

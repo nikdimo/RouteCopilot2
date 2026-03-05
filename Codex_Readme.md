@@ -5,6 +5,117 @@
 - Do not run commands, open files, edit code, or execute tools until the user gives an explicit task.
 - If the user message is unclear, ask a short clarification question and wait.
 
+## Latest Session Update (2026-03-05, UI controls relocation + portrait overlap fix + wide-header experiment/revert)
+- User requests in this run:
+  1. Move dev/debug controls off the main route screen:
+     - map style selector (`1-5`)
+     - floating `Switch to Old UI` button
+     into `Dev -> UI` tab.
+  2. Fix portrait issue where meetings were hidden behind day selector/header.
+  3. Reorder wide header layout (month -> day selector -> info boxes) and align info boxes with map area.
+- Implemented:
+  1. Dev-only UI controls centralization:
+     - Added `src/context/DevUIContext.tsx` with:
+       - `showOldUI`
+       - `mockMapStyleIndex`
+     - Wrapped app with `DevUIProvider` in `App.tsx`.
+     - `src/screens/ScheduleScreen.tsx`:
+       - removed floating old/new button from main screen.
+       - now reads `showOldUI` from dev UI context.
+     - `src/components/emptyState/MockMap.tsx`:
+       - removed on-map `1-5` selector overlay.
+       - now uses `mockMapStyleIndex` from dev UI context.
+     - `src/screens/DevDocsScreen.tsx`:
+       - added new `UI` tab with:
+         - old/new schedule switch
+         - mock map style `1-5` selector.
+  2. Portrait header overlap fix:
+     - `src/screens/ScheduleScreenNew.tsx` now measures actual absolute header height (`onLayout`) and uses it for list top spacer.
+     - This replaced fragile fixed spacer values and prevents first meeting rows from hiding under day selector/header in portrait.
+  3. Wide header reorder experiments:
+     - Multiple layout attempts were made to place day selector near month and shift summary cards over map area.
+     - Regressions reported by user during test:
+       - oversized header height
+       - month text wrapping vertically
+       - too few visible day pills
+       - unsatisfactory summary-card sizing/alignment.
+     - Final state in this run:
+       - reverted wide-header rearrangement back to prior stable structure (month left, summary center, day selector right).
+- Coordination note (other agents):
+  1. User noted other agents were working on Profile and new-meeting/schedule areas in parallel.
+  2. This run avoided Profile/AddMeeting file edits; primary touched files were:
+     - `App.tsx`
+     - `src/context/DevUIContext.tsx`
+     - `src/screens/ScheduleScreen.tsx`
+     - `src/components/emptyState/MockMap.tsx`
+     - `src/screens/DevDocsScreen.tsx`
+     - `src/screens/ScheduleScreenNew.tsx` (header/spacer only in this run).
+- Validation/logistics:
+  1. Full local TypeScript validation remains unreliable in this environment (Node OOM / tooling limits).
+  2. Landing branch push check returned `Everything up-to-date`; no new commit was created in this run for landing rollback.
+
+## Latest Session Update (2026-03-04, web redeploy verification + backend/client compute split + Android readiness check)
+- User request:
+  1. Check why latest web app changes were not visible on `wiseplan.dk`.
+  2. Clarify whether route calculations and new-meeting slot suggestions run on VPS backend or on device.
+  3. Confirm if Android build can be generated now.
+- Actions and results:
+  1. Deployment gap confirmed:
+     - Local repo contains many uncommitted app changes.
+     - Earlier production update covered landing only, not full app state.
+  2. Web app rebuilt and redeployed:
+     - Build run with production backend env:
+       - `EXPO_PUBLIC_ENABLE_VPS_BACKEND=true`
+       - `EXPO_PUBLIC_BACKEND_API_URL=https://api.wiseplan.dk`
+     - New web bundle hash:
+       - `index-c34a8cd483a24182a4e1c68c3a85200d.js`
+     - Uploaded to VPS `~/app-deploy/` and published via:
+       - `sudo /usr/local/bin/wiseplan-deploy-app`
+     - Public verification:
+       - `https://wiseplan.dk/app/` now serves `index-c34a8cd483a24182a4e1c68c3a85200d.js`
+  3. Architecture clarification:
+     - Routes: backend-backed for signed-in users (`POST /api/route`), with server-side cache in `route_cache`.
+     - New meeting slot proposals (`Find best time`): still client-side (`findSmartSlots` / `src/utils/scheduler.ts`), not backend yet.
+  4. Android readiness:
+     - Android bundle export succeeded:
+       - `expo export --platform android` -> `_expo/static/js/android/index-5050faabafdeabd2fd0dc4815450e2c7.hbc`
+     - EAS config currently enforces committed state:
+       - `eas.json` -> `"requireCommit": true`
+     - Build prerequisite reminder:
+       - ensure production env vars are set for EAS builds (`EXPO_PUBLIC_ENABLE_VPS_BACKEND`, `EXPO_PUBLIC_BACKEND_API_URL`).
+- Validation limitations observed in this environment:
+  1. `npx expo-doctor` could not run due local npm permissions/network constraints.
+  2. Full `tsc --noEmit` hit local Node heap limits during this check.
+
+## Latest Session Update (2026-03-04, backend address suggestions deployed to production)
+- User request:
+  1. Deploy High-Precision/Google-backed address suggestion wiring to VPS production and verify it is live.
+- Changes deployed:
+  1. Backend provider + suggestion logic:
+     - `backend/src/providers/geocodeProvider.ts`
+     - Added Google suggestion path and Nominatim fallback path.
+  2. Backend API route:
+     - `backend/src/routes/geocodeRoute.ts`
+     - Added authenticated `POST /api/geocode/suggest`.
+     - Route checks user entitlements (`advancedGeocodingEnabled`) and uses Google for eligible users, with fallback behavior.
+  3. Frontend backend-client wiring:
+     - `src/services/backendApi.ts`
+     - Added `backendAddressSuggest(...)`.
+  4. Frontend geocoding flow:
+     - `src/utils/geocoding.ts`
+     - Suggestion flow now calls backend suggest first when auth token is available, then falls back to existing paths.
+- VPS deploy + verification completed:
+  1. Backend check/build passed on VPS.
+  2. `wiseplan-backend.service` restarted and active.
+  3. Health checks OK:
+     - `https://api.wiseplan.dk/api/health` -> `{"ok":true}`
+  4. Web bundle rebuilt/deployed to `/var/www/wiseplan-test/app`.
+  5. Verified deployed JS contains `/api/geocode/suggest` call.
+- Google key status:
+  1. Google geocode key now validates successfully in VPS test:
+     - status: `OK`
+     - error_message: `None`
+
 ## Latest Session Update (2026-03-04, refresh stability + meeting flicker resolved)
 - User-reported final issue set:
   1. Refresh previously signed user out (fixed earlier in session).

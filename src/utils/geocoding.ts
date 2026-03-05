@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEFAULT_HOME_BASE } from '../types';
-import { backendGeocode } from '../services/backendApi';
+import { backendAddressSuggest, backendGeocode } from '../services/backendApi';
 
 const CACHE_KEY_PREFIX = 'wiseplan_geocode_';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -262,6 +262,30 @@ export async function getAddressSuggestions(
     params.set('countrycodes', countryCode);
   }
 
+  const suggestFromBackend = async (): Promise<AddressSuggestion[] | null> => {
+    const authToken = options?.authToken?.trim();
+    if (!authToken) return null;
+    const remote = await backendAddressSuggest(
+      {
+        query: trimmed,
+        ...(countryCode ? { countryCode } : {}),
+      },
+      authToken
+    );
+    if (!remote || !Array.isArray(remote.suggestions)) return null;
+    const suggestions = remote.suggestions
+      .filter((s) => typeof s?.displayName === 'string' && s.displayName.trim().length > 0)
+      .map((s) => ({
+        displayName: s.displayName.trim(),
+        ...(typeof s.lat === 'number' && Number.isFinite(s.lat) ? { lat: s.lat } : {}),
+        ...(typeof s.lon === 'number' && Number.isFinite(s.lon) ? { lon: s.lon } : {}),
+        ...(typeof s.placeId === 'string' && s.placeId.trim().length > 0
+          ? { placeId: s.placeId.trim() }
+          : {}),
+      }));
+    return suggestions.length > 0 ? suggestions : [];
+  };
+
   const fallbackFromBackend = async (): Promise<AddressSuggestion[] | null> => {
     const authToken = options?.authToken?.trim();
     if (!authToken) return null;
@@ -296,12 +320,17 @@ export async function getAddressSuggestions(
   };
 
   try {
+    const directBackendSuggestions = await suggestFromBackend();
+    if (directBackendSuggestions && directBackendSuggestions.length > 0) {
+      return { success: true, suggestions: directBackendSuggestions };
+    }
+
     const res = await fetch(`${NOMINATIM_URL}?${params.toString()}`, {
       headers: { 'User-Agent': USER_AGENT },
     });
 
     if (!res.ok) {
-      const backendSuggestions = await fallbackFromBackend();
+      const backendSuggestions = directBackendSuggestions ?? (await fallbackFromBackend());
       if (backendSuggestions) {
         return { success: true, suggestions: backendSuggestions };
       }
@@ -331,14 +360,15 @@ export async function getAddressSuggestions(
       return { success: true, suggestions };
     }
 
-    const backendSuggestions = await fallbackFromBackend();
+    const backendSuggestions = directBackendSuggestions ?? (await fallbackFromBackend());
     if (backendSuggestions) {
       return { success: true, suggestions: backendSuggestions };
     }
 
     return { success: true, suggestions: [] };
   } catch (err) {
-    const backendSuggestions = await fallbackFromBackend();
+    const directBackendSuggestions = await suggestFromBackend();
+    const backendSuggestions = directBackendSuggestions ?? (await fallbackFromBackend());
     if (backendSuggestions) {
       return { success: true, suggestions: backendSuggestions };
     }

@@ -75,28 +75,74 @@ export default function MeetingCard({
         variantBooked && styles.cardBooked,
         isCompleted && styles.cardCompleted
       ]}>
-        {/* Type Badge from Mockup */}
-        <View style={styles.typeBadge}>
-          <Text style={styles.typeBadgeText}>
-            {waypointNumber === 'HOME' ? 'HOME' : 'MEETING'}
-          </Text>
-        </View>
-
-        {/* Main Text */}
-        <View style={styles.main}>
+        {/* Title row: client name + communication tools on same line */}
+        <View style={styles.titleRow}>
           <Text style={[styles.client, isCompleted && styles.strikeThrough]} numberOfLines={1}>
             {client}
           </Text>
-          <View style={styles.addressRow}>
-            <MapPin color={TEXT_MUTED} size={14} style={styles.addressIcon} />
-            <Text style={[styles.address, isCompleted && styles.strikeThrough]} numberOfLines={2}>
-              {address}
-            </Text>
-          </View>
+          {(onNavigate != null || hasPhone || hasEmail) && (
+            <View style={styles.actionsInline}>
+              {hasPhone && (
+                <TouchableOpacity
+                  style={styles.actionIcon}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    Linking.openURL(`tel:${phone!.trim()}`);
+                  }}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Phone color={MS_BLUE} size={18} />
+                </TouchableOpacity>
+              )}
+              {hasPhone && (
+                <TouchableOpacity
+                  style={styles.actionIcon}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    Linking.openURL(`sms:${phone!.trim()}`);
+                  }}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <MessageCircle color={MS_BLUE} size={18} />
+                </TouchableOpacity>
+              )}
+              {hasEmail && (
+                <TouchableOpacity
+                  style={styles.actionIcon}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    Linking.openURL(`mailto:${email!.trim()}`);
+                  }}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Mail color={MS_BLUE} size={18} />
+                </TouchableOpacity>
+              )}
+              {onNavigate != null && (
+                <TouchableOpacity
+                  style={styles.actionIcon}
+                  onPress={(e) => {
+                    e?.stopPropagation?.();
+                    onNavigate();
+                  }}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Navigation color={MS_BLUE} size={18} />
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
         </View>
-
-
-
+        <View style={styles.addressRow}>
+          <MapPin color={TEXT_MUTED} size={14} style={styles.addressIcon} />
+          <Text style={[styles.address, isCompleted && styles.strikeThrough]} numberOfLines={2}>
+            {address}
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -116,12 +162,12 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     marginBottom: 8,
-    minHeight: 100,
+    minHeight: 64,
   },
   timelineCol: {
     width: 50,
     alignItems: 'flex-end',
-    paddingTop: 16,
+    paddingTop: 8,
     paddingRight: 10,
   },
   timeText: {
@@ -137,7 +183,7 @@ const styles = StyleSheet.create({
   nodeCol: {
     width: 24,
     alignItems: 'center',
-    paddingTop: 16,
+    paddingTop: 8,
     position: 'relative',
     marginRight: 10,
   },
@@ -174,17 +220,17 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#F1F5F9',
-    padding: 12,
+    padding: 8,
     ...Platform.select({
       web: {
-        boxShadow: '0px 1px 4px rgba(0, 0, 0, 0.03)',
+        boxShadow: '0px 2px 8px rgba(0, 0, 0, 0.08), 0px 1px 2px rgba(0, 0, 0, 0.04)',
       },
       default: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.03,
-        shadowRadius: 4,
-        elevation: 2,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 6,
+        elevation: 4,
       },
     }),
   },
@@ -200,28 +246,36 @@ const styles = StyleSheet.create({
     textDecorationLine: 'line-through',
     color: '#94A3B8',
   },
-  main: {
-    marginBottom: 8,
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 2,
+    minHeight: 20,
   },
   client: {
+    flex: 1,
     fontSize: 14,
     fontWeight: '700',
-    color: '#0F172A', // darker text for main details
+    color: '#0F172A',
+    minWidth: 0,
   },
-  typeBadge: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    backgroundColor: '#F1F5F9', // light grey 
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+  actionsInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 0,
   },
-  typeBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#64748B',
-    letterSpacing: 0.8,
+  actionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   addressRow: {
     flexDirection: 'row',
@@ -229,13 +283,13 @@ const styles = StyleSheet.create({
     paddingRight: 10,
   },
   addressIcon: {
-    marginTop: 2,
+    marginTop: 1,
     marginRight: 6,
   },
   address: {
     fontSize: 13,
     color: TEXT_MUTED,
-    lineHeight: 18,
+    lineHeight: 16,
     flex: 1,
   },
   actionsFooter: {

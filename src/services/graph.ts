@@ -89,6 +89,8 @@ export type CalendarEvent = {
   phone?: string;
   /** Contact email for mail button (populated from contact lookup when available) */
   email?: string;
+  /** Preview of the event description/body */
+  bodyPreview?: string;
 };
 
 type GraphLocationCoordinates = {
@@ -449,31 +451,31 @@ export async function enrichCalendarEventsWithContactAddresses(
 
   // Rate-limit contact + geocode lookups to avoid Graph 429 bursts.
   await limitConcurrency(uniqueLocations, 2, async (loc) => {
-      await new Promise(resolve => setTimeout(resolve, 120));
-      const result = await searchContacts(token, loc);
-      if (!result.success || !result.contacts || result.contacts.length === 0) return;
+    await new Promise(resolve => setTimeout(resolve, 120));
+    const result = await searchContacts(token, loc);
+    if (!result.success || !result.contacts || result.contacts.length === 0) return;
 
-      const exactMatch = result.contacts.find(
-        (c) => c.displayName.toLowerCase() === loc.toLowerCase() && c.hasAddress
-      );
-      const contact = exactMatch ?? result.contacts.find((c) => c.hasAddress);
-      if (!contact?.hasAddress || !contact.formattedAddress) return;
+    const exactMatch = result.contacts.find(
+      (c) => c.displayName.toLowerCase() === loc.toLowerCase() && c.hasAddress
+    );
+    const contact = exactMatch ?? result.contacts.find((c) => c.hasAddress);
+    if (!contact?.hasAddress || !contact.formattedAddress) return;
 
-      const geocodeResult = await geocodeContactAddress(
-        contact.formattedAddress,
-        contact.bestAddress,
-        { authToken: token }
-      );
-      // Don't use home fallback for calendar enrichment — avoids clustering all points at home when geocoding fails (e.g. on first load on mobile).
-      if (!geocodeResult.success || geocodeResult.usedFallback) return;
+    const geocodeResult = await geocodeContactAddress(
+      contact.formattedAddress,
+      contact.bestAddress,
+      { authToken: token }
+    );
+    // Don't use home fallback for calendar enrichment — avoids clustering all points at home when geocoding fails (e.g. on first load on mobile).
+    if (!geocodeResult.success || geocodeResult.usedFallback) return;
 
-      locationToEnriched.set(loc, {
-        location: contact.formattedAddress,
-        coordinates: { latitude: geocodeResult.lat, longitude: geocodeResult.lon },
-        phone: contact.phones[0]?.trim() || undefined,
-        email: contact.emails[0]?.trim() || undefined,
-      });
+    locationToEnriched.set(loc, {
+      location: contact.formattedAddress,
+      coordinates: { latitude: geocodeResult.lat, longitude: geocodeResult.lon },
+      phone: contact.phones[0]?.trim() || undefined,
+      email: contact.emails[0]?.trim() || undefined,
     });
+  });
 
   if (locationToEnriched.size === 0) return events;
 
