@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 import {
   Calendar,
   Car,
@@ -171,17 +172,30 @@ function BufferCircleSlider({ value, onValueChange, onSlidingComplete, canEdit }
     return Math.min(BUFFER_SLIDER_MAX, Math.max(0, v));
   }, []);
 
+  const handleGestureUpdate = useCallback(
+    (absoluteX: number) => {
+      onValueChange(pixelToValue(absoluteX));
+    },
+    [onValueChange, pixelToValue]
+  );
+
+  const handleGestureEnd = useCallback(() => {
+    onSlidingComplete();
+  }, [onSlidingComplete]);
+
   const panGesture = useMemo(
     () =>
       Gesture.Pan()
         .enabled(canEdit)
+        .activeOffsetX([-4, 4])
+        .failOffsetY([-20, 20])
         .onUpdate((e) => {
-          onValueChange(pixelToValue(e.absoluteX));
+          runOnJS(handleGestureUpdate)(e.absoluteX);
         })
         .onEnd(() => {
-          onSlidingComplete();
+          runOnJS(handleGestureEnd)();
         }),
-    [canEdit, pixelToValue, onValueChange, onSlidingComplete]
+    [canEdit, handleGestureEnd, handleGestureUpdate]
   );
 
   const thumbLeft = (value / BUFFER_SLIDER_MAX) * trackWidth - RANGE_THUMB_SIZE / 2;
@@ -264,36 +278,58 @@ function WorkingHoursRangeSlider({
     return Math.min(MAX_SLOT_15, Math.max(0, slot));
   }, []);
 
+  const handleLeftUpdate = useCallback(
+    (absoluteX: number) => {
+      const slot15 = pixelToSlot15(absoluteX);
+      const end15 = slot5ToSlot15(workEndSlot);
+      const clamped = Math.min(slot15, end15 - 1);
+      if (clamped >= 0) onStartChange(slot15ToSlot5(clamped));
+    },
+    [onStartChange, pixelToSlot15, workEndSlot]
+  );
+
+  const handleRightUpdate = useCallback(
+    (absoluteX: number) => {
+      const slot15 = pixelToSlot15(absoluteX);
+      const start15 = slot5ToSlot15(workStartSlot);
+      const clamped = Math.max(slot15, start15 + 1);
+      if (clamped <= MAX_SLOT_15) onEndChange(slot15ToSlot5(clamped));
+    },
+    [onEndChange, pixelToSlot15, workStartSlot]
+  );
+
+  const handleRangeEnd = useCallback(() => {
+    onSlidingComplete(workStartSlot, workEndSlot);
+  }, [onSlidingComplete, workEndSlot, workStartSlot]);
+
   const leftThumbGesture = useMemo(
     () =>
       Gesture.Pan()
         .enabled(canEdit)
+        .activeOffsetX([-4, 4])
+        .failOffsetY([-20, 20])
         .onUpdate((e) => {
-          const slot15 = pixelToSlot15(e.absoluteX);
-          const end15 = slot5ToSlot15(workEndSlot);
-          const clamped = Math.min(slot15, end15 - 1);
-          if (clamped >= 0) onStartChange(slot15ToSlot5(clamped));
+          runOnJS(handleLeftUpdate)(e.absoluteX);
         })
         .onEnd(() => {
-          onSlidingComplete(workStartSlot, workEndSlot);
+          runOnJS(handleRangeEnd)();
         }),
-    [canEdit, pixelToSlot15, workEndSlot, workStartSlot, onStartChange, onSlidingComplete]
+    [canEdit, handleLeftUpdate, handleRangeEnd]
   );
 
   const rightThumbGesture = useMemo(
     () =>
       Gesture.Pan()
         .enabled(canEdit)
+        .activeOffsetX([-4, 4])
+        .failOffsetY([-20, 20])
         .onUpdate((e) => {
-          const slot15 = pixelToSlot15(e.absoluteX);
-          const start15 = slot5ToSlot15(workStartSlot);
-          const clamped = Math.max(slot15, start15 + 1);
-          if (clamped <= MAX_SLOT_15) onEndChange(slot15ToSlot5(clamped));
+          runOnJS(handleRightUpdate)(e.absoluteX);
         })
         .onEnd(() => {
-          onSlidingComplete(workStartSlot, workEndSlot);
+          runOnJS(handleRangeEnd)();
         }),
-    [canEdit, pixelToSlot15, workStartSlot, workEndSlot, onEndChange, onSlidingComplete]
+    [canEdit, handleRangeEnd, handleRightUpdate]
   );
 
   const start15 = slot5ToSlot15(workStartSlot);
@@ -472,13 +508,15 @@ export default function ProfileScreen() {
     profileAccess.trialPlanCode !== 'basic';
 
   const workingDays = preferences.workingDays ?? DEFAULT_WORKING_DAYS;
-  const useGoogle = canUseBetterGeocoding && preferences.useGoogleGeocoding === true;
+  const highPrecisionEnabled = preferences.useGoogleGeocoding === true;
+  const useGoogle = canUseBetterGeocoding && highPrecisionEnabled;
   const useTrafficRouting = canUseTrafficAwareRouting && preferences.useTrafficAwareRouting === true;
   const googleApiKey = (preferences.googleMapsApiKey ?? '').trim();
   const useGoogleWithKey = useGoogle && googleApiKey.length > 0;
   const preferredCountryCode = inferCountryCodeFromHomeBase(preferences.homeBase);
   const token = canSyncCalendar ? userToken ?? null : null;
-  const calendarSyncEnabled = canSyncCalendar && graphConnected;
+  const calendarSyncEnabled = canSyncCalendar && preferences.calendarConnected === true;
+  const calendarConnectionHealthy = calendarSyncEnabled && graphConnected;
 
   const initials = useMemo(() => {
     if (!userData?.displayName) return 'G';
@@ -807,15 +845,23 @@ export default function ProfileScreen() {
   };
 
   const handleToggleAdvancedGeocoding = (value: boolean) => {
-    if (!canEditSettings) {
-      showLockedSettingsMessage();
-      return;
-    }
     if (value && !canUseBetterGeocoding) {
       void requestPlansEmailForFeature('basic', 'High-Precision Search', 'geocode.provider.premium');
       return;
     }
-    void saveProfilePatch({ useGoogleGeocoding: value }, 'advanced');
+    const patch: BackendProfileSettingsPatch = { useGoogleGeocoding: value };
+    applyLocalPatch(patch);
+    if (canEditSettings) {
+      void saveProfilePatch(patch, 'advanced');
+    }
+  };
+
+  const handleToggleReturnToBase = (value: boolean) => {
+    const patch: BackendProfileSettingsPatch = { alwaysStartFromHomeBase: value };
+    applyLocalPatch(patch);
+    if (canEditSettings) {
+      void saveProfilePatch(patch);
+    }
   };
 
   const handleToggleTrafficRouting = (value: boolean) => {
@@ -1310,13 +1356,7 @@ export default function ProfileScreen() {
           </View>
           <Switch
             value={preferences.alwaysStartFromHomeBase !== false}
-            onValueChange={(value) => {
-              if (!canEditSettings) {
-                showLockedSettingsMessage();
-                return;
-              }
-              void saveProfilePatch({ alwaysStartFromHomeBase: value });
-            }}
+            onValueChange={handleToggleReturnToBase}
             trackColor={{ false: '#E2E8F0', true: '#3B82F6' }}
             thumbColor="#FFFFFF"
           />
@@ -1337,7 +1377,7 @@ export default function ProfileScreen() {
             </Text>
           </View>
           <Switch
-            value={useGoogle}
+            value={highPrecisionEnabled}
             onValueChange={handleToggleAdvancedGeocoding}
             disabled={featureUpdateKey !== null}
             trackColor={{ false: '#E2E8F0', true: '#3B82F6' }}
@@ -1444,7 +1484,7 @@ export default function ProfileScreen() {
               </View>
             </View>
             <Text style={styles.toggleSubtitle}>
-              {calendarSyncEnabled
+              {calendarConnectionHealthy
                 ? 'Calendar connected. Your profile is ready for sync-enabled planning.'
                 : 'Connect your Microsoft account to enable calendar and contact sync.'}
             </Text>
@@ -1457,7 +1497,7 @@ export default function ProfileScreen() {
             thumbColor="#FFFFFF"
           />
         </View>
-        {!calendarSyncEnabled && userToken && canSyncCalendar ? (
+        {userToken && canSyncCalendar && !graphConnected ? (
           <TouchableOpacity
             onPress={() => setShowOutlookConnectModal(true)}
             activeOpacity={0.8}

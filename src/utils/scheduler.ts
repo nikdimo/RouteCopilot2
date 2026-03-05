@@ -3,6 +3,7 @@ import { toLocalDayKey } from './dateUtils';
 import type { UserPreferences } from '../types';
 import { DEFAULT_WORKING_DAYS } from '../types';
 import type { CalendarEvent } from '../services/graph';
+import { runMapPreviewInsertionQA } from './mapPreview';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -335,6 +336,20 @@ function snapStartMsDown(rawMs: number): number {
   return Math.floor(rawMs / gridMs) * gridMs;
 }
 
+/** For earlier pushes, snap resulting start to previous 15-min boundary. */
+function snapShiftEarlierMsToGrid(baseStartMs: number, minShiftMs: number): number {
+  if (minShiftMs <= 0) return 0;
+  const targetStartMs = snapStartMsDown(baseStartMs - minShiftMs);
+  return Math.max(0, baseStartMs - targetStartMs);
+}
+
+/** For later pushes, snap resulting start to next 15-min boundary. */
+function snapShiftLaterMsToGrid(baseStartMs: number, minShiftMs: number): number {
+  if (minShiftMs <= 0) return 0;
+  const targetStartMs = snapStartMsUp(baseStartMs + minShiftMs);
+  return Math.max(0, targetStartMs - baseStartMs);
+}
+
 /** True if [aStart, aEnd] overlaps [bStart, bEnd]. */
 function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return aStart < bEnd && aEnd > bStart;
@@ -516,9 +531,10 @@ function buildEarlierDominoPlan(
 
   for (let idx = startIndex; idx >= 0 && requiredForCurrent > 0; idx--) {
     const ev = dayEvents[idx]!;
-    if (requiredForCurrent > ev.maxShiftEarlierMs) return null;
-    shiftsByIndex.set(idx, requiredForCurrent);
-    requiredForCurrent = Math.max(0, requiredForCurrent - (gapBeforeMs[idx] ?? 0));
+    const snappedShiftMs = snapShiftEarlierMsToGrid(ev.startMs, requiredForCurrent);
+    if (snappedShiftMs > ev.maxShiftEarlierMs) return null;
+    shiftsByIndex.set(idx, snappedShiftMs);
+    requiredForCurrent = Math.max(0, snappedShiftMs - (gapBeforeMs[idx] ?? 0));
   }
 
   if (requiredForCurrent > 0) return null;
@@ -546,9 +562,10 @@ function buildLaterDominoPlan(
 
   for (let idx = startIndex; idx < dayEvents.length && requiredForCurrent > 0; idx++) {
     const ev = dayEvents[idx]!;
-    if (requiredForCurrent > ev.maxShiftLaterMs) return null;
-    shiftsByIndex.set(idx, requiredForCurrent);
-    requiredForCurrent = Math.max(0, requiredForCurrent - (gapAfterMs[idx] ?? 0));
+    const snappedShiftMs = snapShiftLaterMsToGrid(ev.startMs, requiredForCurrent);
+    if (snappedShiftMs > ev.maxShiftLaterMs) return null;
+    shiftsByIndex.set(idx, snappedShiftMs);
+    requiredForCurrent = Math.max(0, snappedShiftMs - (gapAfterMs[idx] ?? 0));
   }
 
   if (requiredForCurrent > 0) return null;
@@ -942,7 +959,11 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
             const departCandidateMs = prevDepartBaseMs - requiredPrevShiftMs;
             const travelCandidateMinutes = getTravelMinutes(prev.coord, newLoc, departCandidateMs);
             const requiredStartBaseMs = prevDepartBaseMs + (travelCandidateMinutes + preBuffer) * MS_PER_MIN;
-            const recomputed = Math.max(0, requiredStartBaseMs - meetingStartMs);
+            const minRequiredShiftMs = Math.max(0, requiredStartBaseMs - meetingStartMs);
+            const recomputed =
+              prev.type === 'event'
+                ? snapShiftEarlierMsToGrid(prev.startMs, minRequiredShiftMs)
+                : minRequiredShiftMs;
             if (recomputed === requiredPrevShiftMs) {
               travelToMinutes = travelCandidateMinutes;
               break;
@@ -1000,7 +1021,11 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
 
         if (!bufferWaivedAtEnd) {
           const requiredArrivalMs = departAtMs + travelFromMinutes * MS_PER_MIN;
-          const requiredNextShiftMs = Math.max(0, requiredArrivalMs - nextArriveByBaseMs);
+          const minRequiredShiftMs = Math.max(0, requiredArrivalMs - nextArriveByBaseMs);
+          const requiredNextShiftMs =
+            next.type === 'event'
+              ? snapShiftLaterMsToGrid(next.startMs, minRequiredShiftMs)
+              : minRequiredShiftMs;
           if (requiredNextShiftMs > nextShiftLaterMaxMs) {
             qaReject("Can't reach next meeting in time within flex chain");
             continue;
@@ -1893,6 +1918,9 @@ export function runFullQASuite(): void {
 
   const rankRes = runPusherRankingQA();
   results.push({ name: 'Pusher ranking QA (0 km vs +15.8 km)', ok: rankRes.pass, msg: rankRes.message });
+
+  const previewRes = runMapPreviewInsertionQA();
+  results.push({ name: 'Map preview insertion QA (anchor-consistent sequence)', ok: previewRes.pass, msg: previewRes.message });
 
   console.log('=== Scheduler QA Suite ===');
   results.forEach((r) => {

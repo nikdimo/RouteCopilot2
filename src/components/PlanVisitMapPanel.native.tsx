@@ -3,7 +3,7 @@ import { View, StyleSheet } from 'react-native';
 import type { CalendarEvent } from '../services/graph';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { Coordinate } from '../utils/scheduler';
-import { buildRouteWithInsertion } from '../utils/mapPreview';
+import { buildRouteWithInsertionMeta } from '../utils/mapPreview';
 import NativeLeafletMap, {
   type LeafletCoordinate,
   type LeafletMarker,
@@ -15,6 +15,7 @@ export type PlanVisitMapPanelProps = {
   slot?: ScoredSlot | null;
   dayEvents?: CalendarEvent[];
   homeBase: Coordinate;
+  highlightedEventIds?: string[];
 };
 
 const DEFAULT_COORD: LeafletCoordinate = {
@@ -27,7 +28,9 @@ export default function PlanVisitMapPanel({
   slot,
   dayEvents = [],
   homeBase,
+  highlightedEventIds = [],
 }: PlanVisitMapPanelProps) {
+  const highlightedSet = useMemo(() => new Set(highlightedEventIds), [highlightedEventIds]);
   const homePoint = useMemo(
     () => ({ latitude: homeBase.lat, longitude: homeBase.lon }),
     [homeBase.lat, homeBase.lon]
@@ -41,12 +44,27 @@ export default function PlanVisitMapPanel({
     [newLocation]
   );
 
-  const coordsWithInsertion = useMemo(
+  const routeWithInsertion = useMemo(
     () =>
       slot != null && newLocation != null && dayEvents.length > 0
-        ? buildRouteWithInsertion(dayEvents, newLocation, slot, homeBase)
-        : [],
+        ? buildRouteWithInsertionMeta(dayEvents, newLocation, slot, homeBase, 'NEW')
+        : null,
     [dayEvents, homeBase, newLocation, slot]
+  );
+  const coordsWithInsertion = routeWithInsertion?.coordsWithInsertion ?? [];
+  const sortedEventIds = routeWithInsertion?.sortedEventIds ?? [];
+
+  const eventById = useMemo(
+    () =>
+      new Map(
+        dayEvents
+          .filter(
+            (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
+              a.coordinates != null
+          )
+          .map((a) => [a.id, a])
+      ),
+    [dayEvents]
   );
 
   const coordsForFit = useMemo(
@@ -80,23 +98,21 @@ export default function PlanVisitMapPanel({
       });
     }
 
-    dayEvents
-      .filter(
-        (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
-          a.coordinates != null
-      )
+    sortedEventIds
+      .map((id) => eventById.get(id))
+      .filter((a): a is NonNullable<typeof a> => a != null)
       .forEach((a, index) => {
         markers.push({
           id: `event-${a.id}`,
           coordinate: a.coordinates,
           label: String(index + 1),
           title: a.title ?? undefined,
-          color: '#0078D4',
+          color: highlightedSet.has(a.id) ? '#EAB308' : '#0078D4',
         });
       });
 
     return markers;
-  }, [dayEvents, homePoint, insertionPoint]);
+  }, [eventById, highlightedSet, homePoint, insertionPoint, sortedEventIds]);
 
   const mapPolylines = useMemo<LeafletPolyline[]>(
     () =>

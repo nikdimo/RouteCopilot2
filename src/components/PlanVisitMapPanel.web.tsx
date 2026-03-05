@@ -5,7 +5,7 @@ import L from 'leaflet';
 import type { CalendarEvent } from '../services/graph';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { Coordinate } from '../utils/scheduler';
-import { buildRouteWithInsertion } from '../utils/mapPreview';
+import { buildRouteWithInsertionMeta } from '../utils/mapPreview';
 
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.webpack.css';
@@ -66,10 +66,21 @@ export default function PlanVisitMapPanel({
   const insertionPos: [number, number] | null =
     newLocation != null ? [newLocation.lat, newLocation.lon] : null;
 
-  const coordsWithInsertion =
+  const routeWithInsertion =
     slot != null && newLocation != null && dayEvents.length > 0
-      ? buildRouteWithInsertion(dayEvents, newLocation, slot, homeBase)
-      : [];
+      ? buildRouteWithInsertionMeta(dayEvents, newLocation, slot, homeBase, 'NEW')
+      : null;
+
+  const coordsWithInsertion = routeWithInsertion?.coordsWithInsertion ?? [];
+  const sortedEventIds = routeWithInsertion?.sortedEventIds ?? [];
+  const eventById = new Map(
+    dayEvents
+      .filter(
+        (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
+          a.coordinates != null
+      )
+      .map((a) => [a.id, a])
+  );
 
   const polylinePositions: [number, number][] =
     coordsWithInsertion.length >= 2
@@ -107,11 +118,9 @@ export default function PlanVisitMapPanel({
               icon={createIcon('#D13438', '!')}
             />
           )}
-          {dayEvents
-            .filter(
-              (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
-                a.coordinates != null
-            )
+          {sortedEventIds
+            .map((id) => eventById.get(id))
+            .filter((a): a is NonNullable<typeof a> => a != null)
             .map((a, i) => (
               <Marker
                 key={a.id}

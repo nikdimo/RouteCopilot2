@@ -4,7 +4,7 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import type { CalendarEvent } from '../services/graph';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { Coordinate } from '../utils/scheduler';
-import { buildRouteWithInsertion } from '../utils/mapPreview';
+import { buildRouteWithInsertionMeta } from '../utils/mapPreview';
 
 export type PlanVisitMapPanelProps = {
   /** Selected address (before Find Best Time) – shows single pin */
@@ -13,6 +13,7 @@ export type PlanVisitMapPanelProps = {
   slot?: ScoredSlot | null;
   dayEvents?: CalendarEvent[];
   homeBase: Coordinate;
+  highlightedEventIds?: string[];
 };
 
 const DEFAULT_REGION = {
@@ -27,8 +28,13 @@ export default function PlanVisitMapPanel({
   slot,
   dayEvents = [],
   homeBase,
+  highlightedEventIds = [],
 }: PlanVisitMapPanelProps) {
   const mapRef = useRef<MapView>(null);
+  const highlightedSet = React.useMemo(
+    () => new Set(highlightedEventIds),
+    [highlightedEventIds]
+  );
 
   const homePoint = { latitude: homeBase.lat, longitude: homeBase.lon };
   const insertionPoint =
@@ -36,10 +42,28 @@ export default function PlanVisitMapPanel({
       ? { latitude: newLocation.lat, longitude: newLocation.lon }
       : null;
 
-  const coordsWithInsertion =
-    slot != null && newLocation != null && dayEvents.length > 0
-      ? buildRouteWithInsertion(dayEvents, newLocation, slot, homeBase)
-      : [];
+  const routeWithInsertion = React.useMemo(
+    () =>
+      slot != null && newLocation != null && dayEvents.length > 0
+        ? buildRouteWithInsertionMeta(dayEvents, newLocation, slot, homeBase, 'NEW')
+        : null,
+    [dayEvents, homeBase, newLocation, slot]
+  );
+
+  const coordsWithInsertion = routeWithInsertion?.coordsWithInsertion ?? [];
+  const sortedEventIds = routeWithInsertion?.sortedEventIds ?? [];
+  const eventById = React.useMemo(
+    () =>
+      new Map(
+        dayEvents
+          .filter(
+            (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
+              a.coordinates != null
+          )
+          .map((a) => [a.id, a])
+      ),
+    [dayEvents]
+  );
 
   const coordsForFit =
     coordsWithInsertion.length >= 2
@@ -102,17 +126,15 @@ export default function PlanVisitMapPanel({
             pinColor="#D13438"
           />
         )}
-        {dayEvents
-          .filter(
-            (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
-              a.coordinates != null
-          )
+        {sortedEventIds
+          .map((id) => eventById.get(id))
+          .filter((a): a is NonNullable<typeof a> => a != null)
           .map((a) => (
             <Marker
               key={a.id}
               coordinate={a.coordinates}
               title={a.title ?? undefined}
-              pinColor="#0078D4"
+              pinColor={highlightedSet.has(a.id) ? '#EAB308' : '#0078D4'}
             />
           ))}
         {coordsWithInsertion.length >= 2 && (

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  type LayoutChangeEvent,
   View,
   Text,
   StyleSheet,
@@ -11,12 +12,29 @@ import {
   Platform,
   Switch,
 } from 'react-native';
-import { X, Users, Clock, MapPin, AlignLeft, ChevronDown } from 'lucide-react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
+import { X, Users, Clock, MapPin, AlignLeft } from 'lucide-react-native';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { CalendarEvent } from '../services/graph';
 import type { Coordinate } from '../utils/scheduler';
 
 const MS_BLUE = '#0078D4';
+const FLEX_STEP_MINUTES = 15;
+const FLEX_SLOTS_PER_DAY = (24 * 60) / FLEX_STEP_MINUTES;
+const FLEX_MAX_SLOT = FLEX_SLOTS_PER_DAY - 1;
+const FLEX_TRACK_HEIGHT = 8;
+const FLEX_THUMB_SIZE = 24;
+
+type FlexibleRangeSliderProps = {
+  startSlot15: number;
+  endSlot15: number;
+  onStartChange: (slot15: number) => void;
+  onEndChange: (slot15: number) => void;
+  onSlidingComplete: () => void;
+  canEdit: boolean;
+  onDragStateChange?: (dragging: boolean) => void;
+};
 
 function formatTimeMs(ms: number): string {
   const d = new Date(ms);
@@ -29,6 +47,152 @@ function formatDayLabel(dayIso: string): string {
   const [y, mo, d] = dayIso.split('-').map((x) => parseInt(x, 10));
   const date = new Date(y, mo - 1, d);
   return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatSlot15(slot15: number): string {
+  const totalMinutes = Math.max(0, Math.min(FLEX_MAX_SLOT, Math.round(slot15))) * FLEX_STEP_MINUTES;
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
+function msToSlot15(ms: number): number {
+  const date = new Date(ms);
+  const totalMinutes = date.getHours() * 60 + date.getMinutes();
+  return Math.max(0, Math.min(FLEX_MAX_SLOT, Math.round(totalMinutes / FLEX_STEP_MINUTES)));
+}
+
+function formatMinutesLabel(minutes: number): string {
+  const safe = Math.max(0, Math.round(minutes));
+  if (safe < 60) return `${safe}m`;
+  const h = Math.floor(safe / 60);
+  const m = safe % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function FlexibleRangeSlider({
+  startSlot15,
+  endSlot15,
+  onStartChange,
+  onEndChange,
+  onSlidingComplete,
+  canEdit,
+  onDragStateChange,
+}: FlexibleRangeSliderProps) {
+  const trackRef = useRef<View>(null);
+  const trackLayout = useRef({ x: 0, width: 300 });
+  const [trackWidth, setTrackWidth] = useState(300);
+
+  const onTrackLayout = useCallback((e: LayoutChangeEvent) => {
+    const width = Math.max(1, e.nativeEvent.layout.width);
+    setTrackWidth(width);
+    trackRef.current?.measureInWindow((x) => {
+      trackLayout.current = { x, width };
+    });
+  }, []);
+
+  const absoluteXToSlot15 = useCallback((absoluteX: number) => {
+    const { x, width } = trackLayout.current;
+    const pct = (absoluteX - x) / width;
+    const slot = Math.round(pct * FLEX_MAX_SLOT);
+    return Math.max(0, Math.min(FLEX_MAX_SLOT, slot));
+  }, []);
+
+  const setDragging = useCallback(
+    (dragging: boolean) => {
+      onDragStateChange?.(dragging);
+    },
+    [onDragStateChange]
+  );
+
+  const handleStartUpdate = useCallback(
+    (absoluteX: number) => {
+      const slot = absoluteXToSlot15(absoluteX);
+      const clamped = Math.min(slot, endSlot15 - 1);
+      onStartChange(Math.max(0, clamped));
+    },
+    [absoluteXToSlot15, endSlot15, onStartChange]
+  );
+
+  const handleEndUpdate = useCallback(
+    (absoluteX: number) => {
+      const slot = absoluteXToSlot15(absoluteX);
+      const clamped = Math.max(slot, startSlot15 + 1);
+      onEndChange(Math.min(FLEX_MAX_SLOT, clamped));
+    },
+    [absoluteXToSlot15, onEndChange, startSlot15]
+  );
+
+  const handleComplete = useCallback(() => {
+    onSlidingComplete();
+    onDragStateChange?.(false);
+  }, [onSlidingComplete, onDragStateChange]);
+
+  const startGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(canEdit)
+        .activeOffsetX([-4, 4])
+        .failOffsetY([-20, 20])
+        .onBegin(() => {
+          runOnJS(setDragging)(true);
+        })
+        .onUpdate((e) => {
+          runOnJS(handleStartUpdate)(e.absoluteX);
+        })
+        .onFinalize(() => {
+          runOnJS(handleComplete)();
+        }),
+    [canEdit, handleComplete, handleStartUpdate, setDragging]
+  );
+
+  const endGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(canEdit)
+        .activeOffsetX([-4, 4])
+        .failOffsetY([-20, 20])
+        .onBegin(() => {
+          runOnJS(setDragging)(true);
+        })
+        .onUpdate((e) => {
+          runOnJS(handleEndUpdate)(e.absoluteX);
+        })
+        .onFinalize(() => {
+          runOnJS(handleComplete)();
+        }),
+    [canEdit, handleComplete, handleEndUpdate, setDragging]
+  );
+
+  const startLeft = (startSlot15 / FLEX_MAX_SLOT) * trackWidth - FLEX_THUMB_SIZE / 2;
+  const endLeft = (endSlot15 / FLEX_MAX_SLOT) * trackWidth - FLEX_THUMB_SIZE / 2;
+  const fillLeft = (startSlot15 / FLEX_MAX_SLOT) * trackWidth;
+  const fillWidth = ((endSlot15 - startSlot15) / FLEX_MAX_SLOT) * trackWidth;
+
+  return (
+    <View ref={trackRef} onLayout={onTrackLayout} style={styles.flexSliderShell} pointerEvents="box-none">
+      <View style={[styles.flexRangeTrack, { height: FLEX_TRACK_HEIGHT }]} pointerEvents="none">
+        <View
+          style={[
+            styles.flexRangeFill,
+            { left: fillLeft, width: Math.max(0, fillWidth), height: FLEX_TRACK_HEIGHT },
+          ]}
+        />
+      </View>
+
+      <GestureDetector gesture={startGesture}>
+        <View style={[styles.flexThumbHitArea, { left: startLeft - 10 }]}>
+          <View style={styles.flexRangeThumb} />
+        </View>
+      </GestureDetector>
+
+      <GestureDetector gesture={endGesture}>
+        <View style={[styles.flexThumbHitArea, { left: endLeft - 10 }]}>
+          <View style={styles.flexRangeThumb} />
+        </View>
+      </GestureDetector>
+    </View>
+  );
 }
 
 export type ContactInput = {
@@ -50,8 +214,6 @@ export type ConfirmBookingSheetProps = {
   onConfirm: (event: CalendarEvent, contactInput?: ContactInput) => void;
 };
 
-const FLEX_OPTS = ['0m', '5m', '10m', '15m', '30m', '45m', '60m'];
-
 /** Confirm step: selection creates meeting. User reviews and taps Book to add in-app. */
 export default function ConfirmBookingSheet({
   visible,
@@ -62,6 +224,7 @@ export default function ConfirmBookingSheet({
   onClose,
   onConfirm,
 }: ConfirmBookingSheetProps) {
+  const titleInputRef = useRef<TextInput>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
 
@@ -72,11 +235,47 @@ export default function ConfirmBookingSheet({
   const [contactEmail, setContactEmail] = useState('');
 
   const [isFlexible, setIsFlexible] = useState(false);
-  const [flexPlus, setFlexPlus] = useState('15m');
-  const [flexMinus, setFlexMinus] = useState('15m');
+  const [flexStartSlot15, setFlexStartSlot15] = useState(0);
+  const [flexEndSlot15, setFlexEndSlot15] = useState(0);
+  const [isFlexDragging, setIsFlexDragging] = useState(false);
 
-  const cyclePlus = () => setFlexPlus(p => FLEX_OPTS[(FLEX_OPTS.indexOf(p) + 1) % FLEX_OPTS.length]!);
-  const cycleMinus = () => setFlexMinus(p => FLEX_OPTS[(FLEX_OPTS.indexOf(p) + 1) % FLEX_OPTS.length]!);
+  const anchorSlot15 = useMemo(() => {
+    if (!slot) return 0;
+    return msToSlot15(slot.startMs);
+  }, [slot]);
+
+  const resetFlexWindow = useCallback(() => {
+    const defaultStart = Math.max(0, anchorSlot15 - 2);
+    const defaultEnd = Math.min(FLEX_MAX_SLOT, anchorSlot15 + 2);
+    setFlexStartSlot15(defaultStart);
+    setFlexEndSlot15(Math.max(defaultStart + 1, defaultEnd));
+  }, [anchorSlot15]);
+
+  useEffect(() => {
+    if (!visible || !slot) return;
+    resetFlexWindow();
+    setIsFlexible(false);
+    setIsFlexDragging(false);
+  }, [resetFlexWindow, slot, visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const timer = setTimeout(() => {
+      titleInputRef.current?.focus();
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [visible]);
+
+  const flexEarlyMinutes = Math.max(0, (anchorSlot15 - flexStartSlot15) * FLEX_STEP_MINUTES);
+  const flexLateMinutes = Math.max(0, (flexEndSlot15 - anchorSlot15) * FLEX_STEP_MINUTES);
+
+  const handleFlexibleToggle = useCallback(
+    (next: boolean) => {
+      setIsFlexible(next);
+      if (next) resetFlexWindow();
+    },
+    [resetFlexWindow]
+  );
 
   const handleBook = () => {
     if (!slot) return;
@@ -86,7 +285,9 @@ export default function ConfirmBookingSheet({
     // Description and flexible limits can be included in body preview or extended props
     const bodyContent = [
       description.trim(),
-      isFlexible ? `[Flexible Limits: Early ${flexMinus}, Late ${flexPlus}]` : ''
+      isFlexible
+        ? `[Flexible Window: ${formatSlot15(flexStartSlot15)} to ${formatSlot15(flexEndSlot15)} | Early ${formatMinutesLabel(flexEarlyMinutes)}, Late ${formatMinutesLabel(flexLateMinutes)}]`
+        : ''
     ].filter(Boolean).join('\n\n');
 
     const event: CalendarEvent = {
@@ -98,6 +299,7 @@ export default function ConfirmBookingSheet({
       status: 'pending',
       startIso,
       endIso,
+      notes: bodyContent || undefined,
       bodyPreview: bodyContent || undefined,
     };
 
@@ -121,6 +323,7 @@ export default function ConfirmBookingSheet({
     setContactPhone('');
     setContactEmail('');
     setIsFlexible(false);
+    setIsFlexDragging(false);
     onClose();
   };
 
@@ -146,14 +349,17 @@ export default function ConfirmBookingSheet({
               contentContainerStyle={styles.bodyContent}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={true}
+              scrollEnabled={!isFlexDragging}
             >
               <View style={styles.titleSection}>
                 <TextInput
+                  ref={titleInputRef}
                   style={styles.titleInput}
                   value={title}
                   onChangeText={setTitle}
                   placeholder="Add a title"
                   placeholderTextColor="#605E5C"
+                  autoFocus
                 />
               </View>
 
@@ -224,26 +430,29 @@ export default function ConfirmBookingSheet({
                     <Text style={styles.flexibleLabel}>Flexible meeting time</Text>
                     <Switch
                       value={isFlexible}
-                      onValueChange={setIsFlexible}
+                      onValueChange={handleFlexibleToggle}
                       trackColor={{ false: '#767577', true: '#cce3f5' }}
                       thumbColor={isFlexible ? MS_BLUE : '#f4f3f4'}
                     />
                   </View>
                   {isFlexible && (
-                    <View style={styles.flexOptionsRow}>
-                      <View style={styles.flexOptionItem}>
-                        <Text style={styles.flexOptionLabel}>Early limits (-)</Text>
-                        <TouchableOpacity style={styles.pickerFake} onPress={cycleMinus} activeOpacity={0.7}>
-                          <Text style={styles.pickerFakeText}>{flexMinus}</Text>
-                          <ChevronDown size={16} color="#605E5C" />
-                        </TouchableOpacity>
+                    <View style={styles.flexRangeWrap}>
+                      <View style={styles.flexSummaryRow}>
+                        <Text style={styles.flexOptionLabel}>From {formatSlot15(flexStartSlot15)}</Text>
+                        <Text style={styles.flexOptionLabel}>To {formatSlot15(flexEndSlot15)}</Text>
                       </View>
-                      <View style={styles.flexOptionItem}>
-                        <Text style={styles.flexOptionLabel}>Late limits (+)</Text>
-                        <TouchableOpacity style={styles.pickerFake} onPress={cyclePlus} activeOpacity={0.7}>
-                          <Text style={styles.pickerFakeText}>{flexPlus}</Text>
-                          <ChevronDown size={16} color="#605E5C" />
-                        </TouchableOpacity>
+                      <FlexibleRangeSlider
+                        startSlot15={flexStartSlot15}
+                        endSlot15={flexEndSlot15}
+                        onStartChange={setFlexStartSlot15}
+                        onEndChange={setFlexEndSlot15}
+                        onSlidingComplete={() => {}}
+                        onDragStateChange={setIsFlexDragging}
+                        canEdit
+                      />
+                      <View style={styles.flexSummaryRow}>
+                        <Text style={styles.flexOffsetText}>Early {formatMinutesLabel(flexEarlyMinutes)}</Text>
+                        <Text style={styles.flexOffsetText}>Late {formatMinutesLabel(flexLateMinutes)}</Text>
                       </View>
                     </View>
                   )}
@@ -443,33 +652,62 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#323130',
   },
-  flexOptionsRow: {
-    flexDirection: 'row',
-    gap: 16,
+  flexRangeWrap: {
     marginTop: 8,
+    paddingBottom: 4,
   },
-  flexOptionItem: {
-    flex: 1,
+  flexSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
   flexOptionLabel: {
     fontSize: 13,
     color: '#605E5C',
-    marginBottom: 4,
   },
-  pickerFake: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: '#edebe9',
+  flexOffsetText: {
+    fontSize: 12,
+    color: '#605E5C',
+  },
+  flexSliderShell: {
+    height: 40,
+    justifyContent: 'center',
+    width: '100%',
+  },
+  flexRangeTrack: {
+    width: '100%',
+    backgroundColor: '#E5E7EB',
     borderRadius: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#fff',
+    position: 'relative',
   },
-  pickerFakeText: {
-    fontSize: 15,
-    color: '#323130',
+  flexRangeFill: {
+    position: 'absolute',
+    top: 0,
+    backgroundColor: MS_BLUE,
+    borderRadius: 4,
+  },
+  flexThumbHitArea: {
+    position: 'absolute',
+    top: (40 - (FLEX_THUMB_SIZE + 20)) / 2,
+    width: FLEX_THUMB_SIZE + 20,
+    height: FLEX_THUMB_SIZE + 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  flexRangeThumb: {
+    width: FLEX_THUMB_SIZE,
+    height: FLEX_THUMB_SIZE,
+    borderRadius: FLEX_THUMB_SIZE / 2,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: MS_BLUE,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
   },
   readOnlyInput: {
     paddingVertical: 10,

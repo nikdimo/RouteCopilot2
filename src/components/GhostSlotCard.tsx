@@ -12,6 +12,7 @@ import { MapPin, Info } from 'lucide-react-native';
 import type { ScoredSlot, SlotExplain } from '../utils/scheduler';
 
 const MS_PER_MIN = 60_000;
+const PUSHER_YELLOW = '#EAB308';
 
 function formatTimeMs(ms: number): string {
   const d = new Date(ms);
@@ -35,6 +36,65 @@ function formatDetour(detourMinutes: number): string {
 function formatTime(ms: number): string {
   const d = new Date(ms);
   return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+}
+
+type PusherImpact = {
+  eventId: string;
+  title: string;
+  fromStartMs: number;
+  fromEndMs: number;
+  toStartMs: number;
+  toEndMs: number;
+};
+
+function getPusherImpacts(slot: ScoredSlot): PusherImpact[] {
+  const explain = slot.explain;
+  if (!explain) return [];
+  if (Array.isArray(explain.shiftedEvents) && explain.shiftedEvents.length > 0) {
+    return explain.shiftedEvents.map((shift) => ({
+      eventId: shift.id,
+      title: shift.title,
+      fromStartMs: shift.fromStartMs,
+      fromEndMs: shift.fromEndMs,
+      toStartMs: shift.toStartMs,
+      toEndMs: shift.toEndMs,
+    }));
+  }
+  const impacts: PusherImpact[] = [];
+
+  if (
+    explain.prev.type === 'event' &&
+    explain.prev.id !== '_start' &&
+    (explain.prevShiftMinutes ?? 0) > 0
+  ) {
+    const shiftMs = (explain.prevShiftMinutes ?? 0) * MS_PER_MIN;
+    impacts.push({
+      eventId: explain.prev.id,
+      title: explain.prev.title,
+      fromStartMs: explain.prev.startMs,
+      fromEndMs: explain.prev.endMs,
+      toStartMs: explain.prev.startMs - shiftMs,
+      toEndMs: explain.prev.endMs - shiftMs,
+    });
+  }
+
+  if (
+    explain.next.type === 'event' &&
+    explain.next.id !== '_end' &&
+    (explain.nextShiftMinutes ?? 0) > 0
+  ) {
+    const shiftMs = (explain.nextShiftMinutes ?? 0) * MS_PER_MIN;
+    impacts.push({
+      eventId: explain.next.id,
+      title: explain.next.title,
+      fromStartMs: explain.next.startMs,
+      fromEndMs: explain.next.endMs,
+      toStartMs: explain.next.startMs + shiftMs,
+      toEndMs: explain.next.endMs + shiftMs,
+    });
+  }
+
+  return impacts;
 }
 
 function ExplainSheet({ explain, onClose }: { explain: SlotExplain; onClose: () => void }) {
@@ -66,6 +126,15 @@ function ExplainSheet({ explain, onClose }: { explain: SlotExplain; onClose: () 
             <Text style={explainStyles.section}>Baseline: {explain.baselineMinutes}m | New path: {explain.newPathMinutes}m | Detour: {explain.detourMinutes}m ({explain.detourKm.toFixed(1)} km) | Tier: {explain.tier}</Text>
             <Text style={explainStyles.section}>Slack: {explain.slackMinutes}m | Score: {explain.score}</Text>
             <Text style={explainStyles.section}>Times: arriveBy={formatTime(explain.arriveByMs)} departAt={formatTime(explain.departAtMs)}</Text>
+            {(Array.isArray(explain.shiftedEvents) && explain.shiftedEvents.length > 0) ? (
+              <Text style={[explainStyles.section, explainStyles.warn]}>
+                Flex shifts used: {explain.shiftedEvents.map((shift) => `${shift.title} ${shift.shiftMinutes}m ${shift.direction}`).join('; ')}
+              </Text>
+            ) : (explain.prevShiftMinutes != null || explain.nextShiftMinutes != null) && (
+              <Text style={[explainStyles.section, explainStyles.warn]}>
+                Flex shifts used: prev {explain.prevShiftMinutes ?? 0}m (max {explain.prevShiftMaxMinutes ?? 0}m), next {explain.nextShiftMinutes ?? 0}m (max {explain.nextShiftMaxMinutes ?? 0}m)
+              </Text>
+            )}
             <Text style={explainStyles.section}>Constraints: fitsGap={explain.fitsGap} withinHours={explain.withinWorkingHours} notPast={explain.notPast} noOverlap={explain.noOverlap} travelFeasible={explain.travelFeasible}</Text>
             {(explain.bufferWaivedAtStart || explain.bufferWaivedAtEnd) && (
               <Text style={[explainStyles.section, explainStyles.warn]}>
@@ -110,6 +179,8 @@ export type GhostSlotCardProps = {
   onMapPress: () => void;
   /** When provided and slot is selected, show "Book this time" to open confirm sheet */
   onBookPress?: () => void;
+  /** Called when pusher details are expanded/collapsed */
+  onPusherToggle?: (slot: ScoredSlot, active: boolean, affectedEventIds: string[]) => void;
 };
 
 export default function GhostSlotCard({
@@ -122,13 +193,17 @@ export default function GhostSlotCard({
   onSelect,
   onMapPress,
   onBookPress,
+  onPusherToggle,
 }: GhostSlotCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showExplain, setShowExplain] = useState(false);
+  const [showPusherDetails, setShowPusherDetails] = useState(false);
   const arriveByMs = slot.startMs - preBuffer * MS_PER_MIN;
   const departAtMs = slot.endMs + postBuffer * MS_PER_MIN;
   const isOnRoute = (slot.metrics.detourKm ?? 0) <= 5;
   const hasExplain = typeof __DEV__ !== 'undefined' && __DEV__ && slot.explain;
+  const pusherImpacts = getPusherImpacts(slot);
+  const hasPusher = pusherImpacts.length > 0;
 
   const handleInfoPress = () => {
     if (hasExplain) {
@@ -136,6 +211,19 @@ export default function GhostSlotCard({
     } else {
       setExpanded(!expanded);
     }
+  };
+
+  const handlePusherPress = () => {
+    if (!hasPusher) return;
+    const next = !showPusherDetails;
+    setShowPusherDetails(next);
+    onSelect();
+    onMapPress();
+    onPusherToggle?.(
+      slot,
+      next,
+      pusherImpacts.map((impact) => impact.eventId)
+    );
   };
 
   const whyLine = hasExplain && slot.explain
@@ -184,7 +272,27 @@ export default function GhostSlotCard({
                 🚗 +{slot.metrics.detourKm != null ? `${slot.metrics.detourKm.toFixed(1)} km` : `${slot.metrics.detourMinutes} min`} detour
               </Text>
             )}
+            {hasPusher && (
+              <TouchableOpacity
+                style={[styles.pusherBadge, showPusherDetails && styles.pusherBadgeActive]}
+                onPress={handlePusherPress}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.pusherBadgeText, showPusherDetails && styles.pusherBadgeTextActive]}>
+                  Pusher
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
+          {showPusherDetails && hasPusher && (
+            <View style={styles.pusherPanel}>
+              {pusherImpacts.map((impact) => (
+                <Text key={impact.eventId} style={styles.pusherLine}>
+                  Meeting "{impact.title}" will move from {formatTime(impact.fromStartMs)}-{formatTime(impact.fromEndMs)} to {formatTime(impact.toStartMs)}-{formatTime(impact.toEndMs)}.
+                </Text>
+              ))}
+            </View>
+          )}
           {expanded && !hasExplain && (
             <View style={styles.expanded}>
               <Text style={styles.expandedLine}>
@@ -300,6 +408,8 @@ const styles = StyleSheet.create({
   badges: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   onRouteBadge: {
     backgroundColor: 'rgba(0,120,212,0.15)',
@@ -315,6 +425,39 @@ const styles = StyleSheet.create({
   detourText: {
     fontSize: 12,
     color: '#605E5C',
+  },
+  pusherBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#D97706',
+    backgroundColor: '#FEF3C7',
+  },
+  pusherBadgeActive: {
+    backgroundColor: PUSHER_YELLOW,
+    borderColor: '#B45309',
+  },
+  pusherBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+  pusherBadgeTextActive: {
+    color: '#1A1A1A',
+  },
+  pusherPanel: {
+    marginTop: 8,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#FEF9C3',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  pusherLine: {
+    fontSize: 12,
+    color: '#713F12',
+    lineHeight: 18,
   },
   expanded: {
     marginTop: 8,

@@ -9,17 +9,16 @@ import {
   PanResponder,
 } from 'react-native';
 import { X } from 'lucide-react-native';
-import { startOfDay } from 'date-fns';
 import type { CalendarEvent } from '../services/graph';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { Coordinate } from '../utils/scheduler';
+import { buildRouteWithInsertionMeta } from '../utils/mapPreview';
 import NativeLeafletMap, {
   type LeafletCoordinate,
   type LeafletMarker,
   type LeafletPolyline,
 } from './NativeLeafletMap';
 
-const MS_PER_MIN = 60_000;
 const HOME_GREEN = '#107C10';
 const MS_BLUE = '#0078D4';
 
@@ -31,26 +30,8 @@ export type MapPreviewModalProps = {
   insertionCoord: Coordinate;
   slot: ScoredSlot;
   homeBase: Coordinate;
+  highlightedEventIds?: string[];
 };
-
-function eventToStartMs(ev: CalendarEvent, dayStartMs: number): number | null {
-  if (ev.startIso) {
-    try {
-      return new Date(ev.startIso).getTime();
-    } catch {
-      return parseTimeStart(ev.time, dayStartMs);
-    }
-  }
-  return parseTimeStart(ev.time, dayStartMs);
-}
-
-function parseTimeStart(timeStr: string | undefined, dayStartMs: number): number | null {
-  if (!timeStr || typeof timeStr !== 'string') return null;
-  const parts = timeStr.split('-').map((p) => p.trim());
-  if (parts.length < 2) return null;
-  const [sh, sm] = (parts[0] ?? '00:00').split(':').map((x) => parseInt(x || '0', 10));
-  return dayStartMs + (sh * 60 + sm) * MS_PER_MIN;
-}
 
 export default function MapPreviewModal({
   visible,
@@ -60,7 +41,9 @@ export default function MapPreviewModal({
   insertionCoord,
   slot,
   homeBase,
+  highlightedEventIds = [],
 }: MapPreviewModalProps) {
+  const highlightedSet = useMemo(() => new Set(highlightedEventIds), [highlightedEventIds]);
   const homePoint = useMemo(
     () => ({ latitude: homeBase.lat, longitude: homeBase.lon }),
     [homeBase.lat, homeBase.lon]
@@ -71,42 +54,21 @@ export default function MapPreviewModal({
     [insertionCoord.lat, insertionCoord.lon]
   );
 
-  const { coordsWithInsertion, insertIndexInMiddle } = useMemo(() => {
-    const withCoords = dayEvents.filter(
-      (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
-        a.coordinates != null
-    );
-
-    const [y, mo, d] = slot.dayIso.split('-').map((x) => parseInt(x, 10));
-    const dayStartMs = startOfDay(new Date(y, mo - 1, d)).getTime();
-
-    const sorted = [...withCoords].sort((a, b) => {
-      const aMs = eventToStartMs(a, dayStartMs) ?? 0;
-      const bMs = eventToStartMs(b, dayStartMs) ?? 0;
-      return aMs - bMs;
-    });
-
-    const slotStartMs = slot.startMs;
-    let insertIndex = sorted.length;
-    for (let i = 0; i < sorted.length; i++) {
-      const evMs = eventToStartMs(sorted[i], dayStartMs);
-      if (evMs != null && slotStartMs < evMs) {
-        insertIndex = i;
-        break;
-      }
-    }
-
-    const middle = [
-      ...sorted.slice(0, insertIndex).map((a) => a.coordinates),
-      insertionPoint,
-      ...sorted.slice(insertIndex).map((a) => a.coordinates),
-    ];
-
-    return {
-      coordsWithInsertion: [homePoint, ...middle, homePoint],
-      insertIndexInMiddle: insertIndex,
-    };
-  }, [dayEvents, homePoint, insertionPoint, slot.dayIso, slot.startMs]);
+  const {
+    coordsWithInsertion,
+    insertIndexInMiddle,
+    sortedEventIds,
+  } = useMemo(
+    () =>
+      buildRouteWithInsertionMeta(
+        dayEvents,
+        insertionCoord,
+        slot,
+        homeBase,
+        'NEW'
+      ),
+    [dayEvents, homeBase, insertionCoord, slot]
+  );
 
   const panResponder = useRef(
     PanResponder.create({
@@ -135,17 +97,21 @@ export default function MapPreviewModal({
 
     middle.forEach((coord, i) => {
       const isInsertion = i === insertIndexInMiddle;
+      const sourceEventId = !isInsertion
+        ? (i < insertIndexInMiddle ? sortedEventIds[i] : sortedEventIds[i - 1])
+        : undefined;
+      const isHighlighted = sourceEventId != null && highlightedSet.has(sourceEventId);
       markers.push({
         id: isInsertion ? 'proposed' : `stop-${i}`,
         coordinate: coord,
         label: isInsertion ? 'New' : String(i + 1),
         title: isInsertion ? 'Proposed visit' : `Stop ${i + 1}`,
-        color: isInsertion ? '#D13438' : MS_BLUE,
+        color: isInsertion ? '#D13438' : isHighlighted ? '#EAB308' : MS_BLUE,
       });
     });
 
     return markers;
-  }, [homePoint, insertIndexInMiddle, middle]);
+  }, [highlightedSet, homePoint, insertIndexInMiddle, middle, sortedEventIds]);
 
   const mapPolylines = useMemo<LeafletPolyline[]>(
     () =>

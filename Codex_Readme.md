@@ -5,6 +5,42 @@
 - Do not run commands, open files, edit code, or execute tools until the user gives an explicit task.
 - If the user message is unclear, ask a short clarification question and wait.
 
+## Latest Session Update (2026-03-05, proposal preview/booking sequence consistency fix)
+- User-reported bug:
+  1. Proposal card could say "Between M1 and M2" with `0 km`, but map/timeline preview sometimes showed `M1 -> M2 -> M3`.
+  2. After booking, UI could briefly place M3 after M2, then correct after refresh.
+- Root cause found:
+  1. Preview insertion order was derived from `slot.startMs` against current day-event time order.
+  2. In pusher/flex scenarios, logical proposal anchors (`slot.explain.prev/next`) can differ from that time-only fallback.
+  3. Optimistic UI path could append new event before full reconciliation, causing temporary wrong ordering.
+- Fix implemented:
+  1. Added shared insertion resolver in `src/utils/mapPreview.ts`:
+     - `resolveRouteInsertion(...)` (anchor-first: `prev/next`, then adjusted-time fallback).
+     - `buildRouteWithInsertionMeta(...)` (returns insertion index + ordered sequence ids + insertion source).
+  2. Updated all preview/map consumers to use shared resolver:
+     - `src/components/MapPreviewModal.tsx`
+     - `src/components/MapPreviewModal.native.tsx`
+     - `src/components/PlanVisitMapPanel.tsx`
+     - `src/components/PlanVisitMapPanel.native.tsx`
+     - `src/components/PlanVisitMapPanel.web.tsx`
+  3. Updated optimistic insertion behavior:
+     - `src/context/RouteContext.tsx` -> `addAppointment(...)` now inserts using `sortAppointmentsByTime(...)` instead of append.
+  4. Added guarded debug instrumentation in `src/screens/AddMeetingScreen.tsx`:
+     - flag: `globalThis.__debugProposalPreviewFlow = true`
+     - logs selected proposal id, slot range, logical insertion index, prev/next ids, preview sequence ids, detour scoring/display, ghost render index, optimistic sequence, final reconciled sequence.
+- QA/test coverage:
+  1. Added `runMapPreviewInsertionQA()` in `src/utils/mapPreview.ts`.
+  2. Included in scheduler suite via `runFullQASuite()` in `src/utils/scheduler.ts`.
+- Outcome:
+  1. Proposal label, timeline ghost, map preview sequence, and optimistic post-booking placement now use consistent insertion logic.
+  2. Expected behavior for reported case is now stable: `M1 -> M3 -> M2` immediately, not only after refresh.
+
+## Current Focus / In Progress
+- Continue manual QA on real proposal scenarios (especially pusher/flex variants) before push/deploy.
+- Keep debug flag available for fast trace if any remaining edge case appears:
+  - `globalThis.__debugProposalPreviewFlow = true`
+- No new deployment in this step; this update records code changes and active validation status.
+
 ## Latest Session Update (2026-03-05, pusher booking execution fix)
 - User-reported bug:
   1. Pusher suggestion displayed moved meeting times, but after booking the meeting, the pushed meeting stayed at original time.

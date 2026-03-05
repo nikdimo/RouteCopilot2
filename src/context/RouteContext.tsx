@@ -5,7 +5,7 @@ import { startOfDay } from 'date-fns';
 import { useAuth } from './AuthContext';
 import type { CalendarEvent } from '../services/graph';
 import { patchLocalMeeting, removeLocalMeeting, upsertLocalMeeting } from '../services/localMeetings';
-import { optimizeRoute } from '../utils/optimization';
+import { optimizeRoute, sortAppointmentsByTime } from '../utils/optimization';
 import { toLocalDayKey } from '../utils/dateUtils';
 import { BACKEND_API_ENABLED } from '../config/backend';
 import { backendGetUserState, backendUpsertUserState } from '../services/backendApi';
@@ -190,7 +190,7 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
 
   const addAppointment = useCallback((event: CalendarEvent) => {
     const nextEvent = { ...event, status: 'pending' as const };
-    setAppointmentsState((prev) => [...prev, nextEvent]);
+    setAppointmentsState((prev) => sortAppointmentsByTime([...prev, nextEvent]));
     if (nextEvent.id.startsWith('local-')) {
       upsertLocalMeeting(nextEvent).catch(() => {});
     }

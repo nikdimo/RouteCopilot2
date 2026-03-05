@@ -1,4 +1,4 @@
-import React, { useRef, memo } from 'react';
+import React, { useEffect, useRef, memo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform, Linking } from 'react-native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { Trash2, Edit2, PhoneCall, Navigation } from 'lucide-react-native';
@@ -6,6 +6,7 @@ import MeetingCard, { type MeetingCardProps } from './MeetingCard';
 
 const RED = '#EF4444'; // Modern Red
 const BLUE = '#2563EB'; // Vibrant Blue
+const DOUBLE_TAP_WINDOW_MS = 280;
 
 export type SwipeableMeetingRowProps = MeetingCardProps & {
   /** Called when user confirms delete */
@@ -21,14 +22,46 @@ function SwipeableMeetingRow({
   ...cardProps
 }: SwipeableMeetingRowProps) {
   const didDragRef = useRef(false);
+  const lastTapAtRef = useRef(0);
+  const singleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // When card is tapped, if we weren't just dragging, fire the tap (which now Highlights on map!)
+  useEffect(() => {
+    return () => {
+      if (singleTapTimerRef.current) {
+        clearTimeout(singleTapTimerRef.current);
+        singleTapTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Single tap keeps map-highlight behavior; double tap opens details editor.
   const handleCardPress = () => {
     if (didDragRef.current) {
       didDragRef.current = false;
       return;
     }
-    onPress?.();
+
+    const now = Date.now();
+    const sinceLastTap = now - lastTapAtRef.current;
+
+    if (sinceLastTap > 0 && sinceLastTap <= DOUBLE_TAP_WINDOW_MS) {
+      if (singleTapTimerRef.current) {
+        clearTimeout(singleTapTimerRef.current);
+        singleTapTimerRef.current = null;
+      }
+      lastTapAtRef.current = 0;
+      onEdit?.();
+      return;
+    }
+
+    lastTapAtRef.current = now;
+    if (singleTapTimerRef.current) {
+      clearTimeout(singleTapTimerRef.current);
+    }
+    singleTapTimerRef.current = setTimeout(() => {
+      onPress?.();
+      singleTapTimerRef.current = null;
+    }, DOUBLE_TAP_WINDOW_MS + 10);
   };
 
   const handleDeletePress = (swipeable: { close: () => void }) => {
@@ -131,6 +164,11 @@ function SwipeableMeetingRow({
       leftThreshold={80}
       onSwipeableOpenStartDrag={() => {
         didDragRef.current = true;
+        if (singleTapTimerRef.current) {
+          clearTimeout(singleTapTimerRef.current);
+          singleTapTimerRef.current = null;
+        }
+        lastTapAtRef.current = 0;
       }}
       onSwipeableClose={() => {
         didDragRef.current = false;

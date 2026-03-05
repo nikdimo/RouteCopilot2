@@ -11,6 +11,7 @@ const MS_PER_MIN = 60_000;
 export type TimelineEntry =
   | { type: 'event'; event: CalendarEvent; startMs: number; endMs: number }
   | { type: 'ghost'; slot: ScoredSlot };
+type EventTimelineEntry = Extract<TimelineEntry, { type: 'event' }>;
 
 function formatTimeRange(startMs: number, endMs: number): string {
   const pad = (n: number) => n.toString().padStart(2, '0');
@@ -54,7 +55,7 @@ export function buildTimelineEntries(
   const [y, mo, d] = dayIso.split('-').map((x) => parseInt(x, 10));
   const dayStartMs = startOfDay(new Date(y, mo - 1, d)).getTime();
 
-  const eventEntries: TimelineEntry[] = events
+  const eventEntries: EventTimelineEntry[] = events
     .map((ev) => {
       const r = eventToRange(ev, dayStartMs);
       if (!r) return null;
@@ -64,15 +65,75 @@ export function buildTimelineEntries(
     })
     .filter((x): x is NonNullable<typeof x> => x != null);
 
-  const ghostEntries: TimelineEntry[] = ghostSlots
-    .filter((s) => s.dayIso === dayIso)
-    .map((slot) => ({ type: 'ghost' as const, slot }));
+  const sortedEvents = [...eventEntries].sort((a, b) => a.startMs - b.startMs);
+  const eventIndexById = new Map(
+    sortedEvents.map((entry, idx) => [entry.event.id, idx])
+  );
+  const ghostByGap = new Map<number, ScoredSlot[]>();
 
-  const merged = [...eventEntries, ...ghostEntries].sort((a, b) => {
-    const aMs = a.type === 'event' ? a.startMs : a.slot.startMs;
-    const bMs = b.type === 'event' ? b.startMs : b.slot.startMs;
-    return aMs - bMs;
+  const pushGhostToGap = (gapIndex: number, slot: ScoredSlot) => {
+    const current = ghostByGap.get(gapIndex) ?? [];
+    current.push(slot);
+    ghostByGap.set(gapIndex, current);
+  };
+
+  const fallbackGapIndexFromTime = (slotStartMs: number): number => {
+    for (let i = 0; i < sortedEvents.length; i++) {
+      if (slotStartMs < sortedEvents[i]!.startMs) {
+        return i;
+      }
+    }
+    return sortedEvents.length;
+  };
+
+  const ghostSlotsForDay = ghostSlots.filter((s) => s.dayIso === dayIso);
+  for (const slot of ghostSlotsForDay) {
+    const prevId = slot.explain?.prev.type === 'event' ? slot.explain.prev.id : null;
+    const nextId = slot.explain?.next.type === 'event' ? slot.explain.next.id : null;
+    const prevIdx = prevId != null ? eventIndexById.get(prevId) : undefined;
+    const nextIdx = nextId != null ? eventIndexById.get(nextId) : undefined;
+
+    let gapIndex: number | null = null;
+    if (prevIdx != null && nextIdx != null && prevIdx < nextIdx) {
+      // Place in the gap after prev (which is before next when indexes are consecutive).
+      gapIndex = prevIdx + 1;
+    } else if (prevIdx != null) {
+      gapIndex = prevIdx + 1;
+    } else if (nextIdx != null) {
+      gapIndex = nextIdx;
+    }
+
+    if (gapIndex == null) {
+      gapIndex = fallbackGapIndexFromTime(slot.startMs);
+    }
+
+    const clampedGap = Math.max(0, Math.min(gapIndex, sortedEvents.length));
+    pushGhostToGap(clampedGap, slot);
+  }
+
+  ghostByGap.forEach((slotsInGap) => {
+    slotsInGap.sort((a, b) => {
+      if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+      return slotId(a).localeCompare(slotId(b));
+    });
   });
+
+  const merged: TimelineEntry[] = [];
+  if (sortedEvents.length === 0) {
+    const onlyGap = ghostByGap.get(0) ?? [];
+    onlyGap.forEach((slot) => merged.push({ type: 'ghost', slot }));
+    return merged;
+  }
+
+  for (let i = 0; i < sortedEvents.length; i++) {
+    if (i === 0) {
+      const beforeFirst = ghostByGap.get(0) ?? [];
+      beforeFirst.forEach((slot) => merged.push({ type: 'ghost', slot }));
+    }
+    merged.push(sortedEvents[i]!);
+    const afterCurrent = ghostByGap.get(i + 1) ?? [];
+    afterCurrent.forEach((slot) => merged.push({ type: 'ghost', slot }));
+  }
 
   return merged;
 }
@@ -89,6 +150,7 @@ export type DayTimelineProps = {
   onMapPress: (slot: ScoredSlot) => void;
   /** When provided, selected ghost slots show "Book this time" to open the confirm sheet */
   onBookSlot?: (slot: ScoredSlot) => void;
+  onPusherToggle?: (slot: ScoredSlot, active: boolean, affectedEventIds: string[]) => void;
 };
 
 export default function DayTimeline({
@@ -101,6 +163,7 @@ export default function DayTimeline({
   onSelectSlot,
   onMapPress,
   onBookSlot,
+  onPusherToggle,
 }: DayTimelineProps) {
   if (entries.length === 0) return null;
 
@@ -135,6 +198,7 @@ export default function DayTimeline({
             onSelect={() => onSelectSlot(slot)}
             onMapPress={() => onMapPress(slot)}
             onBookPress={onBookSlot ? () => onBookSlot(slot) : undefined}
+            onPusherToggle={onPusherToggle}
           />
         );
       })}

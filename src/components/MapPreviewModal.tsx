@@ -14,9 +14,8 @@ import { X } from 'lucide-react-native';
 import type { CalendarEvent } from '../services/graph';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { Coordinate } from '../utils/scheduler';
-import { startOfDay } from 'date-fns';
+import { buildRouteWithInsertionMeta } from '../utils/mapPreview';
 
-const MS_PER_MIN = 60_000;
 const HOME_GREEN = '#107C10';
 const MS_BLUE = '#0078D4';
 
@@ -33,26 +32,9 @@ export type MapPreviewModalProps = {
   slot: ScoredSlot;
   /** Home base (start/end) - required for stable route preview with at least 2 points */
   homeBase: Coordinate;
+  /** Event IDs to highlight in yellow (e.g. pushed meetings) */
+  highlightedEventIds?: string[];
 };
-
-function eventToStartMs(ev: CalendarEvent, dayStartMs: number): number | null {
-  if (ev.startIso) {
-    try {
-      return new Date(ev.startIso).getTime();
-    } catch {
-      return parseTimeStart(ev.time, dayStartMs);
-    }
-  }
-  return parseTimeStart(ev.time, dayStartMs);
-}
-
-function parseTimeStart(timeStr: string | undefined, dayStartMs: number): number | null {
-  if (!timeStr || typeof timeStr !== 'string') return null;
-  const parts = timeStr.split('-').map((p) => p.trim());
-  if (parts.length < 2) return null;
-  const [sh, sm] = (parts[0] ?? '00:00').split(':').map((x) => parseInt(x || '0', 10));
-  return dayStartMs + (sh * 60 + sm) * MS_PER_MIN;
-}
 
 export default function MapPreviewModal({
   visible,
@@ -62,48 +44,27 @@ export default function MapPreviewModal({
   insertionCoord,
   slot,
   homeBase,
+  highlightedEventIds = [],
 }: MapPreviewModalProps) {
   const mapRef = useRef<MapView>(null);
+  const highlightedSet = useMemo(() => new Set(highlightedEventIds), [highlightedEventIds]);
 
   const homePoint = { latitude: homeBase.lat, longitude: homeBase.lon };
-  const insertionPoint = { latitude: insertionCoord.lat, longitude: insertionCoord.lon };
-
-  const { coordsWithInsertion, insertIndexInMiddle } = useMemo(() => {
-    const withCoords = dayEvents.filter(
-      (a): a is typeof a & { coordinates: { latitude: number; longitude: number } } =>
-        a.coordinates != null
-    );
-
-    const [y, mo, d] = slot.dayIso.split('-').map((x) => parseInt(x, 10));
-    const dayStartMs = startOfDay(new Date(y, mo - 1, d)).getTime();
-
-    const sorted = [...withCoords].sort((a, b) => {
-      const aMs = eventToStartMs(a, dayStartMs) ?? 0;
-      const bMs = eventToStartMs(b, dayStartMs) ?? 0;
-      return aMs - bMs;
-    });
-
-    const slotStartMs = slot.startMs;
-    let insertIndex = sorted.length;
-    for (let i = 0; i < sorted.length; i++) {
-      const evMs = eventToStartMs(sorted[i], dayStartMs);
-      if (evMs != null && slotStartMs < evMs) {
-        insertIndex = i;
-        break;
-      }
-    }
-
-    const middle = [
-      ...sorted.slice(0, insertIndex).map((a) => a.coordinates),
-      insertionPoint,
-      ...sorted.slice(insertIndex).map((a) => a.coordinates),
-    ];
-
-    return {
-      coordsWithInsertion: [homePoint, ...middle, homePoint],
-      insertIndexInMiddle: insertIndex,
-    };
-  }, [dayEvents, slot.dayIso, slot.startMs, insertionCoord.lat, insertionCoord.lon, homeBase.lat, homeBase.lon]);
+  const {
+    coordsWithInsertion,
+    insertIndexInMiddle,
+    sortedEventIds,
+  } = useMemo(
+    () =>
+      buildRouteWithInsertionMeta(
+        dayEvents,
+        insertionCoord,
+        slot,
+        homeBase,
+        'NEW'
+      ),
+    [dayEvents, homeBase, insertionCoord, slot]
+  );
 
   const panResponder = useRef(
     PanResponder.create({
@@ -180,6 +141,10 @@ export default function MapPreviewModal({
               </Marker>
               {middle.map((coord, i) => {
                 const isInsertion = i === insertIndexInMiddle;
+                const sourceEventId = !isInsertion
+                  ? (i < insertIndexInMiddle ? sortedEventIds[i] : sortedEventIds[i - 1])
+                  : undefined;
+                const isHighlighted = sourceEventId != null && highlightedSet.has(sourceEventId);
                 return (
                   <Marker
                     key={isInsertion ? 'proposed' : `stop-${i}`}
@@ -190,10 +155,10 @@ export default function MapPreviewModal({
                     <View
                       style={[
                         styles.numberedPin,
-                        { backgroundColor: isInsertion ? '#D13438' : MS_BLUE },
+                        { backgroundColor: isInsertion ? '#D13438' : isHighlighted ? '#EAB308' : MS_BLUE },
                       ]}
                     >
-                      <Text style={styles.numberedPinText}>
+                      <Text style={[styles.numberedPinText, isHighlighted && styles.numberedPinTextDark]}>
                         {isInsertion ? 'New' : i + 1}
                       </Text>
                     </View>
@@ -292,6 +257,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '700',
+  },
+  numberedPinTextDark: {
+    color: '#1a1a1a',
   },
   footer: {
     paddingHorizontal: 16,

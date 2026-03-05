@@ -63,6 +63,7 @@ import {
 import { clearGraphSession, isMagicAuthToken } from '../services/graphAuth';
 import { getLocalMeetingsInRange } from '../services/localMeetings';
 import { sortAppointmentsByTime } from '../utils/optimization';
+import { buildRouteWithInsertionMeta } from '../utils/mapPreview';
 import { DEFAULT_HOME_BASE } from '../types';
 import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
 
@@ -122,6 +123,11 @@ function formatDetourKmDisplay(detourKm: number): string {
   if (detourKm === 0) return '0 km';
   if (detourKm < 0) return `Saves ${Math.abs(detourKm).toFixed(1)} km`;
   return `+${detourKm.toFixed(1)} km`;
+}
+
+function getProposalPreviewDebugFlag(): boolean {
+  const g = globalThis as unknown as { __debugProposalPreviewFlow?: boolean };
+  return Boolean(g.__debugProposalPreviewFlow);
 }
 
 function inferCountryCodeFromHomeBase(homeBase?: { lat: number; lon: number } | null) {
@@ -204,8 +210,16 @@ export default function AddMeetingScreen() {
   const [devPanelCollapsed, setDevPanelCollapsed] = useState(true);
   const [searchAppointments, setSearchAppointments] = useState<CalendarEvent[] | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [bestOptionsViewportWidth, setBestOptionsViewportWidth] = useState(0);
   const qaLog = useQALog();
   const qaEntriesRef = React.useRef<QASlotConsidered[]>([]);
+  const lastBookingDebugRef = React.useRef<{
+    proposalId: string;
+    dayIso: string;
+    bookedEventId: string;
+  } | null>(null);
+  const bestOptionsScrollRef = React.useRef<ScrollView | null>(null);
+  const bestOptionsScrollXRef = React.useRef(0);
 
   const searchWindow = useMemo(() => getSearchWindow(timeframe), [timeframe]);
 
@@ -324,6 +338,20 @@ export default function AddMeetingScreen() {
     console.groupEnd();
   }, [allSlots, bestOptions, bestBadgeSlotId, hasSearched, searchLoading]);
 
+  useEffect(() => {
+    if (!getProposalPreviewDebugFlag()) return;
+    const pending = lastBookingDebugRef.current;
+    if (!pending) return;
+    const rendered = sortAppointmentsByTime(eventsForDay(appointments, pending.dayIso));
+    if (!rendered.some((ev) => ev.id === pending.bookedEventId)) return;
+    console.log('[ProposalPreviewFlow] final rendered sequence after reconciliation', {
+      proposalId: pending.proposalId,
+      dayIso: pending.dayIso,
+      finalRenderedSequenceIds: rendered.map((ev) => ev.id),
+    });
+    lastBookingDebugRef.current = null;
+  }, [appointments]);
+
   const dayIsos = useMemo(() => {
     const fromSlots = new Set(allSlots.map((s) => s.dayIso));
     filteredAppointments.forEach((a) => {
@@ -372,6 +400,43 @@ export default function AddMeetingScreen() {
     }
     return '';
   }, [locationSelection]);
+
+  const logProposalSelection = React.useCallback(
+    (slot: ScoredSlot, source: 'select' | 'map' | 'book' | 'confirm') => {
+      if (!getProposalPreviewDebugFlag() || !newLocation) return;
+      const proposalId = slotId(slot);
+      const dayEventsForSlot = eventsForDay(filteredAppointments, slot.dayIso);
+      const previewMeta = buildRouteWithInsertionMeta(
+        dayEventsForSlot,
+        newLocation,
+        slot,
+        preferences.homeBase ?? DEFAULT_HOME_BASE,
+        'NEW'
+      );
+      const timelineEntries = buildTimelineEntries(slot.dayIso, filteredAppointments, allSlots);
+      const ghostRenderIndex = timelineEntries.findIndex(
+        (entry) => entry.type === 'ghost' && slotId(entry.slot) === proposalId
+      );
+      const detourKm = slot.metrics.detourKm ?? 0;
+      console.log('[ProposalPreviewFlow] selected proposal', {
+        source,
+        proposalId,
+        slotStart: formatClock(slot.startMs),
+        slotEnd: formatClock(slot.endMs),
+        logicalInsertionIndex: previewMeta.insertIndexInMiddle,
+        prevMeetingId: slot.explain?.prev.id ?? null,
+        nextMeetingId: slot.explain?.next.id ?? null,
+        mapPreviewSequenceIds: previewMeta.orderedSequenceIds,
+        routePreviewInsertionSource: previewMeta.insertionSource,
+        detourKmScoreMetric: detourKm,
+        detourKmDisplay: formatDetourKmDisplay(detourKm),
+        onRoute: detourKm <= 5,
+        ghostSlotRenderIndex: ghostRenderIndex,
+        ghostSlotPixelTop: null,
+      });
+    },
+    [allSlots, filteredAppointments, newLocation, preferences.homeBase]
+  );
 
   const handleFindBestTime = async () => {
     if (!canFindBestTime) return;
@@ -431,6 +496,12 @@ export default function AddMeetingScreen() {
     setDevDebug(info);
   };
 
+  const scrollBestOptionsBy = React.useCallback((direction: -1 | 1) => {
+    const step = Math.max(260, Math.floor((bestOptionsViewportWidth || 320) * 0.85));
+    const nextX = Math.max(0, bestOptionsScrollXRef.current + direction * step);
+    bestOptionsScrollRef.current?.scrollTo({ x: nextX, animated: true });
+  }, [bestOptionsViewportWidth]);
+
   // Reset results when user changes inputs (must press CTA again)
   useEffect(() => {
     setHasSearched(false);
@@ -439,6 +510,7 @@ export default function AddMeetingScreen() {
   }, [locationSelection, durationMinutes, timeframe]);
 
   const handleSelectSlot = (slot: ScoredSlot) => {
+    logProposalSelection(slot, 'select');
     setSelectedSlotId(slotId(slot));
     setMapSlot(slot);
     setConfirmSlot(null);
@@ -446,11 +518,13 @@ export default function AddMeetingScreen() {
   };
 
   const handleBookSlot = (slot: ScoredSlot) => {
+    logProposalSelection(slot, 'book');
     setConfirmSlot(slot);
     setHighlightedShiftEventIds([]);
   };
 
   const handleMapPress = (slot: ScoredSlot) => {
+    logProposalSelection(slot, 'map');
     setMapSlot(slot);
     setHighlightedShiftEventIds([]);
   };
@@ -460,6 +534,7 @@ export default function AddMeetingScreen() {
     active: boolean,
     affectedEventIds: string[]
   ) => {
+    logProposalSelection(slot, 'select');
     setSelectedSlotId(slotId(slot));
     setMapSlot(slot);
     setConfirmSlot(null);
@@ -492,6 +567,31 @@ export default function AddMeetingScreen() {
     const isLocalId = finalEvent.id.startsWith('local-');
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
     const eventBody = (finalEvent.bodyPreview ?? finalEvent.notes ?? '').trim() || undefined;
+
+    if (confirmSlot) {
+      logProposalSelection(confirmSlot, 'confirm');
+      if (getProposalPreviewDebugFlag()) {
+        const shiftedById = new Map((confirmSlot.explain?.shiftedEvents ?? []).map((s) => [s.id, s]));
+        const projectedDayEvents = eventsForDay(appointments, confirmSlot.dayIso).map((ev) => {
+          const shift = shiftedById.get(ev.id);
+          if (!shift) return ev;
+          return {
+            ...ev,
+            startIso: new Date(shift.toStartMs).toISOString(),
+            endIso: new Date(shift.toEndMs).toISOString(),
+            time: `${formatClock(shift.toStartMs)} - ${formatClock(shift.toEndMs)}`,
+          };
+        });
+        const optimisticSequenceIds = sortAppointmentsByTime([...projectedDayEvents, finalEvent]).map((ev) => ev.id);
+        console.log('[ProposalPreviewFlow] booking proposal', {
+          proposalId: slotId(confirmSlot),
+          slotStart: formatClock(confirmSlot.startMs),
+          slotEnd: formatClock(confirmSlot.endMs),
+          optimisticInsertedSequenceIds: optimisticSequenceIds,
+          persistedSequenceReturnedFromBackend: null,
+        });
+      }
+    }
 
     const shiftedEvents = confirmSlot?.explain?.shiftedEvents ?? [];
     if (shiftedEvents.length > 0) {
@@ -702,6 +802,14 @@ export default function AddMeetingScreen() {
           summary: e.summary,
         })),
       });
+    }
+
+    if (confirmSlot && getProposalPreviewDebugFlag()) {
+      lastBookingDebugRef.current = {
+        proposalId: slotId(confirmSlot),
+        dayIso: confirmSlot.dayIso,
+        bookedEventId: finalEvent.id,
+      };
     }
 
     addAppointment(finalEvent);
@@ -1026,17 +1134,43 @@ export default function AddMeetingScreen() {
               </View>
             ) : (
               <>
-                <Text style={styles.sectionTitle}>Best Options</Text>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.sectionTitle}>Best Options</Text>
+                  {bestOptions.length > 0 && (
+                    <View style={styles.carouselControls}>
+                      <TouchableOpacity
+                        style={styles.carouselControlBtn}
+                        onPress={() => scrollBestOptionsBy(-1)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.carouselControlText}>‹</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.carouselControlBtn}
+                        onPress={() => scrollBestOptionsBy(1)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.carouselControlText}>›</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
                 {bestOptions.length === 0 ? (
                   <Text style={styles.emptyHint}>
                     No slots found. Try a different timeframe or client.
                   </Text>
                 ) : (
                   <ScrollView
+                    ref={bestOptionsScrollRef}
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.bestOptionsRow}
                     style={styles.bestOptionsScroll}
+                    onLayout={(e) => setBestOptionsViewportWidth(e.nativeEvent.layout.width)}
+                    onScroll={(e) => {
+                      bestOptionsScrollXRef.current = e.nativeEvent.contentOffset.x;
+                    }}
+                    scrollEventThrottle={16}
                   >
                     {bestOptions.map((slot) => (
                       <View key={slotId(slot)} style={styles.bestOptionCard}>
@@ -1373,6 +1507,33 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: MS_BLUE,
     marginBottom: 12,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  carouselControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  carouselControlBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  carouselControlText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+    lineHeight: 19,
   },
   sectionTitleSpaced: {
     marginTop: 24,

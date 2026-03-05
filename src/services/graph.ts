@@ -91,6 +91,8 @@ export type CalendarEvent = {
   email?: string;
   /** Preview of the event description/body */
   bodyPreview?: string;
+  /** Deep link to this event in Outlook web/app */
+  outlookWebLink?: string;
 };
 
 type GraphLocationCoordinates = {
@@ -101,8 +103,11 @@ type GraphLocationCoordinates = {
 type GraphEvent = {
   id: string;
   subject: string;
+  webLink?: string;
   start: { dateTime: string; timeZone?: string };
   end: { dateTime: string; timeZone?: string };
+  bodyPreview?: string;
+  body?: { contentType?: 'text' | 'html'; content?: string };
   location?: {
     displayName?: string;
     address?: string | { street?: string; city?: string; state?: string; countryOrRegion?: string };
@@ -110,6 +115,43 @@ type GraphEvent = {
   };
   organizer?: { emailAddress?: { name?: string } };
 };
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
+function stripHtmlToText(html: string): string {
+  return decodeHtmlEntities(
+    html
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<\/div>/gi, '\n')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\r\n/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim()
+  );
+}
+
+function getEventNotes(ev: GraphEvent): string | undefined {
+  const bodyContent = ev.body?.content?.trim();
+  if (bodyContent) {
+    const asText = ev.body?.contentType === 'html' ? stripHtmlToText(bodyContent) : bodyContent;
+    if (asText) return asText;
+  }
+  const preview = ev.bodyPreview?.trim();
+  return preview || undefined;
+}
 
 /**
  * Graph returns dateTime with timeZone e.g. "2025-02-13T07:45:00.0000000" + timeZone "UTC".
@@ -173,6 +215,7 @@ function mapEventSync(ev: GraphEvent): CalendarEvent {
   const endIso = normalizeGraphDateTime(ev.end.dateTime, ev.end.timeZone);
   const time = formatTimeRange(startIso, endIso);
   const location = getAddressString(ev.location) ?? '';
+  const notes = getEventNotes(ev);
 
   let coordinates: { latitude: number; longitude: number } | undefined;
   const coords = ev.location?.coordinates;
@@ -193,6 +236,9 @@ function mapEventSync(ev: GraphEvent): CalendarEvent {
     status: 'pending',
     startIso,
     endIso,
+    notes,
+    bodyPreview: notes,
+    outlookWebLink: ev.webLink?.trim() || undefined,
   };
 }
 
@@ -288,7 +334,7 @@ async function _fetchGraphEventsInternal(
   const params = new URLSearchParams({
     startDateTime: start,
     endDateTime: end,
-    $select: 'subject,start,end,location,organizer',
+    $select: 'subject,start,end,location,organizer,bodyPreview,webLink',
     $top: '999',
   });
   const baseUrl = `https://graph.microsoft.com/v1.0/me/calendarview?${params.toString()}`;
@@ -563,7 +609,11 @@ export async function createCalendarEvent(
     return { success: false, error: txt || `HTTP ${res.status}` };
   }
   const graphEv = (await res.json()) as GraphEvent;
-  const event = await mapEventAsync(graphEv, graphToken);
+  const mapped = await mapEventAsync(graphEv, graphToken);
+  const bodyText = input.body?.trim();
+  const event: CalendarEvent = bodyText
+    ? { ...mapped, notes: bodyText, bodyPreview: bodyText }
+    : mapped;
   return { success: true, event };
 }
 
@@ -588,7 +638,8 @@ export async function updateCalendarEvent(
     };
   }
 
-  const url = `https://graph.microsoft.com/v1.0/me/events/${eventId}`;
+  const safeEventId = encodeURIComponent(eventId);
+  const url = `https://graph.microsoft.com/v1.0/me/events/${safeEventId}`;
   const body: Record<string, unknown> = {};
   if (patch.subject != null) body.subject = patch.subject;
   if (patch.startIso != null) body.start = toGraphDateTime(patch.startIso);
@@ -614,7 +665,12 @@ export async function updateCalendarEvent(
     return { success: false, error: txt || `HTTP ${res.status}` };
   }
   const graphEv = (await res.json()) as GraphEvent;
-  const event = await mapEventAsync(graphEv, graphToken);
+  const mapped = await mapEventAsync(graphEv, graphToken);
+  const bodyText = patch.body?.trim();
+  const event: CalendarEvent =
+    patch.body != null
+      ? { ...mapped, notes: bodyText || undefined, bodyPreview: bodyText || undefined }
+      : mapped;
   return { success: true, event };
 }
 
@@ -638,7 +694,8 @@ export async function deleteCalendarEvent(
     };
   }
 
-  const url = `https://graph.microsoft.com/v1.0/me/events/${eventId}`;
+  const safeEventId = encodeURIComponent(eventId);
+  const url = `https://graph.microsoft.com/v1.0/me/events/${safeEventId}`;
   const res = await fetch(url, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${graphToken}` },
@@ -658,7 +715,51 @@ export type CreateContactInput = {
   companyName?: string;
   businessPhones?: string[];
   emailAddresses?: { address: string; name?: string }[];
+  businessAddress?: GraphPhysicalAddress;
 };
+
+export type GetEventByIdResult =
+  | { success: true; event: CalendarEvent }
+  | { success: false; error: string; needsConsent?: boolean };
+
+/** Fetch a single event with full body details for Meeting Details screen. */
+export async function getCalendarEventById(
+  token: string,
+  eventId: string
+): Promise<GetEventByIdResult> {
+  if (eventId.startsWith('local-')) {
+    return { success: false, error: 'Local-only event' };
+  }
+  const graphToken = await resolveGraphToken(token);
+  if (!graphToken) {
+    return {
+      success: false,
+      error: 'Connect Outlook to load meeting details.',
+    };
+  }
+
+  const safeEventId = encodeURIComponent(eventId);
+  const select = encodeURIComponent('subject,start,end,location,body,bodyPreview,webLink');
+  const url = `https://graph.microsoft.com/v1.0/me/events/${safeEventId}?$select=${select}`;
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${graphToken}`,
+      Prefer: `outlook.timezone="${tz}"`,
+    },
+  });
+  if (res.status === 401) throw new GraphUnauthorizedError();
+  if (res.status === 403) {
+    return { success: false, error: 'Calendar read permission denied', needsConsent: true };
+  }
+  if (!res.ok) {
+    const txt = await res.text();
+    return { success: false, error: txt || `HTTP ${res.status}` };
+  }
+  const graphEv = (await res.json()) as GraphEvent;
+  const event = await mapEventAsync(graphEv, graphToken);
+  return { success: true, event };
+}
 
 export type CreateContactResult =
   | { success: true; id: string }
@@ -689,6 +790,18 @@ export async function createContact(
       address: e.address,
       name: e.name ?? e.address,
     }));
+  }
+  if (
+    input.businessAddress &&
+    (
+      (input.businessAddress.street?.trim() ?? '') !== '' ||
+      (input.businessAddress.city?.trim() ?? '') !== '' ||
+      (input.businessAddress.state?.trim() ?? '') !== '' ||
+      (input.businessAddress.postalCode?.trim() ?? '') !== '' ||
+      (input.businessAddress.countryOrRegion?.trim() ?? '') !== ''
+    )
+  ) {
+    body.businessAddress = input.businessAddress;
   }
 
   const res = await fetch(url, {
