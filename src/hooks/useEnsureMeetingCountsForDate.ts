@@ -8,6 +8,9 @@ import { getLocalMeetingCountsInRange } from '../services/localMeetings';
 import { toLocalDayKey } from '../utils/dateUtils';
 import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
 
+const ROUTE_COUNTS_DEBUG =
+  __DEV__ || process.env.EXPO_PUBLIC_DEBUG_ROUTE_SYNC === '1';
+
 export function useEnsureMeetingCountsForDate() {
   const { userToken, getValidToken } = useAuth();
   const { loadedRange, setMeetingCountByDay, setLoadedRange } = useRoute();
@@ -33,6 +36,17 @@ export function useEnsureMeetingCountsForDate() {
       const windowEnd = endOfDay(addDays(date, 30));
       const startKey = toLocalDayKey(windowStart);
       const endKey = toLocalDayKey(windowEnd);
+      if (ROUTE_COUNTS_DEBUG) {
+        console.log('[RouteQC] MeetingCounts: request', {
+          dateKey: toLocalDayKey(date),
+          startKey,
+          endKey,
+          forceRefetch: !!forceRefetch,
+          mode: shouldSyncCalendar ? 'remote' : 'local',
+          hasToken: !!userToken,
+          loadedRange,
+        });
+      }
 
       if (!shouldSyncCalendar) {
         const counts = await getLocalMeetingCountsInRange(windowStart, windowEnd);
@@ -60,13 +74,38 @@ export function useEnsureMeetingCountsForDate() {
           if (prev && prev.start === nextStart && prev.end === nextEnd) return prev;
           return { start: nextStart, end: nextEnd };
         });
+        if (ROUTE_COUNTS_DEBUG) {
+          const dotCount = Object.values(counts).filter((count) => count > 0).length;
+          console.log('[RouteQC] MeetingCounts: local success', {
+            startKey,
+            endKey,
+            dotCount,
+          });
+        }
         return;
       }
 
-      if (!forceRefetch && loadedRange && loadedRange.start <= startKey && loadedRange.end >= endKey) return;
+      if (!forceRefetch && loadedRange && loadedRange.start <= startKey && loadedRange.end >= endKey) {
+        if (ROUTE_COUNTS_DEBUG) {
+          console.log('[RouteQC] MeetingCounts: skip (range already loaded)', {
+            startKey,
+            endKey,
+            loadedRange,
+          });
+        }
+        return;
+      }
 
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
-      if (!token) return;
+      if (!token) {
+        if (ROUTE_COUNTS_DEBUG) {
+          console.log('[RouteQC] MeetingCounts: token missing, retry on next state change', {
+            startKey,
+            endKey,
+          });
+        }
+        return;
+      }
       getCalendarEventsRaw(token, windowStart, windowEnd)
         .then((events) => {
           const counts: Record<string, number> = {};
@@ -104,8 +143,25 @@ export function useEnsureMeetingCountsForDate() {
             if (prev && prev.start === nextStart && prev.end === nextEnd) return prev;
             return { start: nextStart, end: nextEnd };
           });
+          if (ROUTE_COUNTS_DEBUG) {
+            const dotCount = Object.values(counts).filter((count) => count > 0).length;
+            console.log('[RouteQC] MeetingCounts: remote success', {
+              startKey,
+              endKey,
+              events: events.length,
+              dotCount,
+            });
+          }
         })
-        .catch(() => { });
+        .catch((error) => {
+          if (ROUTE_COUNTS_DEBUG) {
+            console.log('[RouteQC] MeetingCounts: remote error', {
+              startKey,
+              endKey,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        });
     },
     [shouldSyncCalendar, userToken, getValidToken, loadedRange, setMeetingCountByDay, setLoadedRange]
   );

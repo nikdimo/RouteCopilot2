@@ -17,8 +17,8 @@ import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subs
  * @param date - Date to load; if undefined, loads today's appointments
  */
 export function useLoadAppointmentsForDate(date: Date | undefined) {
-  const { userToken, signOut, getValidToken } = useAuth();
-  const { setAppointments, setAppointmentsLoading } = useRoute();
+  const { userToken, signOut, getValidToken, isRestoringSession } = useAuth();
+  const { setAppointments, setAppointmentsRequestState } = useRoute();
   const { preferences } = useUserPreferences();
   const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
   const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
@@ -26,35 +26,42 @@ export function useLoadAppointmentsForDate(date: Date | undefined) {
 
   const load = useCallback(async () => {
     const targetDate = date ?? startOfDay(new Date());
+    if (isRestoringSession) {
+      setAppointmentsRequestState('loading');
+      return;
+    }
     if (!shouldSyncCalendar) {
-      setAppointmentsLoading(true);
+      setAppointmentsRequestState('loading');
       const dayKey = toLocalDayKey(targetDate);
       getLocalMeetingsForDay(dayKey)
         .then((events) => {
           const sorted = sortAppointmentsByTime(events);
           setAppointments(sorted);
+          setAppointmentsRequestState('success');
         })
         .catch(() => {
           setAppointments([]);
+          setAppointmentsRequestState('error', 'Could not load local meetings.');
         })
-        .finally(() => setAppointmentsLoading(false));
       return;
     }
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
     if (!token) {
-      setAppointments([]);
+      setAppointmentsRequestState('loading');
       return;
     }
     const start = startOfDay(targetDate);
     const end = endOfDay(targetDate);
-    setAppointmentsLoading(true);
+    setAppointmentsRequestState('loading');
     getCalendarEvents(token, start, end)
       .then((events) => {
         const sorted = sortAppointmentsByTime(events);
         setAppointments(sorted);
+        setAppointmentsRequestState('success');
       })
       .catch((e) => {
         setAppointments([]);
+        setAppointmentsRequestState('error', 'Could not load meetings from calendar.');
         if (e instanceof GraphUnauthorizedError) {
           clearGraphSession().catch(() => {});
           if (userToken && !isMagicAuthToken(userToken)) {
@@ -62,8 +69,7 @@ export function useLoadAppointmentsForDate(date: Date | undefined) {
           }
         }
       })
-      .finally(() => setAppointmentsLoading(false));
-  }, [shouldSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsLoading, signOut, date]);
+  }, [isRestoringSession, shouldSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsRequestState, signOut, date]);
 
   return { load };
 }

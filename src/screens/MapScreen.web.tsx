@@ -7,7 +7,7 @@ import { useRoute } from '../context/RouteContext';
 import { useLoadAppointmentsForDate } from '../hooks/useLoadAppointmentsForDate';
 import { useRouteData } from '../hooks/useRouteData';
 import { getClusters, getMarkerPositions } from '../utils/mapClusters';
-import { formatTime, formatDurationSeconds } from '../utils/dateUtils';
+import { toLocalDayKey, formatTime, formatDurationSeconds } from '../utils/dateUtils';
 import DaySlider from '../components/DaySlider';
 import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsForDate';
 import { format, isSameDay, startOfDay } from 'date-fns';
@@ -23,6 +23,7 @@ import {
   type TipCorner,
   type LatLng,
 } from '../utils/routeBubbles';
+import { getAppointmentsViewState } from '../utils/appointmentsViewState';
 import { EmptyStateScanner } from '../components/emptyState/EmptyStateScanner';
 import { MockMap } from '../components/emptyState/MockMap';
 
@@ -366,6 +367,8 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
     setHighlightWaypointIndex,
     appointmentsLoading,
     appointmentsEnriching,
+    appointmentsRequestStatus,
+    appointmentsError,
     triggerRefresh,
   } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
@@ -374,6 +377,7 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
   const [selectedWaypointIndices, setSelectedWaypointIndices] = useState<number[] | null>(null);
   const [focusedClusterKey, setFocusedClusterKey] = useState<string | null>(null);
   const [focusedClusterCoord, setFocusedClusterCoord] = useState<{ latitude: number; longitude: number } | null>(null);
+  const autoResolveAttemptedDayRef = useRef<string | null>(null);
   const { load } = useLoadAppointmentsForDate(undefined);
   const clearSelection = useCallback(() => {
     setSelectedArrivalLegIndex(null);
@@ -486,11 +490,85 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
       appointments.filter((a) => !a.coordinates && (a.location?.trim() ?? '') !== '').length,
     [appointments]
   );
+  const selectedDayKey = useMemo(() => toLocalDayKey(ctxSelectedDate), [ctxSelectedDate]);
+  const meetingsViewState = getAppointmentsViewState(appointmentsRequestStatus, appointments.length);
+  const meetingsLoading = meetingsViewState === 'loading';
+  const meetingsLoadError = meetingsViewState === 'error';
   const waitingForAddressResolution =
     coords.length === 0 &&
     unresolvedAddressCount > 0 &&
     (appointmentsLoading || appointmentsEnriching);
   const showCompactLoader = waitingForAddressResolution || (embeddedInSchedule && routeLoading);
+
+  useEffect(() => {
+    if (coords.length > 0 || unresolvedAddressCount === 0) {
+      autoResolveAttemptedDayRef.current = null;
+      return;
+    }
+    if (
+      meetingsViewState !== 'success' ||
+      appointmentsLoading ||
+      appointmentsEnriching ||
+      autoResolveAttemptedDayRef.current === selectedDayKey
+    ) {
+      return;
+    }
+    autoResolveAttemptedDayRef.current = selectedDayKey;
+    const timer = setTimeout(() => {
+      triggerRefresh();
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [
+    coords.length,
+    unresolvedAddressCount,
+    meetingsViewState,
+    appointmentsLoading,
+    appointmentsEnriching,
+    selectedDayKey,
+    triggerRefresh,
+  ]);
+
+  if (meetingsLoading) {
+    return (
+      <View style={styles.container}>
+        {!embeddedInSchedule && (
+          <DaySlider
+            selectedDate={ctxSelectedDate}
+            onSelectDate={onSelectDate}
+            meetingCountByDay={meetingCountByDay}
+          />
+        )}
+        <View style={styles.placeholderContainer}>
+          <ActivityIndicator size="small" color={MS_BLUE} />
+          <Text style={styles.placeholderText}>Loading meetings...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (meetingsLoadError) {
+    return (
+      <View style={styles.container}>
+        {!embeddedInSchedule && (
+          <DaySlider
+            selectedDate={ctxSelectedDate}
+            onSelectDate={onSelectDate}
+            meetingCountByDay={meetingCountByDay}
+          />
+        )}
+        <View style={styles.placeholderContainer}>
+          <Text style={styles.placeholderText}>{appointmentsError ?? 'Could not load meetings.'}</Text>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => triggerRefresh()}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   if (appointments.length === 0) {
     return (

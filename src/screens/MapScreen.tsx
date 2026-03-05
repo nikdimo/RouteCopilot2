@@ -26,6 +26,7 @@ import { format, isSameDay, startOfDay } from 'date-fns';
 import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { formatDistance, offsetPolyline } from '../utils/routeBubbles';
 import { getClusters, getMarkerPositions } from '../utils/mapClusters';
+import { getAppointmentsViewState } from '../utils/appointmentsViewState';
 import type { CoordAppointment } from '../hooks/useRouteData';
 
 /** Format meeting start–end for root marker (e.g. "9:00-10:00"). */
@@ -88,7 +89,16 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
   const navigation = useNavigation();
   const isWide = useIsWideScreen();
   const insets = useSafeAreaInsets();
-  const { selectedDate: ctxSelectedDate, setSelectedDate, meetingCountByDay, highlightWaypointIndex, setHighlightWaypointIndex, triggerRefresh } = useRoute();
+  const {
+    selectedDate: ctxSelectedDate,
+    setSelectedDate,
+    meetingCountByDay,
+    highlightWaypointIndex,
+    setHighlightWaypointIndex,
+    triggerRefresh,
+    appointmentsRequestStatus,
+    appointmentsError,
+  } = useRoute();
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const navRoute = useNavRoute();
   const navParams = navRoute.params as MapScreenNavParams | undefined;
@@ -284,8 +294,12 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
     );
   }
 
-  const showEmptyOverlay = appointments.length === 0;
-  const showNoAddressOverlay = appointments.length > 0 && coords.length === 0;
+  const meetingsViewState = getAppointmentsViewState(appointmentsRequestStatus, appointments.length);
+  const meetingsLoading = meetingsViewState === 'loading';
+  const meetingsLoadError = meetingsViewState === 'error';
+  const showEmptyOverlay = !meetingsLoading && !meetingsLoadError && appointments.length === 0;
+  const showNoAddressOverlay =
+    !meetingsLoading && !meetingsLoadError && appointments.length > 0 && coords.length === 0;
 
   const showHomeBase = fullPolyline.length > 0;
   const coordList = useMemo(() => coords.map((a) => a.coordinates), [coords]);
@@ -380,6 +394,20 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
           </View>
         </>
       )}
+      {meetingsLoading && (
+        <View style={styles.emptyOverlay}>
+          <ActivityIndicator size="small" color={MS_BLUE} />
+          <Text style={styles.emptyOverlayText}>Loading meetings...</Text>
+        </View>
+      )}
+      {meetingsLoadError && (
+        <View style={styles.emptyOverlay}>
+          <Text style={styles.emptyOverlayText}>{appointmentsError ?? 'Could not load meetings.'}</Text>
+          <TouchableOpacity style={styles.overlayRetryButton} onPress={triggerRefresh} activeOpacity={0.85}>
+            <Text style={styles.overlayRetryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {showEmptyOverlay && (
         <View style={styles.emptyOverlay}>
           <Text style={styles.emptyOverlayText}>
@@ -398,6 +426,7 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
         <View style={[styles.routeQcOverlay, { pointerEvents: 'none', top: topInset + 52 }]}>
           <Text style={styles.routeQcTitle}>Route QC</Text>
           <Text style={styles.routeQcLine}>appointments: {appointments.length}</Text>
+          <Text style={styles.routeQcLine}>meetingsStatus: {appointmentsRequestStatus}</Text>
           <Text style={styles.routeQcLine}>coords: {coords.length}</Text>
           <Text style={styles.routeQcLine}>waypoints: {routeData.waypoints.length}</Text>
           <Text style={styles.routeQcLine}>fullPolyline: {fullPolyline.length}</Text>
@@ -910,11 +939,24 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignSelf: 'center',
     maxWidth: 280,
+    alignItems: 'center',
+    gap: 8,
   },
   emptyOverlayText: {
     fontSize: 14,
     color: '#64748b',
     textAlign: 'center',
+  },
+  overlayRetryButton: {
+    backgroundColor: MS_BLUE,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  overlayRetryButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   routeQcOverlay: {
     position: 'absolute',

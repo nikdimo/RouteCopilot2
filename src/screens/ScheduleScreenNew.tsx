@@ -11,6 +11,7 @@ import {
   Platform,
   useWindowDimensions,
   Alert,
+  Linking,
   PanResponder,
   Animated,
 } from 'react-native';
@@ -51,16 +52,43 @@ import { useIsWideScreen } from '../hooks/useIsWideScreen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
 import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
+import { getAppointmentsViewState } from '../utils/appointmentsViewState';
 import { EmptyStateScanner } from '../components/emptyState/EmptyStateScanner';
 import { useEmptyStateAnimation } from '../components/emptyState/useEmptyStateAnimation';
 import { MockSchedule } from '../components/emptyState/MockSchedule';
 import { SignedInEmptyStateLeft, SignedInEmptyStateRight } from '../components/emptyState/SignedInEmptyState';
 import TrialSubscribeBanner from '../components/TrialSubscribeBanner';
+import { backendGetProfileSettings } from '../services/backendApi';
 
 const MapScreen = React.lazy(() => import('./MapScreen'));
 const isExpoGo = Constants.appOwnership === 'expo';
+const ROUTE_UI_DEBUG =
+  __DEV__ || process.env.EXPO_PUBLIC_DEBUG_ROUTE_SYNC === '1';
 
 const GREEN = '#107C10';
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+type TrialBannerState = {
+  visible: boolean;
+  daysLeft: number | null;
+  trialEndsAtLabel: string | null;
+  upgradeUrl: string | null;
+};
+
+function formatShortDate(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function computeDaysLeftFromIso(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const endMs = new Date(iso).getTime();
+  if (!Number.isFinite(endMs)) return null;
+  const left = Math.ceil((endMs - Date.now()) / MS_PER_DAY);
+  return Math.max(0, left);
+}
 
 export type MeetingItem = {
   id: string;
@@ -248,16 +276,37 @@ function EmptySchedule({
   );
 }
 
+function MeetingsLoadErrorState({
+  message,
+  onRetry,
+}: {
+  message?: string | null;
+  onRetry: () => void;
+}) {
+  return (
+    <View style={styles.loadingErrorContainer}>
+      <Text style={styles.loadingErrorTitle}>Couldn't load meetings</Text>
+      <Text style={styles.loadingErrorMessage}>
+        {message ?? 'Please check your connection and try again.'}
+      </Text>
+      <TouchableOpacity style={styles.loadingErrorButton} onPress={onRetry} activeOpacity={0.85}>
+        <Text style={styles.loadingErrorButtonText}>Retry</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 type ScheduleNav = NativeStackNavigationProp<ScheduleStackParamList, 'ScheduleHome'>;
 
 function ScheduleScreenNew() {
   const navigation = useNavigation<ScheduleNav>();
-  const { userToken } = useAuth();
+  const { userToken, getValidToken } = useAuth();
   const { preferences } = useUserPreferences();
   const {
     appointments,
     setAppointments,
-    setAppointmentsLoading,
+    appointmentsRequestStatus,
+    appointmentsError,
     markEventAsDone,
     unmarkEventAsDone,
     removeAppointment,
@@ -281,12 +330,62 @@ function ScheduleScreenNew() {
   const [refreshing, setRefreshing] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
   const [ctaVisible, setCtaVisible] = useState(true);
+  const [trialBannerState, setTrialBannerState] = useState<TrialBannerState>({
+    visible: false,
+    daysLeft: null,
+    trialEndsAtLabel: null,
+    upgradeUrl: null,
+  });
   const [wideHeaderHeight, setWideHeaderHeight] = useState(DEFAULT_WIDE_HEADER_SPACER);
   const [portraitHeaderHeight, setPortraitHeaderHeight] = useState(DEFAULT_PORTRAIT_HEADER_SPACER);
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
   const isSignedIn = !!userToken;
+
+  const refreshTrialBannerState = useCallback(async () => {
+    if (!userToken) {
+      setTrialBannerState({
+        visible: false,
+        daysLeft: null,
+        trialEndsAtLabel: null,
+        upgradeUrl: null,
+      });
+      return;
+    }
+
+    const token = userToken ?? (getValidToken ? await getValidToken() : null);
+    if (!token) return;
+
+    const profileSettings = await backendGetProfileSettings(token);
+    if (!profileSettings) return;
+
+    const access = profileSettings.access;
+    const daysLeft =
+      typeof access.trialDaysLeft === 'number'
+        ? access.trialDaysLeft
+        : computeDaysLeftFromIso(access.trialEndsAt);
+    const isBasicTrial = access.source === 'trial' && access.trialPlanCode === 'basic';
+    const visible = isBasicTrial && typeof daysLeft === 'number' && daysLeft > 0;
+
+    setTrialBannerState({
+      visible,
+      daysLeft: typeof daysLeft === 'number' ? daysLeft : null,
+      trialEndsAtLabel: formatShortDate(access.trialEndsAt),
+      upgradeUrl: profileSettings.upgradeUrl ?? null,
+    });
+  }, [getValidToken, userToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await refreshTrialBannerState();
+      if (cancelled) return;
+    })().catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTrialBannerState]);
 
   const handleAddMeeting = useCallback(() => {
     navigation.navigate('AddMeeting');
@@ -300,6 +399,15 @@ function ScheduleScreenNew() {
     }
     Alert.alert('Open Profile', 'Go to Profile to sign in and connect calendar sync.');
   }, [navigation]);
+
+  const handleTrialSubscribe = useCallback(async () => {
+    const url = trialBannerState.upgradeUrl ?? 'https://wiseplan.dk/billing';
+    try {
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Billing link unavailable', 'Could not open the upgrade page right now.');
+    }
+  }, [trialBannerState.upgradeUrl]);
 
   const isWide = useIsWideScreen();
   const useSplitLayout = isWide;
@@ -386,8 +494,28 @@ function ScheduleScreenNew() {
   const listBottomPadding = Math.max(100, (tabBarHeight || 56) + insets.bottom + 16);
 
   const appointmentsList = appointments ?? [];
-  const isEmptyData = appointmentsList.length === 0 && !appointmentsLoading;
+  const meetingsViewState = getAppointmentsViewState(appointmentsRequestStatus, appointmentsList.length);
+  const isMeetingsLoading = meetingsViewState === 'loading';
+  const hasMeetingsLoadError = meetingsViewState === 'error';
+  const isEmptyData = meetingsViewState === 'empty';
   const emptyAnimationState = useEmptyStateAnimation(isEmptyData && isWide);
+
+  useEffect(() => {
+    if (!ROUTE_UI_DEBUG) return;
+    if (!isEmptyData) return;
+    console.log('[RouteQC] ScheduleScreen: rendering empty state', {
+      selectedDateKey: toLocalDayKey(selectedDate),
+      meetingsViewState,
+      appointmentsRequestStatus,
+      appointmentsCount: appointmentsList.length,
+    });
+  }, [
+    isEmptyData,
+    selectedDate,
+    meetingsViewState,
+    appointmentsRequestStatus,
+    appointmentsList.length,
+  ]);
 
   const meetings = appointmentsList.map(eventToMeetingItem);
 
@@ -429,6 +557,12 @@ function ScheduleScreenNew() {
     }, [ensureMeetingCountsForDate, selectedDate])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      refreshTrialBannerState().catch(() => {});
+    }, [refreshTrialBannerState])
+  );
+
   const onSelectDate = useCallback(
     (date: Date) => {
       setSelectedDate(date);
@@ -449,6 +583,10 @@ function ScheduleScreenNew() {
     ensureMeetingCountsForDate(selectedDate, true);
     refreshTimeoutRef.current = setTimeout(() => setRefreshing(false), 12000);
   }, [triggerRefresh, ensureMeetingCountsForDate, selectedDate, setLoadedRange]);
+
+  const handleRetryMeetingsLoad = useCallback(() => {
+    onRefresh();
+  }, [onRefresh]);
 
   const prevLoadingRef = useRef(false);
   useEffect(() => {
@@ -782,10 +920,12 @@ function ScheduleScreenNew() {
   const DraggableFlatListComponent = useDragList ? getDraggableFlatList() : null;
   const scheduleContent = (
     <>
-      {appointmentsLoading && !refreshing && appointmentsList.length === 0 ? (
+      {isMeetingsLoading && !refreshing && appointmentsList.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ScheduleSkeletonCards />
         </View>
+      ) : hasMeetingsLoadError && appointmentsList.length === 0 ? (
+        <MeetingsLoadErrorState message={appointmentsError} onRetry={handleRetryMeetingsLoad} />
       ) : useDragList && DraggableFlatListComponent ? (
         <DraggableFlatListComponent
           data={blockData}
@@ -807,13 +947,20 @@ function ScheduleScreenNew() {
               : [styles.listContent, { paddingBottom: listBottomPadding }]
           }
           ListEmptyComponent={() => (
-            <EmptySchedule
-              animationState={emptyAnimationState}
-              isWide={isWide}
-              isSignedIn={isSignedIn}
-              onAddMeeting={handleAddMeeting}
-              onSignInAndSync={handleSignInAndSync}
-            />
+            hasMeetingsLoadError ? (
+              <MeetingsLoadErrorState
+                message={appointmentsError}
+                onRetry={handleRetryMeetingsLoad}
+              />
+            ) : (
+              <EmptySchedule
+                animationState={emptyAnimationState}
+                isWide={isWide}
+                isSignedIn={isSignedIn}
+                onAddMeeting={handleAddMeeting}
+                onSignInAndSync={handleSignInAndSync}
+              />
+            )
           )}
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { y: scrollY } } }],
@@ -939,12 +1086,12 @@ function ScheduleScreenNew() {
             </View>
           </View>
 
-          {/* Floating trial subscribe banner – does not mix with layout; logic to wire visibility later */}
+          {/* Floating trial subscribe banner (driven by backend trial access state). */}
           <TrialSubscribeBanner
-            visible
-            trialEndsAtLabel="Dec 15, 2025"
-            onSubscribe={() => {}}
-            onDismiss={() => {}}
+            visible={trialBannerState.visible}
+            trialEndsAtLabel={trialBannerState.trialEndsAtLabel ?? undefined}
+            daysLeft={trialBannerState.daysLeft}
+            onSubscribe={handleTrialSubscribe}
           />
 
           {/* Floating Onboarding CTA (Option 1) for Desktop */}
@@ -1036,6 +1183,12 @@ function ScheduleScreenNew() {
       </Animated.View>
 
       {scheduleContent}
+      <TrialSubscribeBanner
+        visible={trialBannerState.visible}
+        trialEndsAtLabel={trialBannerState.trialEndsAtLabel ?? undefined}
+        daysLeft={trialBannerState.daysLeft}
+        onSubscribe={handleTrialSubscribe}
+      />
     </View>
   );
 }
@@ -1332,6 +1485,37 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 16,
     paddingTop: 8,
+  },
+  loadingErrorContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 10,
+  },
+  loadingErrorTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+    textAlign: 'center',
+  },
+  loadingErrorMessage: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    maxWidth: 420,
+  },
+  loadingErrorButton: {
+    marginTop: 8,
+    backgroundColor: '#0078D4',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  loadingErrorButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
   skeletonList: {
     gap: 12,

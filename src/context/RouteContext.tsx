@@ -23,6 +23,8 @@ const COUNTS_CACHE_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 type CountsCache = { counts: Record<string, number>; savedAt: number };
 
+export type AppointmentsRequestStatus = 'idle' | 'loading' | 'success' | 'error';
+
 /** Synchronous read from localStorage — web only. Used in useState initialiser for zero-flash display. */
 function loadCountsCacheSync(): Record<string, number> {
   if (Platform.OS !== 'web' || typeof window === 'undefined' || !window.localStorage) return {};
@@ -48,8 +50,11 @@ type RouteContextValue = {
   triggerRefresh: () => void;
   refreshTrigger: number;
   appointments: CalendarEvent[];
+  appointmentsRequestStatus: AppointmentsRequestStatus;
+  appointmentsError: string | null;
   appointmentsLoading: boolean;
   setAppointmentsLoading: (loading: boolean) => void;
+  setAppointmentsRequestState: (status: AppointmentsRequestStatus, error?: string | null) => void;
   /** True while background enrichment (geocoding/contact hydration) is running for selected day. */
   appointmentsEnriching: boolean;
   setAppointmentsEnriching: (enriching: boolean) => void;
@@ -88,7 +93,11 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const triggerRefresh = useCallback(() => setRefreshTrigger((n) => n + 1), []);
   const [appointments, setAppointmentsState] = useState<CalendarEvent[]>([]);
-  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsRequestStatus, setAppointmentsRequestStatus] =
+    useState<AppointmentsRequestStatus>('idle');
+  const [appointmentsError, setAppointmentsError] = useState<string | null>(null);
+  const appointmentsLoading =
+    appointmentsRequestStatus === 'idle' || appointmentsRequestStatus === 'loading';
   const [appointmentsEnriching, setAppointmentsEnriching] = useState(false);
   const [pendingLocalEvent, setPendingLocalEvent] = useState<{ dayKey: string; event: CalendarEvent } | null>(null);
   const [highlightWaypointIndex, setHighlightWaypointIndex] = useState<number | null>(null);
@@ -186,6 +195,27 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
       status: completedSet.has(ev.id) ? ('completed' as const) : (ev.status ?? ('pending' as const)),
     }));
     setAppointmentsState(merged);
+  }, []);
+
+  const setAppointmentsRequestState = useCallback(
+    (status: AppointmentsRequestStatus, error?: string | null) => {
+      setAppointmentsRequestStatus(status);
+      if (status === 'error') {
+        setAppointmentsError(error ?? 'Could not load meetings.');
+        return;
+      }
+      setAppointmentsError(null);
+    },
+    []
+  );
+
+  const setAppointmentsLoading = useCallback((loading: boolean) => {
+    if (loading) {
+      setAppointmentsRequestStatus('loading');
+      setAppointmentsError(null);
+      return;
+    }
+    setAppointmentsRequestStatus((prev) => (prev === 'error' ? prev : 'success'));
   }, []);
 
   const addAppointment = useCallback((event: CalendarEvent) => {
@@ -383,7 +413,8 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
 
   const resetRouteState = useCallback(() => {
     setAppointmentsState([]);
-    setAppointmentsLoading(false);
+    setAppointmentsRequestStatus('idle');
+    setAppointmentsError(null);
     setAppointmentsEnriching(false);
     setMeetingCountByDay({});
     setLoadedRange(null);
@@ -404,8 +435,11 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
     triggerRefresh,
     refreshTrigger,
     appointments,
+    appointmentsRequestStatus,
+    appointmentsError,
     appointmentsLoading,
     setAppointmentsLoading,
+    setAppointmentsRequestState,
     appointmentsEnriching,
     setAppointmentsEnriching,
     setAppointments,

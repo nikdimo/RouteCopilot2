@@ -16,11 +16,13 @@ import { getLocalMeetingsForDay } from '../services/localMeetings';
 import { sortAppointmentsByTime } from '../utils/optimization';
 import { toLocalDayKey } from '../utils/dateUtils';
 import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
+import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsForDate';
+import { getMeetingSyncMode } from '../utils/meetingSyncMode';
 
 const PRELOAD_DAYS_AHEAD = 5;
 
-/** Log route QC diagnostics on Android or in __DEV__ to trace why routes may not display */
-const ROUTE_QC_LOG = __DEV__ || Platform.OS === 'android';
+/** Route diagnostics for auth/fetch/count sync races. */
+const ROUTE_QC_LOG = __DEV__ || Platform.OS === 'android' || process.env.EXPO_PUBLIC_DEBUG_ROUTE_SYNC === '1';
 
 function applyOrderSync(
   events: Awaited<ReturnType<typeof sortAppointmentsByTime>>,
@@ -41,17 +43,20 @@ function applyOrderSync(
 }
 
 export default function SelectedDateSync() {
-  const { userToken, getValidToken, signOut } = useAuth();
+  const { userToken, getValidToken, signOut, isRestoringSession } = useAuth();
   const { preferences } = useUserPreferences();
   const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
   const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
   // Avoid startup races where preferences still report `free` while signed-in auth is already ready.
   const shouldSyncCalendar = canSyncCalendar || Boolean(userToken);
+  const syncMode = getMeetingSyncMode(shouldSyncCalendar, Boolean(userToken));
+  const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
   const {
     selectedDate,
     refreshTrigger,
+    meetingCountByDay,
     setAppointments,
-    setAppointmentsLoading,
+    setAppointmentsRequestState,
     setAppointmentsEnriching,
     getDayOrder,
     pendingLocalEvent,
@@ -59,6 +64,7 @@ export default function SelectedDateSync() {
   } = useRoute();
   const dayCache = useRef<Map<string, Awaited<ReturnType<typeof sortAppointmentsByTime>>>>(new Map());
   const lastRefreshTrigger = useRef(0);
+  const lastSyncModeRef = useRef<string | null>(null);
   /** Track which day is currently "active" so background enrichment doesn't clobber a switched day. */
   const activeDayKey = useRef<string>('');
 
@@ -68,10 +74,18 @@ export default function SelectedDateSync() {
   }, [pendingLocalEvent]);
 
   useEffect(() => {
-    if (shouldSyncCalendar && userToken) return;
-    dayCache.current.clear();
-    activeDayKey.current = '';
-  }, [shouldSyncCalendar, userToken]);
+    if (lastSyncModeRef.current !== syncMode) {
+      if (ROUTE_QC_LOG) {
+        console.log('[RouteQC] SelectedDateSync: sync mode changed -> clear day cache', {
+          from: lastSyncModeRef.current,
+          to: syncMode,
+        });
+      }
+      dayCache.current.clear();
+      activeDayKey.current = '';
+      lastSyncModeRef.current = syncMode;
+    }
+  }, [syncMode]);
 
   /** Merge pending local event into list for this day (so newly confirmed meeting shows immediately). */
   const mergePendingIfSameDay = useCallback(
@@ -88,21 +102,39 @@ export default function SelectedDateSync() {
   );
 
   const fetchForDate = useCallback(
-    async (date: Date) => {
+    async (date: Date, options?: { forceNetwork?: boolean }) => {
+      const forceNetwork = options?.forceNetwork === true;
       const dayKey = toLocalDayKey(date);
-      if (!shouldSyncCalendar) {
-        const localEvents = await getLocalMeetingsForDay(dayKey);
-        const localSorted = sortAppointmentsByTime(localEvents);
-        const localMerged = mergePendingIfSameDay(dayKey, localSorted);
-        dayCache.current.set(dayKey, localMerged);
-        setAppointments(localMerged);
-        setAppointmentsLoading(false);
+      if (isRestoringSession) {
+        setAppointmentsRequestState('loading');
         setAppointmentsEnriching(false);
+        return;
+      }
+      if (!shouldSyncCalendar) {
+        try {
+          const localEvents = await getLocalMeetingsForDay(dayKey);
+          const localSorted = sortAppointmentsByTime(localEvents);
+          const localMerged = mergePendingIfSameDay(dayKey, localSorted);
+          dayCache.current.set(dayKey, localMerged);
+          setAppointments(localMerged);
+          setAppointmentsRequestState('success');
+          setAppointmentsEnriching(false);
+        } catch {
+          setAppointments([]);
+          setAppointmentsRequestState('error', 'Could not load local meetings.');
+          setAppointmentsEnriching(false);
+        }
         return;
       }
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
       if (!token) {
-        setAppointments([]);
+        if (ROUTE_QC_LOG) {
+          console.log('[RouteQC] SelectedDateSync: token missing, keep loading', {
+            dayKey,
+            syncMode,
+          });
+        }
+        setAppointmentsRequestState('loading');
         setAppointmentsEnriching(false);
         return;
       }
@@ -110,23 +142,51 @@ export default function SelectedDateSync() {
 
       // ── Serve from cache immediately if available ──
       const cached = dayCache.current.get(dayKey);
-      if (cached) {
+      if (cached && !forceNetwork) {
         const merged = mergePendingIfSameDay(dayKey, cached);
+        const hasUnresolvedAddresses = merged.some(
+          (e) => !e.coordinates && (e.location?.trim() ?? '') !== ''
+        );
         if (ROUTE_QC_LOG) {
           const withCoords = merged.filter((e) => e.coordinates != null);
           console.log('[RouteQC] SelectedDateSync: from cache', {
             dayKey,
             total: merged.length,
             withCoordinates: withCoords.length,
+            hasUnresolvedAddresses,
           });
         }
         setAppointments(merged);
-        setAppointmentsLoading(false);
-        setAppointmentsEnriching(false);
+        setAppointmentsRequestState('success');
+        setAppointmentsEnriching(hasUnresolvedAddresses);
+
+        // Cached entries may come from raw-only fallback; retry enrichment in background.
+        if (hasUnresolvedAddresses) {
+          enrichCalendarEventsAll(token, merged)
+            .then((enrichedFromCache) => {
+              if (activeDayKey.current !== dayKey) return;
+              const reordered = applyOrderSync(sortAppointmentsByTime(enrichedFromCache), merged.map((e) => e.id));
+              const mergedEnriched = mergePendingIfSameDay(dayKey, reordered);
+              dayCache.current.set(dayKey, mergedEnriched);
+              setAppointments(mergedEnriched);
+              setAppointmentsEnriching(false);
+              if (ROUTE_QC_LOG) {
+                const withCoords = mergedEnriched.filter((e) => e.coordinates != null);
+                console.log('[RouteQC] SelectedDateSync: cache enrichment set', {
+                  dayKey,
+                  total: mergedEnriched.length,
+                  withCoordinates: withCoords.length,
+                });
+              }
+            })
+            .catch(() => {
+              if (activeDayKey.current === dayKey) setAppointmentsEnriching(false);
+            });
+        }
         return;
       }
 
-      setAppointmentsLoading(true);
+      setAppointmentsRequestState('loading');
       setAppointmentsEnriching(false);
       const start = startOfDay(date);
       const end = endOfDay(date);
@@ -151,7 +211,7 @@ export default function SelectedDateSync() {
             });
           }
           setAppointments(rawMerged);
-          setAppointmentsLoading(false);
+          setAppointmentsRequestState('success');
           const hasUnresolvedAddresses = rawMerged.some(
             (e) => !e.coordinates && (e.location?.trim() ?? '') !== ''
           );
@@ -187,7 +247,7 @@ export default function SelectedDateSync() {
       } catch (e) {
         if (activeDayKey.current === dayKey) {
           setAppointments([]);
-          setAppointmentsLoading(false);
+          setAppointmentsRequestState('error', 'Could not load meetings from calendar.');
           setAppointmentsEnriching(false);
         }
         if (e instanceof GraphUnauthorizedError) {
@@ -198,7 +258,7 @@ export default function SelectedDateSync() {
         }
       }
     },
-    [shouldSyncCalendar, userToken, getValidToken, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, getDayOrder, signOut, mergePendingIfSameDay]
+    [isRestoringSession, shouldSyncCalendar, syncMode, userToken, getValidToken, setAppointments, setAppointmentsRequestState, setAppointmentsEnriching, getDayOrder, signOut, mergePendingIfSameDay]
   );
 
   /** Preload a future day fully (raw + enrich) and store in cache. Does not update context. */
@@ -237,21 +297,39 @@ export default function SelectedDateSync() {
   );
 
   useEffect(() => {
-    const dayKey = toLocalDayKey(selectedDate);
-    const cached = dayCache.current.get(dayKey);
-    if (cached) {
-      const merged = mergePendingIfSameDay(dayKey, cached);
-      if (merged !== cached) dayCache.current.set(dayKey, merged);
-      setAppointments(merged);
-      setAppointmentsLoading(false);
+    if (isRestoringSession) {
+      setAppointmentsRequestState('loading');
       setAppointmentsEnriching(false);
       return;
     }
+    const dayKey = toLocalDayKey(selectedDate);
+    const cached = dayCache.current.get(dayKey);
+    if (cached) {
+      // In signed-in calendar mode, never trust an empty cached day.
+      // It can be a stale preload and would otherwise flash a false empty-state.
+      if (shouldSyncCalendar && cached.length === 0) {
+        const dotCount = meetingCountByDay[dayKey] ?? 0;
+        if (ROUTE_QC_LOG) {
+          console.log('[RouteQC] SelectedDateSync: empty cache on selected day -> force network fetch', {
+            dayKey,
+            dotCount,
+          });
+        }
+        setAppointments([]);
+        setAppointmentsRequestState('loading');
+        setAppointmentsEnriching(false);
+        fetchForDate(selectedDate, { forceNetwork: true });
+        return;
+      }
+      // Reuse fetchForDate even for cache hits so cached-raw days can self-heal via background enrichment.
+      fetchForDate(selectedDate);
+      return;
+    }
     setAppointments([]);
-    setAppointmentsLoading(true);
+    setAppointmentsRequestState('loading');
     setAppointmentsEnriching(false);
     fetchForDate(selectedDate);
-  }, [selectedDate, fetchForDate, setAppointments, setAppointmentsLoading, setAppointmentsEnriching, mergePendingIfSameDay]);
+  }, [isRestoringSession, selectedDate, shouldSyncCalendar, meetingCountByDay, fetchForDate, setAppointments, setAppointmentsRequestState, setAppointmentsEnriching]);
 
   useEffect(() => {
     if (!shouldSyncCalendar) return;
@@ -273,11 +351,17 @@ export default function SelectedDateSync() {
   }, [shouldSyncCalendar, selectedDate, userToken, getValidToken, preloadOneDay]);
 
   useEffect(() => {
+    if (isRestoringSession) return;
+    ensureMeetingCountsForDate(selectedDate).catch(() => {});
+  }, [isRestoringSession, selectedDate, syncMode, ensureMeetingCountsForDate]);
+
+  useEffect(() => {
     if (refreshTrigger === lastRefreshTrigger.current) return;
     lastRefreshTrigger.current = refreshTrigger;
     dayCache.current.delete(toLocalDayKey(selectedDate));
-    fetchForDate(selectedDate);
-  }, [refreshTrigger, selectedDate, fetchForDate]);
+    fetchForDate(selectedDate, { forceNetwork: true });
+    ensureMeetingCountsForDate(selectedDate, true).catch(() => {});
+  }, [refreshTrigger, selectedDate, fetchForDate, ensureMeetingCountsForDate]);
 
   return null;
 }

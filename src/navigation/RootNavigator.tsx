@@ -12,6 +12,9 @@ import { MS_CLIENT_ID } from '../config/auth';
 import { BACKEND_API_ENABLED } from '../config/backend';
 import { backendUpdateProfileSettings } from '../services/backendApi';
 
+const ROUTE_SYNC_DEBUG =
+  __DEV__ || process.env.EXPO_PUBLIC_DEBUG_ROUTE_SYNC === '1';
+
 export default function RootNavigator() {
   const { isRestoringSession, userToken, getValidToken } = useAuth();
   const { triggerRefresh } = useRoute();
@@ -20,12 +23,23 @@ export default function RootNavigator() {
   const [hasCheckedMagicGraphPrompt, setHasCheckedMagicGraphPrompt] = useState(false);
   const [showOutlookConnectedBanner, setShowOutlookConnectedBanner] = useState(false);
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bootStartedAtRef = useRef<number>(Date.now());
 
   useEffect(() => {
     if (Platform.OS !== 'web') {
       SplashScreen.hideAsync();
     }
   }, []);
+
+  useEffect(() => {
+    if (!ROUTE_SYNC_DEBUG) return;
+    console.log('[RouteQC] Auth readiness', {
+      isRestoringSession,
+      hasUserToken: !!userToken,
+      elapsedMsSinceBoot: Date.now() - bootStartedAtRef.current,
+      atIso: new Date().toISOString(),
+    });
+  }, [isRestoringSession, userToken]);
 
   useEffect(() => {
     let cancelled = false;

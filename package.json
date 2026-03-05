@@ -20,6 +20,8 @@
     "backend:check": "cd backend && npm run check",
     "admin:serve": "python -m http.server 5175 --directory admin-panel",
     "export:web": "expo export --platform web",
+    "test:appointments-view-state": "node scripts/tests/appointmentsViewState.test.cjs",
+    "test:meeting-sync-mode": "node scripts/tests/meetingSyncMode.test.cjs",
     "prepare:vps": "npm run export:web && mkdir ..\\wiseplan-release\\app 2>nul & xcopy /E /I /Y dist\\* ..\\wiseplan-release\\app\\ & copy vps-landing\\index.html vps-landing\\privacy.html vps-landing\\terms.html ..\\wiseplan-release\\ & xcopy /E /I /Y vps-landing\\assets ..\\wiseplan-release\\assets\\ 2>nul & xcopy /E /I /Y vps-landing\\billing ..\\wiseplan-release\\billing\\ 2>nul & xcopy /E /I /Y vps-landing\\account ..\\wiseplan-release\\account\\ 2>nul & copy vps-landing\\nginx-wiseplan-domain.conf ..\\wiseplan-release\\ & copy vps-landing\\nginx-multi-project.conf ..\\wiseplan-release\\ 2>nul & copy vps-landing\\nginx-wiseplan.conf ..\\wiseplan-release\\ 2>nul",
     "postinstall": "patch-package"
   },
