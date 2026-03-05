@@ -54,6 +54,7 @@ import LocationSearch, {
 } from '../components/LocationSearch';
 import {
   createCalendarEvent,
+  updateCalendarEvent,
   createContact,
   getCalendarEvents,
   GraphUnauthorizedError,
@@ -178,7 +179,7 @@ async function enrichAppointmentsWithCoords(
 export default function AddMeetingScreen() {
   const navigation = useNavigation();
   const { userToken, getValidToken, signOut } = useAuth();
-  const { appointments, addAppointment, setSelectedDate, setPendingLocalEvent } = useRoute();
+  const { appointments, addAppointment, updateAppointment, setSelectedDate, setPendingLocalEvent } = useRoute();
   const { preferences } = useUserPreferences();
   const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
   const { canSyncCalendar, canCreateContacts, canUseBetterGeocoding } = getTierEntitlements(subscriptionTier);
@@ -491,6 +492,116 @@ export default function AddMeetingScreen() {
     const isLocalId = finalEvent.id.startsWith('local-');
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
     const eventBody = (finalEvent.bodyPreview ?? finalEvent.notes ?? '').trim() || undefined;
+
+    const shiftedEvents = confirmSlot?.explain?.shiftedEvents ?? [];
+    if (shiftedEvents.length > 0) {
+      const appliedShiftPatches: Array<{
+        id: string;
+        oldStartIso: string;
+        oldEndIso: string;
+        oldTime: string;
+        newStartIso: string;
+        newEndIso: string;
+        newTime: string;
+        serverEvent?: CalendarEvent;
+      }> = [];
+      const errors: string[] = [];
+
+      for (const shift of shiftedEvents) {
+        const eventId = shift.id;
+        const existing = appointments.find((a) => a.id === eventId) ?? null;
+        const oldStartIso = existing?.startIso ?? new Date(shift.fromStartMs).toISOString();
+        const oldEndIso = existing?.endIso ?? new Date(shift.fromEndMs).toISOString();
+        const oldTime = existing?.time ?? `${formatClock(shift.fromStartMs)} - ${formatClock(shift.fromEndMs)}`;
+        const newStartIso = new Date(shift.toStartMs).toISOString();
+        const newEndIso = new Date(shift.toEndMs).toISOString();
+        const newTime = `${formatClock(shift.toStartMs)} - ${formatClock(shift.toEndMs)}`;
+
+        if (!eventId.startsWith('local-')) {
+          if (!canSyncCalendar || !token) {
+            errors.push(`${shift.title}: calendar sync unavailable`);
+            continue;
+          }
+          try {
+            const result = await updateCalendarEvent(token, eventId, {
+              startIso: newStartIso,
+              endIso: newEndIso,
+            });
+            if (!result.success) {
+              const err = 'error' in result ? result.error : 'unknown sync error';
+              errors.push(`${shift.title}: ${err}`);
+              continue;
+            }
+            appliedShiftPatches.push({
+              id: eventId,
+              oldStartIso,
+              oldEndIso,
+              oldTime,
+              newStartIso,
+              newEndIso,
+              newTime,
+              serverEvent: result.event,
+            });
+          } catch (err) {
+            if (err instanceof GraphUnauthorizedError) {
+              await clearGraphSession().catch(() => { });
+              if (userToken && !isMagicAuthToken(userToken)) {
+                signOut();
+              }
+            }
+            errors.push(`${shift.title}: ${err instanceof Error ? err.message : 'sync failed'}`);
+          }
+          continue;
+        }
+
+        appliedShiftPatches.push({
+          id: eventId,
+          oldStartIso,
+          oldEndIso,
+          oldTime,
+          newStartIso,
+          newEndIso,
+          newTime,
+        });
+      }
+
+      if (errors.length > 0) {
+        // Best-effort rollback for already synced Graph shifts when chain update fails.
+        if (token) {
+          for (const patch of [...appliedShiftPatches].reverse()) {
+            if (patch.id.startsWith('local-')) continue;
+            await updateCalendarEvent(token, patch.id, {
+              startIso: patch.oldStartIso,
+              endIso: patch.oldEndIso,
+            }).catch(() => { });
+          }
+        }
+        Alert.alert(
+          'Could not reschedule pushed meetings',
+          errors.join('\n'),
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      for (const patch of appliedShiftPatches) {
+        if (patch.serverEvent) {
+          updateAppointment(patch.id, {
+            ...patch.serverEvent,
+            startIso: patch.newStartIso,
+            endIso: patch.newEndIso,
+            time: patch.newTime,
+          });
+        } else {
+          updateAppointment(patch.id, {
+            startIso: patch.newStartIso,
+            endIso: patch.newEndIso,
+            time: patch.newTime,
+          });
+        }
+      }
+    }
+
     if (canSyncCalendar && token && isLocalId) {
       const proposedStartIso = finalEvent.startIso!;
       const proposedEndIso = finalEvent.endIso!;

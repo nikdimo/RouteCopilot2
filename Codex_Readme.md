@@ -5,6 +5,23 @@
 - Do not run commands, open files, edit code, or execute tools until the user gives an explicit task.
 - If the user message is unclear, ask a short clarification question and wait.
 
+## Latest Session Update (2026-03-05, pusher booking execution fix)
+- User-reported bug:
+  1. Pusher suggestion displayed moved meeting times, but after booking the meeting, the pushed meeting stayed at original time.
+  2. Result: schedule could show user as late to that unchanged meeting.
+- Fix implemented:
+  1. `src/screens/AddMeetingScreen.tsx` (`handleConfirmBooking`) now executes shift updates for `confirmSlot.explain.shiftedEvents` before finalizing booking.
+  2. For Outlook-backed events:
+     - calls `updateCalendarEvent(...)` with shifted start/end times.
+  3. For local events:
+     - applies shifted times through route context `updateAppointment(...)` (which persists local meetings).
+  4. Failure handling:
+     - if any pushed-meeting update fails, booking is stopped and user sees a clear error.
+     - includes best-effort rollback of already-applied Graph shifts in the same chain.
+- Outcome:
+  1. A booked pusher slot now actually moves the affected meeting chain instead of only previewing movement in UI.
+  2. Eliminates the "fake push" state where proposal looked valid but final schedule stayed unchanged.
+
 ## Latest Session Update (2026-03-05, Best Options ranking/badge fix + slot logic instrumentation)
 - User-reported production bug:
   1. Best Options showed two `Pusher` variants for the same meeting.
