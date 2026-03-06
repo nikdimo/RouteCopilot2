@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet, Text, Image } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, StyleSheet, Text, Image, type LayoutChangeEvent } from 'react-native';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -111,8 +111,24 @@ const MAP_STYLES = [
 
 export const MockMap: React.FC<MockMapProps> = ({ animationState }) => {
     const { mockMapStyleIndex } = useDevUI();
+    const [mapViewport, setMapViewport] = useState({ width: 400, height: 400 });
     const layoutIndex = mockMapStyleIndex;
     const styleDef = MAP_STYLES[layoutIndex] as any;
+    const mapCanvasSize = Math.max(
+        220,
+        Math.min(420, Math.floor(Math.min(mapViewport.width, mapViewport.height) * 0.94))
+    );
+
+    const handleLayout = useCallback((event: LayoutChangeEvent) => {
+        const { width, height } = event.nativeEvent.layout;
+        if (width <= 0 || height <= 0) return;
+        setMapViewport((prev) => {
+            if (Math.abs(prev.width - width) < 1 && Math.abs(prev.height - height) < 1) {
+                return prev;
+            }
+            return { width, height };
+        });
+    }, []);
 
     // Background existing booked active route (1 -> 2 -> 3 -> 4)
     const baseBookedRoute = `M ${styleDef.p1.x} ${styleDef.p1.y} L ${styleDef.p2.x} ${styleDef.p2.y} L ${styleDef.p3.x} ${styleDef.p3.y} L ${styleDef.p4.x} ${styleDef.p4.y}`;
@@ -253,7 +269,7 @@ export const MockMap: React.FC<MockMapProps> = ({ animationState }) => {
     };
 
     return (
-        <View style={[styles.container, { backgroundColor: styleDef.bg }]}>
+        <View style={[styles.container, { backgroundColor: styleDef.bg }]} onLayout={handleLayout}>
 
             {/* Beautiful Abstract Map Background spreading entire container */}
             <View style={[StyleSheet.absoluteFill, { zIndex: 0 }]}>
@@ -264,7 +280,7 @@ export const MockMap: React.FC<MockMapProps> = ({ animationState }) => {
                 />
             </View>
 
-            <Animated.View style={[styles.mapContent, cameraStyle, { zIndex: 1 }]}>
+            <Animated.View style={[styles.mapContent, cameraStyle, { width: mapCanvasSize, height: mapCanvasSize, zIndex: 1 }]}>
 
                 <Svg width="100%" height="100%" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet" style={StyleSheet.absoluteFill}>
 
@@ -329,8 +345,6 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     mapContent: {
-        width: 400,
-        height: 400,
         position: 'relative',
         transformOrigin: 'center center',
     },

@@ -14,6 +14,8 @@ const BASIC_BENEFITS = [
 export type TrialSubscribeBannerProps = {
   /** When true, banner is visible. Logic to be wired (e.g. profileAccess?.source === 'trial'). */
   visible?: boolean;
+  /** Remaining trial days (server-computed). */
+  daysLeft?: number | null;
   /** Optional trial end date label (e.g. "Dec 15, 2025"). */
   trialEndsAtLabel?: string;
   /** Called when user taps Subscribe. Logic to be wired (e.g. navigate to billing). */
@@ -24,6 +26,7 @@ export type TrialSubscribeBannerProps = {
 
 export default function TrialSubscribeBanner({
   visible = true,
+  daysLeft,
   trialEndsAtLabel,
   onSubscribe,
   onDismiss,
@@ -55,11 +58,16 @@ export default function TrialSubscribeBanner({
           </View>
           <View style={styles.textBlock}>
             <Text style={styles.headline} numberOfLines={2}>
-              You're on a 30-day free trial of WisePlan Basic
+              You're on a free trial of WisePlan Basic
             </Text>
             <Text style={styles.subtext}>
               Subscribe to keep enjoying these benefits after your trial.
             </Text>
+            {typeof daysLeft === 'number' ? (
+              <Text style={styles.daysLeft}>
+                {daysLeft} day{daysLeft === 1 ? '' : 's'} left
+              </Text>
+            ) : null}
             {trialEndsAtLabel ? (
               <Text style={styles.trialEnd}>
                 Trial ends {trialEndsAtLabel}
@@ -167,6 +175,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#64748B',
     lineHeight: 19,
+  },
+  daysLeft: {
+    fontSize: 12,
+    color: '#1d4ed8',
+    marginTop: 6,
+    fontWeight: '700',
   },
   trialEnd: {
     fontSize: 12,

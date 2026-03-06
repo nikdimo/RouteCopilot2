@@ -1,9 +1,56 @@
 # Codex Session Context (Read First)
 
 ## Session Start Guardrail (Owner Directive)
-- On every new Codex session, first ask only: `What are we doing today?`
+- On the next Codex session, first ask only: `Can you check if everything works as it should now, or should we roll back from GitHub?`
+- After that check-in is answered, continue with: `What are we doing today?`
 - Do not run commands, open files, edit code, or execute tools until the user gives an explicit task.
 - If the user message is unclear, ask a short clarification question and wait.
+
+## Latest Session Update (2026-03-05, animation rollback to clean Git + calendar overlay preserved)
+- Problem being solved:
+  1. Onboarding empty-state animation behavior drifted after multiple edits/reverts.
+  2. CTA popup could reappear after window resize (especially web portrait/narrow width).
+  3. Needed to restore clean animation while preserving the new month calendar overlay flow.
+- What was changed:
+  1. Backups created before edits:
+     - `src/components/emptyState/EmptyStateScanner.tsx.restore-backup-20260305-225141`
+     - `src/components/emptyState/MockMap.tsx.restore-backup-20260305-225141`
+     - `src/screens/ScheduleScreenNew.tsx.restore-backup-20260305-225141`
+  2. Restored animation components from clean branch state:
+     - `origin/release/vps-2026-03-04:src/components/emptyState/EmptyStateScanner.tsx`
+     - `origin/release/vps-2026-03-04:src/components/emptyState/MockMap.tsx`
+  3. Kept month calendar overlay functionality in `src/screens/ScheduleScreenNew.tsx`:
+     - calendar icon opens month overlay
+     - selecting a day drives selected date and meetings/no-meetings state
+     - meeting-dot calendar data wiring remains active
+  4. Preserved CTA dismiss stability across remount/resize in a controlled way:
+     - `ScheduleScreenNew.tsx` keeps session-level dismiss state
+     - `EmptyStateScanner.tsx` accepts optional `ctaVisible` + `onDismissCta` props
+- Validation run:
+  1. `npm.cmd run test:appointments-view-state` passed.
+  2. `npm.cmd run test:meeting-sync-mode` passed.
+
+## Latest Session Update (2026-03-05, sync/deploy verification + GitHub connectivity diagnosis)
+- Deployment and sync status:
+  1. Latest route-planner loading/sync fix commit: `1a5ee59`.
+  2. Pushed successfully to `origin/release/vps-2026-03-04`.
+  3. Web bundle deployed on VPS via upload/deploy flow.
+  4. Deployed asset hash verified to match local build:
+     - `index-a45b09d25e9ea0755af3b4cc95f98f05.js`
+- VPS repo state:
+  1. VPS repo had local uncommitted edits that blocked pull.
+  2. Those edits were preserved in stash (not deleted), then repo was synced to `1a5ee59`.
+  3. Working tree on VPS is clean at the deployed commit.
+- GitHub connectivity issue (local machine):
+  1. `git push` to `master` failed due network/DNS path failure.
+  2. Diagnostics showed:
+     - `github.com:443` unreachable from local shell
+     - DNS lookups timing out in current network path
+  3. Likely cause: unstable VPN/DNS route (NordLynx DNS path observed during failure window).
+- Safe next step after PC restart:
+  1. Re-test connectivity (`nslookup github.com`, `Test-NetConnection github.com -Port 443`).
+  2. If healthy, push `1a5ee59` to `origin/master`.
+  3. Re-verify local/GitHub/VPS commit parity.
 
 ## Latest Session Update (2026-03-05, proposal preview/booking sequence consistency fix)
 - User-reported bug:
@@ -36,10 +83,13 @@
   2. Expected behavior for reported case is now stable: `M1 -> M3 -> M2` immediately, not only after refresh.
 
 ## Current Focus / In Progress
-- Continue manual QA on real proposal scenarios (especially pusher/flex variants) before push/deploy.
-- Keep debug flag available for fast trace if any remaining edge case appears:
+- Re-establish local GitHub connectivity after restart (DNS/VPN path validation).
+- Complete master branch sync:
+  1. push commit `1a5ee59` to `origin/master`
+  2. verify `origin/master`, `origin/release/vps-2026-03-04`, and VPS deployed commit are aligned
+- Keep existing proposal preview/ranking debug flags available for fast regression tracing during QA:
   - `globalThis.__debugProposalPreviewFlow = true`
-- No new deployment in this step; this update records code changes and active validation status.
+  - `globalThis.__debugBestOptionsRanking = true`
 
 ## Latest Session Update (2026-03-05, pusher booking execution fix)
 - User-reported bug:

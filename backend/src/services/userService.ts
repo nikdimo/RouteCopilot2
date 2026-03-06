@@ -69,7 +69,7 @@ export async function ensureUserFromIdentity(input: IdentityInput) {
          WHERE id = $1`,
         [user.id, input.email ?? null, input.displayName ?? null]
       );
-      if (!user.app_trial_started_at && !user.app_trial_ends_at) {
+      if (!user.app_trial_started_at || !user.app_trial_ends_at) {
         await ensureAppTrialStarted(client, user.id);
       }
       await client.query("COMMIT");

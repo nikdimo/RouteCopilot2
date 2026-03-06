@@ -16,7 +16,7 @@ import {
   Animated,
 } from 'react-native';
 import type { RenderItemParams } from 'react-native-draggable-flatlist';
-import { GripVertical, ChevronUp, ChevronDown, RefreshCw, ChevronLeft, ChevronRight, Calendar, CalendarDays, X } from 'lucide-react-native';
+import { GripVertical, ChevronUp, ChevronDown, RefreshCw, ChevronLeft, ChevronRight, Calendar } from 'lucide-react-native';
 
 let cachedDraggableFlatList: React.ComponentType<any> | null | undefined = undefined;
 function getDraggableFlatList(): React.ComponentType<any> | null {
@@ -29,7 +29,7 @@ function getDraggableFlatList(): React.ComponentType<any> | null {
   }
   return cachedDraggableFlatList ?? null;
 }
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { ScheduleStackParamList } from '../navigation/ScheduleStack';
@@ -41,6 +41,7 @@ import LegBetweenRow from '../components/LegBetweenRow';
 import DaySummaryBar from '../components/DaySummaryBar';
 import ViewModeToggle, { type ViewMode } from '../components/ViewModeToggle';
 import DayTimelineStrip from '../components/DayTimelineStrip';
+import MonthCalendarOverlay from '../components/MonthCalendarOverlay';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
@@ -67,6 +68,8 @@ const ROUTE_UI_DEBUG =
 
 const GREEN = '#107C10';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+// Keep onboarding CTA dismissed across component remounts within this JS session.
+let onboardingCtaDismissedThisSession = false;
 
 type TrialBannerState = {
   visible: boolean;
@@ -239,12 +242,16 @@ function EmptySchedule({
   isSignedIn,
   onAddMeeting,
   onSignInAndSync,
+  ctaVisible,
+  onDismissCta,
 }: {
   animationState: number;
   isWide: boolean;
   isSignedIn: boolean;
   onAddMeeting: () => void;
   onSignInAndSync: () => void;
+  ctaVisible: boolean;
+  onDismissCta: () => void;
 }) {
   if (isWide) {
     if (isSignedIn) {
@@ -271,7 +278,11 @@ function EmptySchedule({
   }
   return (
     <View style={styles.emptyContainer}>
-      <EmptyStateScanner onSignInAndSync={onSignInAndSync} />
+      <EmptyStateScanner
+        onSignInAndSync={onSignInAndSync}
+        ctaVisible={ctaVisible}
+        onDismissCta={onDismissCta}
+      />
     </View>
   );
 }
@@ -300,6 +311,7 @@ type ScheduleNav = NativeStackNavigationProp<ScheduleStackParamList, 'ScheduleHo
 
 function ScheduleScreenNew() {
   const navigation = useNavigation<ScheduleNav>();
+  const isFocused = useIsFocused();
   const { userToken, getValidToken } = useAuth();
   const { preferences } = useUserPreferences();
   const {
@@ -329,7 +341,7 @@ function ScheduleScreenNew() {
   const { coords, legStats, etas, waitTimeBeforeMeetingMin, departByMs, returnByMs, homeBase } = useRouteData();
   const [refreshing, setRefreshing] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
-  const [ctaVisible, setCtaVisible] = useState(true);
+  const [ctaVisible, setCtaVisible] = useState(() => !onboardingCtaDismissedThisSession);
   const [trialBannerState, setTrialBannerState] = useState<TrialBannerState>({
     visible: false,
     daysLeft: null,
@@ -381,7 +393,7 @@ function ScheduleScreenNew() {
     (async () => {
       await refreshTrialBannerState();
       if (cancelled) return;
-    })().catch(() => {});
+    })().catch(() => { });
     return () => {
       cancelled = true;
     };
@@ -414,6 +426,11 @@ function ScheduleScreenNew() {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+
+  const dismissOnboardingCta = useCallback(() => {
+    onboardingCtaDismissedThisSession = true;
+    setCtaVisible(false);
+  }, []);
 
   // Sidebar Resizer State
   const MIN_SIDEBAR = 300;
@@ -486,6 +503,7 @@ function ScheduleScreenNew() {
 
   // Syncs the top-left map header text to the slider's visible scroll point
   const [visibleMonthDate, setVisibleMonthDate] = useState(selectedDate);
+  const [monthPickerVisible, setMonthPickerVisible] = useState(false);
   useEffect(() => {
     setVisibleMonthDate(selectedDate);
   }, [selectedDate]);
@@ -559,7 +577,7 @@ function ScheduleScreenNew() {
 
   useFocusEffect(
     useCallback(() => {
-      refreshTrialBannerState().catch(() => {});
+      refreshTrialBannerState().catch(() => { });
     }, [refreshTrialBannerState])
   );
 
@@ -569,6 +587,30 @@ function ScheduleScreenNew() {
       ensureMeetingCountsForDate(date);
     },
     [setSelectedDate, ensureMeetingCountsForDate]
+  );
+
+  const openMonthPicker = useCallback(() => {
+    setMonthPickerVisible(true);
+    ensureMeetingCountsForDate(visibleMonthDate);
+  }, [ensureMeetingCountsForDate, visibleMonthDate]);
+
+  const closeMonthPicker = useCallback(() => {
+    setMonthPickerVisible(false);
+  }, []);
+
+  const handleMonthPickerSelectDate = useCallback(
+    (date: Date) => {
+      onSelectDate(date);
+      setMonthPickerVisible(false);
+    },
+    [onSelectDate]
+  );
+
+  const handleMonthPickerVisibleMonthChange = useCallback(
+    (date: Date) => {
+      ensureMeetingCountsForDate(date);
+    },
+    [ensureMeetingCountsForDate]
   );
 
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -716,11 +758,11 @@ function ScheduleScreenNew() {
         onNavigate={
           hasCoords
             ? () =>
-                openNativeDirections(
-                  event!.coordinates!.latitude,
-                  event!.coordinates!.longitude,
-                  meeting.client
-                )
+              openNativeDirections(
+                event!.coordinates!.latitude,
+                event!.coordinates!.longitude,
+                meeting.client
+              )
             : undefined
         }
         onEdit={() => navigation.navigate('MeetingDetails', { eventId: meeting.id })}
@@ -817,11 +859,11 @@ function ScheduleScreenNew() {
               onNavigate={
                 hasCoords
                   ? () =>
-                      openNativeDirections(
-                        event!.coordinates!.latitude,
-                        event!.coordinates!.longitude,
-                        meeting.client
-                      )
+                    openNativeDirections(
+                      event!.coordinates!.latitude,
+                      event!.coordinates!.longitude,
+                      meeting.client
+                    )
                   : undefined
               }
               onEdit={() => navigation.navigate('MeetingDetails', { eventId: meeting.id })}
@@ -959,6 +1001,8 @@ function ScheduleScreenNew() {
                 isSignedIn={isSignedIn}
                 onAddMeeting={handleAddMeeting}
                 onSignInAndSync={handleSignInAndSync}
+                ctaVisible={ctaVisible}
+                onDismissCta={dismissOnboardingCta}
               />
             )
           )}
@@ -986,6 +1030,19 @@ function ScheduleScreenNew() {
     extrapolate: 'clamp',
   });
 
+  if (!isSignedIn && isEmptyData) {
+    return (
+      <View style={styles.container}>
+        <EmptyStateScanner
+          onSignInAndSync={handleSignInAndSync}
+          ctaVisible={ctaVisible}
+          onDismissCta={dismissOnboardingCta}
+          animate={isFocused}
+        />
+      </View>
+    );
+  }
+
   if (isWide) {
     return (
       <View style={[styles.container, isResizing && Platform.OS === 'web' ? { userSelect: 'none' } as any : null]}>
@@ -996,9 +1053,14 @@ function ScheduleScreenNew() {
         >
           {/* Left: Date & Title */}
           <View style={styles.globalHeaderLeft}>
-            <View style={styles.calendarIconSquare}>
+            <TouchableOpacity
+              style={styles.calendarIconSquare}
+              onPress={openMonthPicker}
+              activeOpacity={0.8}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
               <Calendar color="#3B82F6" size={20} />
-            </View>
+            </TouchableOpacity>
             <View style={styles.desktopMonthTextGroup}>
               <Text style={styles.desktopMonthTitle}>{format(visibleMonthDate, 'MMMM yyyy')}</Text>
               <Text style={styles.desktopMonthSubtitle}>Route Planner</Text>
@@ -1094,32 +1156,17 @@ function ScheduleScreenNew() {
             onSubscribe={handleTrialSubscribe}
           />
 
-          {/* Floating Onboarding CTA (Option 1) for Desktop */}
-          {!isSignedIn && isEmptyData && ctaVisible && (
-            <View style={styles.floatingCtaContainer}>
-              <View style={styles.floatingCtaInner}>
-                <View style={styles.ctaIconBadge}>
-                  <CalendarDays size={20} color="#3b82f6" />
-                </View>
-                <View style={styles.ctaTextContainer}>
-                  <Text style={styles.ctaHeadline}>Unlock Proactive Scheduling</Text>
-                  <Text style={styles.ctaSubtext}>Find the best slots for your upcoming meetings dynamically. Sync your calendar to start your free 30-day trial.</Text>
-                </View>
-                <TouchableOpacity style={styles.ctaButton} onPress={handleSignInAndSync}>
-                  <Text style={styles.ctaButtonText}>Sign In & Sync</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.ctaCloseButton}
-                  onPress={() => setCtaVisible(false)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <X size={16} color="#94a3b8" />
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-
         </View>
+
+        <MonthCalendarOverlay
+          visible={monthPickerVisible}
+          selectedDate={selectedDate}
+          initialMonthDate={visibleMonthDate}
+          meetingCountByDay={meetingCountByDay}
+          onSelectDate={handleMonthPickerSelectDate}
+          onVisibleMonthChange={handleMonthPickerVisibleMonthChange}
+          onClose={closeMonthPicker}
+        />
       </View>
     );
   }
@@ -1132,9 +1179,14 @@ function ScheduleScreenNew() {
         style={[styles.globalHeaderPortrait, { transform: [{ translateY: headerTranslateY }] }]}
       >
         <View style={styles.globalHeaderPortraitTop}>
-          <View style={styles.calendarIconSquare}>
+          <TouchableOpacity
+            style={styles.calendarIconSquare}
+            onPress={openMonthPicker}
+            activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
             <Calendar color="#3B82F6" size={20} />
-          </View>
+          </TouchableOpacity>
           <View style={[styles.desktopMonthTextGroup, { marginLeft: 12 }]}>
             <Text style={styles.desktopMonthTitle}>{format(visibleMonthDate, 'MMMM yyyy')}</Text>
             <Text style={styles.desktopMonthSubtitle}>Route Planner</Text>
@@ -1188,6 +1240,15 @@ function ScheduleScreenNew() {
         trialEndsAtLabel={trialBannerState.trialEndsAtLabel ?? undefined}
         daysLeft={trialBannerState.daysLeft}
         onSubscribe={handleTrialSubscribe}
+      />
+      <MonthCalendarOverlay
+        visible={monthPickerVisible}
+        selectedDate={selectedDate}
+        initialMonthDate={visibleMonthDate}
+        meetingCountByDay={meetingCountByDay}
+        onSelectDate={handleMonthPickerSelectDate}
+        onVisibleMonthChange={handleMonthPickerVisibleMonthChange}
+        onClose={closeMonthPicker}
       />
     </View>
   );
@@ -1661,6 +1722,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     flexShrink: 0,
+    zIndex: 2,
   },
   globalHeaderCenterRightWrap: {
     flex: 1,
@@ -1670,6 +1732,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
+    zIndex: 1,
   },
   globalHeaderCenter: {
     flex: 1,

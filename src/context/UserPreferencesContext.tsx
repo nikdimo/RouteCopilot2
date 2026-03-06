@@ -177,8 +177,9 @@ export function UserPreferencesProvider({ children }: { children: React.ReactNod
               }
             : {
                 ...prev,
-                subscriptionTier: 'basic',
-                useGoogleGeocoding: signedInFallbackUseAdvanced,
+                subscriptionTier: getSubscriptionTier(prev),
+                useGoogleGeocoding: prev.useGoogleGeocoding ?? signedInFallbackUseAdvanced,
+                useTrafficAwareRouting: prev.useTrafficAwareRouting ?? false,
               }
         );
 

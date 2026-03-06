@@ -67,6 +67,10 @@ export type BackendFeatureAccessResponse = {
     trialStartedAt: string | null;
     trialEndsAt: string | null;
     trialPlanCode: 'free' | 'basic' | 'pro' | 'premium' | null;
+    trialDaysTotal?: number | null;
+    trialDaysLeft?: number | null;
+    trialActive?: boolean;
+    trialExpired?: boolean;
   };
   upgradeUrl: string;
 };
@@ -152,6 +156,10 @@ export type BackendProfileSettingsResponse = {
     trialStartedAt: string | null;
     trialEndsAt: string | null;
     trialPlanCode: 'free' | 'basic' | 'pro' | 'premium' | null;
+    trialDaysTotal?: number | null;
+    trialDaysLeft?: number | null;
+    trialActive?: boolean;
+    trialExpired?: boolean;
   };
   entitlements: {
     canSyncCalendar: boolean;

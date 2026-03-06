@@ -105,6 +105,8 @@ export default function AuthPromptModal({
                                     placeholder="Enter your email"
                                     placeholderTextColor="#94A3B8"
                                     keyboardType="email-address"
+                                    textContentType="emailAddress"
+                                    autoComplete="email"
                                     autoCapitalize="none"
                                     autoCorrect={false}
                                     value={email}

@@ -48,6 +48,10 @@ export type UserFeatureAccessState = {
   trialStartedAt: string | null;
   trialEndsAt: string | null;
   trialPlanCode: SubscriptionTier | null;
+  trialDaysTotal: number | null;
+  trialDaysLeft: number | null;
+  trialActive: boolean;
+  trialExpired: boolean;
 };
 
 export type UserFeatureAccess = {
@@ -118,6 +122,42 @@ function trialGrantsPaidAccess(planCode: SubscriptionTier | null, trialEndsAt: s
   return new Date(trialEndsAt).getTime() > Date.now();
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function computeTrialProgress(input: {
+  trialStartedAt: string | null;
+  trialEndsAt: string | null;
+  trialPlanCode: SubscriptionTier | null;
+}) {
+  const { trialStartedAt, trialEndsAt, trialPlanCode } = input;
+  const startedMs = trialStartedAt ? new Date(trialStartedAt).getTime() : NaN;
+  const endsMs = trialEndsAt ? new Date(trialEndsAt).getTime() : NaN;
+  const nowMs = Date.now();
+  const hasPaidTrialPlan = Boolean(trialPlanCode && trialPlanCode !== "free");
+  const hasValidWindow = Number.isFinite(startedMs) && Number.isFinite(endsMs) && endsMs > startedMs;
+  const trialActive = hasPaidTrialPlan && Number.isFinite(endsMs) && endsMs > nowMs;
+  const trialExpired = hasPaidTrialPlan && Number.isFinite(endsMs) && endsMs <= nowMs;
+
+  let trialDaysTotal: number | null = null;
+  if (hasValidWindow) {
+    trialDaysTotal = Math.max(1, Math.round((endsMs - startedMs) / MS_PER_DAY));
+  }
+
+  let trialDaysLeft: number | null = null;
+  if (trialActive && Number.isFinite(endsMs)) {
+    trialDaysLeft = Math.max(0, Math.ceil((endsMs - nowMs) / MS_PER_DAY));
+  } else if (trialExpired) {
+    trialDaysLeft = 0;
+  }
+
+  return {
+    trialDaysTotal,
+    trialDaysLeft,
+    trialActive,
+    trialExpired
+  };
+}
+
 function resolveEffectiveTier(row: FeatureAccessRow): {
   tier: SubscriptionTier;
   source: FeatureAccessSource;
@@ -147,8 +187,8 @@ function resolveEffectiveTier(row: FeatureAccessRow): {
   }
 
   return {
-    tier: "basic",
-    source: "signed_in"
+    tier: "free",
+    source: "free"
   };
 }
 
@@ -170,6 +210,12 @@ function buildFeatureAccessFromRow(row: FeatureAccessRow): UserFeatureAccess {
     useTrafficRouting: Boolean(row.use_traffic_routing),
     updatedAt: row.updated_at
   };
+  const trialPlanCode = toOptionalTier(row.app_trial_plan_code);
+  const trialProgress = computeTrialProgress({
+    trialStartedAt: row.app_trial_started_at,
+    trialEndsAt: row.app_trial_ends_at,
+    trialPlanCode
+  });
 
   return {
     subscriptionTier,
@@ -189,7 +235,11 @@ function buildFeatureAccessFromRow(row: FeatureAccessRow): UserFeatureAccess {
       subscriptionCurrentPeriodEnd: row.subscription_current_period_end,
       trialStartedAt: row.app_trial_started_at,
       trialEndsAt: row.app_trial_ends_at,
-      trialPlanCode: toOptionalTier(row.app_trial_plan_code)
+      trialPlanCode,
+      trialDaysTotal: trialProgress.trialDaysTotal,
+      trialDaysLeft: trialProgress.trialDaysLeft,
+      trialActive: trialProgress.trialActive,
+      trialExpired: trialProgress.trialExpired
     },
     upgradeUrl: env.BILLING_UPGRADE_URL
   };

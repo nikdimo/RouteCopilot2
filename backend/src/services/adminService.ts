@@ -189,8 +189,8 @@ function resolveEffectiveTier(input: {
   }
 
   return {
-    tier: "basic" as const,
-    source: "signed_in" as const
+    tier: "free" as const,
+    source: "free" as const
   };
 }
 

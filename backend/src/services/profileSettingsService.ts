@@ -92,6 +92,10 @@ export type UserProfileSettingsAccess = {
   trialStartedAt: string | null;
   trialEndsAt: string | null;
   trialPlanCode: SubscriptionTier | null;
+  trialDaysTotal: number | null;
+  trialDaysLeft: number | null;
+  trialActive: boolean;
+  trialExpired: boolean;
 };
 
 export type UserProfileSettingsResponse = {
@@ -246,7 +250,11 @@ function buildResponse(settings: UserProfileSettings, featureAccess: UserFeature
       subscriptionCurrentPeriodEnd: featureAccess.access.subscriptionCurrentPeriodEnd,
       trialStartedAt: featureAccess.access.trialStartedAt,
       trialEndsAt: featureAccess.access.trialEndsAt,
-      trialPlanCode: featureAccess.access.trialPlanCode
+      trialPlanCode: featureAccess.access.trialPlanCode,
+      trialDaysTotal: featureAccess.access.trialDaysTotal,
+      trialDaysLeft: featureAccess.access.trialDaysLeft,
+      trialActive: featureAccess.access.trialActive,
+      trialExpired: featureAccess.access.trialExpired
     },
     entitlements: featureAccess.entitlements,
     upgradeUrl: featureAccess.upgradeUrl

@@ -747,7 +747,7 @@ export default function ProfileScreen() {
               }
             : {
                 subscriptionTier: featureAccess.subscriptionTier,
-                source: featureAccess.subscriptionTier === 'free' ? 'free' : 'signed_in',
+                source: featureAccess.subscriptionTier === 'free' ? 'free' : 'subscription',
                 canEditSettings: featureAccess.subscriptionTier !== 'free',
                 lockReason:
                   featureAccess.subscriptionTier === 'free'
@@ -758,36 +758,48 @@ export default function ProfileScreen() {
                 trialStartedAt: null,
                 trialEndsAt: null,
                 trialPlanCode: null,
+                trialDaysTotal: null,
+                trialDaysLeft: null,
+                trialActive: false,
+                trialExpired: false,
               }
         );
         return;
       }
 
       setProfileAccess({
-        subscriptionTier: 'basic',
-        source: 'signed_in',
-        canEditSettings: true,
-        lockReason: null,
+        subscriptionTier: 'free',
+        source: 'free',
+        canEditSettings: false,
+        lockReason: 'requires_active_plan_or_trial',
         subscriptionStatus: null,
         subscriptionCurrentPeriodEnd: null,
         trialStartedAt: null,
         trialEndsAt: null,
         trialPlanCode: null,
+        trialDaysTotal: null,
+        trialDaysLeft: null,
+        trialActive: false,
+        trialExpired: false,
       });
-      updatePreferences({ subscriptionTier: 'basic', useGoogleGeocoding: true });
+      updatePreferences({ subscriptionTier: 'free', useGoogleGeocoding: false, useTrafficAwareRouting: false });
     } catch {
       setProfileAccess({
-        subscriptionTier: 'basic',
-        source: 'signed_in',
-        canEditSettings: true,
-        lockReason: null,
+        subscriptionTier: 'free',
+        source: 'free',
+        canEditSettings: false,
+        lockReason: 'requires_active_plan_or_trial',
         subscriptionStatus: null,
         subscriptionCurrentPeriodEnd: null,
         trialStartedAt: null,
         trialEndsAt: null,
         trialPlanCode: null,
+        trialDaysTotal: null,
+        trialDaysLeft: null,
+        trialActive: false,
+        trialExpired: false,
       });
-      updatePreferences({ subscriptionTier: 'basic', useGoogleGeocoding: true });
+      updatePreferences({ subscriptionTier: 'free', useGoogleGeocoding: false, useTrafficAwareRouting: false });
     } finally {
       setProfileAccessLoaded(true);
       setBillingSnapshotLoading(false);

@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { addDays, format, isSameDay, startOfDay } from 'date-fns';
 import { toLocalDayKey } from '../utils/dateUtils';
+import { getMeetingDotTone, MEETING_DOT_COLOR } from '../utils/meetingDots';
 
 const MS_BLUE = '#0078D4';
 const DAYS_TO_SHOW = 14;
@@ -18,20 +19,6 @@ const PILL_WIDTH = 48;
 const PILL_GAP = 10;
 
 /** Dot colors by meeting count: none (0), green (1–2), yellow (3–4), red (5+) */
-const DOT_COLOR = {
-  none: 'transparent',
-  green: '#107C10',
-  yellow: '#F4B400',
-  red: '#D13438',
-} as const;
-
-function getDotColor(count: number): keyof typeof DOT_COLOR {
-  if (count === 0) return 'none';
-  if (count <= 2) return 'green';
-  if (count <= 4) return 'yellow';
-  return 'red';
-}
-
 type DaySliderProps = {
   selectedDate: Date;
   onSelectDate: (date: Date) => void;
@@ -128,7 +115,7 @@ export default function DaySlider({
         const active = isSameDay(date, selectedDate);
         const dayKey = toLocalDayKey(date);
         const count = meetingCountByDay?.[dayKey] ?? 0;
-        const dotColor = getDotColor(count);
+        const dotColor = getMeetingDotTone(count);
 
         return (
           <TouchableOpacity
@@ -141,7 +128,7 @@ export default function DaySlider({
               <View
                 style={[
                   styles.dot,
-                  { backgroundColor: DOT_COLOR[dotColor] },
+                  { backgroundColor: MEETING_DOT_COLOR[dotColor] },
                   active && styles.dotOnActive,
                 ]}
               />
