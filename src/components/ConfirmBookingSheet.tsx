@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  type LayoutChangeEvent,
   View,
   Text,
   StyleSheet,
@@ -12,29 +11,15 @@ import {
   Platform,
   Switch,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
 import { X, Users, Clock, MapPin, AlignLeft } from 'lucide-react-native';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { CalendarEvent } from '../services/graph';
 import type { Coordinate } from '../utils/scheduler';
+import MeetingDurationFlexTimeline from './MeetingDurationFlexTimeline';
 
 const MS_BLUE = '#0078D4';
 const FLEX_STEP_MINUTES = 15;
-const FLEX_SLOTS_PER_DAY = (24 * 60) / FLEX_STEP_MINUTES;
-const FLEX_MAX_SLOT = FLEX_SLOTS_PER_DAY - 1;
-const FLEX_TRACK_HEIGHT = 8;
-const FLEX_THUMB_SIZE = 24;
-
-type FlexibleRangeSliderProps = {
-  startSlot15: number;
-  endSlot15: number;
-  onStartChange: (slot15: number) => void;
-  onEndChange: (slot15: number) => void;
-  onSlidingComplete: () => void;
-  canEdit: boolean;
-  onDragStateChange?: (dragging: boolean) => void;
-};
+const MAX_DURATION_MINUTES = 8 * 60;
 
 function formatTimeMs(ms: number): string {
   const d = new Date(ms);
@@ -49,19 +34,6 @@ function formatDayLabel(dayIso: string): string {
   return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function formatSlot15(slot15: number): string {
-  const totalMinutes = Math.max(0, Math.min(FLEX_MAX_SLOT, Math.round(slot15))) * FLEX_STEP_MINUTES;
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-}
-
-function msToSlot15(ms: number): number {
-  const date = new Date(ms);
-  const totalMinutes = date.getHours() * 60 + date.getMinutes();
-  return Math.max(0, Math.min(FLEX_MAX_SLOT, Math.round(totalMinutes / FLEX_STEP_MINUTES)));
-}
-
 function formatMinutesLabel(minutes: number): string {
   const safe = Math.max(0, Math.round(minutes));
   if (safe < 60) return `${safe}m`;
@@ -70,136 +42,17 @@ function formatMinutesLabel(minutes: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
-function FlexibleRangeSlider({
-  startSlot15,
-  endSlot15,
-  onStartChange,
-  onEndChange,
-  onSlidingComplete,
-  canEdit,
-  onDragStateChange,
-}: FlexibleRangeSliderProps) {
-  const trackRef = useRef<View>(null);
-  const trackLayout = useRef({ x: 0, width: 300 });
-  const [trackWidth, setTrackWidth] = useState(300);
-
-  const onTrackLayout = useCallback((e: LayoutChangeEvent) => {
-    const width = Math.max(1, e.nativeEvent.layout.width);
-    setTrackWidth(width);
-    trackRef.current?.measureInWindow((x) => {
-      trackLayout.current = { x, width };
-    });
-  }, []);
-
-  const absoluteXToSlot15 = useCallback((absoluteX: number) => {
-    const { x, width } = trackLayout.current;
-    const pct = (absoluteX - x) / width;
-    const slot = Math.round(pct * FLEX_MAX_SLOT);
-    return Math.max(0, Math.min(FLEX_MAX_SLOT, slot));
-  }, []);
-
-  const setDragging = useCallback(
-    (dragging: boolean) => {
-      onDragStateChange?.(dragging);
-    },
-    [onDragStateChange]
-  );
-
-  const handleStartUpdate = useCallback(
-    (absoluteX: number) => {
-      const slot = absoluteXToSlot15(absoluteX);
-      const clamped = Math.min(slot, endSlot15 - 1);
-      onStartChange(Math.max(0, clamped));
-    },
-    [absoluteXToSlot15, endSlot15, onStartChange]
-  );
-
-  const handleEndUpdate = useCallback(
-    (absoluteX: number) => {
-      const slot = absoluteXToSlot15(absoluteX);
-      const clamped = Math.max(slot, startSlot15 + 1);
-      onEndChange(Math.min(FLEX_MAX_SLOT, clamped));
-    },
-    [absoluteXToSlot15, onEndChange, startSlot15]
-  );
-
-  const handleComplete = useCallback(() => {
-    onSlidingComplete();
-    onDragStateChange?.(false);
-  }, [onSlidingComplete, onDragStateChange]);
-
-  const startGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .enabled(canEdit)
-        .activeOffsetX([-4, 4])
-        .failOffsetY([-20, 20])
-        .onBegin(() => {
-          runOnJS(setDragging)(true);
-        })
-        .onUpdate((e) => {
-          runOnJS(handleStartUpdate)(e.absoluteX);
-        })
-        .onFinalize(() => {
-          runOnJS(handleComplete)();
-        }),
-    [canEdit, handleComplete, handleStartUpdate, setDragging]
-  );
-
-  const endGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .enabled(canEdit)
-        .activeOffsetX([-4, 4])
-        .failOffsetY([-20, 20])
-        .onBegin(() => {
-          runOnJS(setDragging)(true);
-        })
-        .onUpdate((e) => {
-          runOnJS(handleEndUpdate)(e.absoluteX);
-        })
-        .onFinalize(() => {
-          runOnJS(handleComplete)();
-        }),
-    [canEdit, handleComplete, handleEndUpdate, setDragging]
-  );
-
-  const startLeft = (startSlot15 / FLEX_MAX_SLOT) * trackWidth - FLEX_THUMB_SIZE / 2;
-  const endLeft = (endSlot15 / FLEX_MAX_SLOT) * trackWidth - FLEX_THUMB_SIZE / 2;
-  const fillLeft = (startSlot15 / FLEX_MAX_SLOT) * trackWidth;
-  const fillWidth = ((endSlot15 - startSlot15) / FLEX_MAX_SLOT) * trackWidth;
-
-  return (
-    <View ref={trackRef} onLayout={onTrackLayout} style={styles.flexSliderShell} pointerEvents="box-none">
-      <View style={[styles.flexRangeTrack, { height: FLEX_TRACK_HEIGHT }]} pointerEvents="none">
-        <View
-          style={[
-            styles.flexRangeFill,
-            { left: fillLeft, width: Math.max(0, fillWidth), height: FLEX_TRACK_HEIGHT },
-          ]}
-        />
-      </View>
-
-      <GestureDetector gesture={startGesture}>
-        <View style={[styles.flexThumbHitArea, { left: startLeft - 10 }]}>
-          <View style={styles.flexRangeThumb} />
-        </View>
-      </GestureDetector>
-
-      <GestureDetector gesture={endGesture}>
-        <View style={[styles.flexThumbHitArea, { left: endLeft - 10 }]}>
-          <View style={styles.flexRangeThumb} />
-        </View>
-      </GestureDetector>
-    </View>
-  );
-}
-
 export type ContactInput = {
   displayName?: string;
   companyName?: string;
   businessPhone?: string;
   email?: string;
+};
+
+export type ConfirmFlexConfig = {
+  enabled: boolean;
+  earlyMinutes: number;
+  lateMinutes: number;
 };
 
 export type ConfirmBookingSheetProps = {
@@ -211,7 +64,15 @@ export type ConfirmBookingSheetProps = {
   locationForEvent?: string;
   coordinates: Coordinate;
   onClose: () => void;
-  onConfirm: (event: CalendarEvent, contactInput?: ContactInput) => void;
+  onConfirm: (
+    event: CalendarEvent,
+    contactInput?: ContactInput,
+    flexConfig?: ConfirmFlexConfig
+  ) => void;
+  defaultFlexibleEnabled?: boolean;
+  defaultFlexBeforeMinutes?: number;
+  defaultFlexAfterMinutes?: number;
+  defaultDurationMinutes?: number;
 };
 
 /** Confirm step: selection creates meeting. User reviews and taps Book to add in-app. */
@@ -223,6 +84,10 @@ export default function ConfirmBookingSheet({
   coordinates,
   onClose,
   onConfirm,
+  defaultFlexibleEnabled = false,
+  defaultFlexBeforeMinutes = 0,
+  defaultFlexAfterMinutes = 0,
+  defaultDurationMinutes = 60,
 }: ConfirmBookingSheetProps) {
   const titleInputRef = useRef<TextInput>(null);
   const [title, setTitle] = useState('');
@@ -234,29 +99,51 @@ export default function ConfirmBookingSheet({
   const [contactPhone, setContactPhone] = useState('');
   const [contactEmail, setContactEmail] = useState('');
 
+  const [bookingDurationMinutes, setBookingDurationMinutes] = useState(defaultDurationMinutes);
   const [isFlexible, setIsFlexible] = useState(false);
-  const [flexStartSlot15, setFlexStartSlot15] = useState(0);
-  const [flexEndSlot15, setFlexEndSlot15] = useState(0);
-  const [isFlexDragging, setIsFlexDragging] = useState(false);
+  const [flexBeforeMinutes, setFlexBeforeMinutes] = useState(0);
+  const [flexAfterMinutes, setFlexAfterMinutes] = useState(0);
 
-  const anchorSlot15 = useMemo(() => {
-    if (!slot) return 0;
-    return msToSlot15(slot.startMs);
-  }, [slot]);
+  const initialFlexibleEnabled = defaultFlexibleEnabled
+    || defaultFlexBeforeMinutes > 0
+    || defaultFlexAfterMinutes > 0;
 
-  const resetFlexWindow = useCallback(() => {
-    const defaultStart = Math.max(0, anchorSlot15 - 2);
-    const defaultEnd = Math.min(FLEX_MAX_SLOT, anchorSlot15 + 2);
-    setFlexStartSlot15(defaultStart);
-    setFlexEndSlot15(Math.max(defaultStart + 1, defaultEnd));
-  }, [anchorSlot15]);
+  const maxFlexPerSideMinutes = useMemo(() => {
+    const raw = (MAX_DURATION_MINUTES - bookingDurationMinutes) / 2;
+    if (raw <= 0) return 0;
+    return Math.floor(raw / FLEX_STEP_MINUTES) * FLEX_STEP_MINUTES;
+  }, [bookingDurationMinutes]);
 
   useEffect(() => {
     if (!visible || !slot) return;
-    resetFlexWindow();
-    setIsFlexible(false);
-    setIsFlexDragging(false);
-  }, [resetFlexWindow, slot, visible]);
+    const slotDurationMinutes = Math.max(
+      FLEX_STEP_MINUTES,
+      Math.round((slot.endMs - slot.startMs) / (FLEX_STEP_MINUTES * 60_000)) * FLEX_STEP_MINUTES
+    );
+    const nextDuration = Math.max(
+      FLEX_STEP_MINUTES,
+      Math.min(
+        MAX_DURATION_MINUTES,
+        Math.round((defaultDurationMinutes || slotDurationMinutes) / FLEX_STEP_MINUTES) * FLEX_STEP_MINUTES
+      )
+    );
+    setBookingDurationMinutes(nextDuration);
+    setFlexBeforeMinutes(Math.max(0, defaultFlexBeforeMinutes));
+    setFlexAfterMinutes(Math.max(0, defaultFlexAfterMinutes));
+    setIsFlexible(initialFlexibleEnabled);
+  }, [
+    initialFlexibleEnabled,
+    defaultDurationMinutes,
+    defaultFlexAfterMinutes,
+    defaultFlexBeforeMinutes,
+    slot,
+    visible,
+  ]);
+
+  useEffect(() => {
+    setFlexBeforeMinutes((prev) => Math.min(prev, maxFlexPerSideMinutes));
+    setFlexAfterMinutes((prev) => Math.min(prev, maxFlexPerSideMinutes));
+  }, [maxFlexPerSideMinutes]);
 
   useEffect(() => {
     if (!visible) return;
@@ -266,34 +153,70 @@ export default function ConfirmBookingSheet({
     return () => clearTimeout(timer);
   }, [visible]);
 
-  const flexEarlyMinutes = Math.max(0, (anchorSlot15 - flexStartSlot15) * FLEX_STEP_MINUTES);
-  const flexLateMinutes = Math.max(0, (flexEndSlot15 - anchorSlot15) * FLEX_STEP_MINUTES);
+  const flexEarlyMinutes = isFlexible ? flexBeforeMinutes : 0;
+  const flexLateMinutes = isFlexible ? flexAfterMinutes : 0;
 
   const handleFlexibleToggle = useCallback(
     (next: boolean) => {
       setIsFlexible(next);
-      if (next) resetFlexWindow();
+      if (next) {
+        const fallbackFlex = Math.min(15, maxFlexPerSideMinutes);
+        setFlexBeforeMinutes((prev) => {
+          if (prev > 0) return Math.min(prev, maxFlexPerSideMinutes);
+          if (defaultFlexBeforeMinutes > 0) return Math.min(defaultFlexBeforeMinutes, maxFlexPerSideMinutes);
+          return fallbackFlex;
+        });
+        setFlexAfterMinutes((prev) => {
+          if (prev > 0) return Math.min(prev, maxFlexPerSideMinutes);
+          if (defaultFlexAfterMinutes > 0) return Math.min(defaultFlexAfterMinutes, maxFlexPerSideMinutes);
+          return fallbackFlex;
+        });
+      } else {
+        setFlexBeforeMinutes(0);
+        setFlexAfterMinutes(0);
+      }
     },
-    [resetFlexWindow]
+    [defaultFlexAfterMinutes, defaultFlexBeforeMinutes, maxFlexPerSideMinutes]
   );
+
+  const handleTimelineDurationChange = useCallback((nextDuration: number) => {
+    const snapped = Math.max(
+      FLEX_STEP_MINUTES,
+      Math.min(MAX_DURATION_MINUTES, Math.round(nextDuration / FLEX_STEP_MINUTES) * FLEX_STEP_MINUTES)
+    );
+    setBookingDurationMinutes(snapped);
+  }, []);
+
+  const handleFlexBeforeChange = useCallback((next: number) => {
+    const snapped = Math.max(
+      0,
+      Math.min(maxFlexPerSideMinutes, Math.round(next / FLEX_STEP_MINUTES) * FLEX_STEP_MINUTES)
+    );
+    setFlexBeforeMinutes(snapped);
+  }, [maxFlexPerSideMinutes]);
+
+  const handleFlexAfterChange = useCallback((next: number) => {
+    const snapped = Math.max(
+      0,
+      Math.min(maxFlexPerSideMinutes, Math.round(next / FLEX_STEP_MINUTES) * FLEX_STEP_MINUTES)
+    );
+    setFlexAfterMinutes(snapped);
+  }, [maxFlexPerSideMinutes]);
 
   const handleBook = () => {
     if (!slot) return;
-    const startIso = new Date(slot.startMs).toISOString();
-    const endIso = new Date(slot.endMs).toISOString();
+    const startMs = slot.startMs;
+    const endMs = startMs + bookingDurationMinutes * 60_000;
+    const startIso = new Date(startMs).toISOString();
+    const endIso = new Date(endMs).toISOString();
 
     // Description and flexible limits can be included in body preview or extended props
-    const bodyContent = [
-      description.trim(),
-      isFlexible
-        ? `[Flexible Window: ${formatSlot15(flexStartSlot15)} to ${formatSlot15(flexEndSlot15)} | Early ${formatMinutesLabel(flexEarlyMinutes)}, Late ${formatMinutesLabel(flexLateMinutes)}]`
-        : ''
-    ].filter(Boolean).join('\n\n');
+    const bodyContent = description.trim();
 
     const event: CalendarEvent = {
       id: `local-${Date.now()}`,
       title: title.trim() || locationLabel || 'Visit',
-      time: `${formatTimeMs(slot.startMs)} - ${formatTimeMs(slot.endMs)}`,
+      time: `${formatTimeMs(startMs)} - ${formatTimeMs(endMs)}`,
       location: (locationForEvent || locationLabel).trim(),
       coordinates: { latitude: coordinates.lat, longitude: coordinates.lon },
       status: 'pending',
@@ -313,7 +236,11 @@ export default function ConfirmBookingSheet({
         }
         : undefined;
 
-    onConfirm(event, contactInput);
+    onConfirm(event, contactInput, {
+      enabled: isFlexible,
+      earlyMinutes: isFlexible ? flexEarlyMinutes : 0,
+      lateMinutes: isFlexible ? flexLateMinutes : 0,
+    });
 
     setTitle('');
     setDescription('');
@@ -322,12 +249,16 @@ export default function ConfirmBookingSheet({
     setContactCompany('');
     setContactPhone('');
     setContactEmail('');
+    setBookingDurationMinutes(defaultDurationMinutes);
     setIsFlexible(false);
-    setIsFlexDragging(false);
+    setFlexBeforeMinutes(0);
+    setFlexAfterMinutes(0);
     onClose();
   };
 
   if (!slot) return null;
+  const displayStartMs = slot.startMs;
+  const displayEndMs = displayStartMs + bookingDurationMinutes * 60_000;
 
   return (
     <Modal visible={visible} transparent animationType="slide">
@@ -349,7 +280,6 @@ export default function ConfirmBookingSheet({
               contentContainerStyle={styles.bodyContent}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={true}
-              scrollEnabled={!isFlexDragging}
             >
               <View style={styles.titleSection}>
                 <TextInput
@@ -424,35 +354,52 @@ export default function ConfirmBookingSheet({
                 <View style={styles.rowContent}>
                   <View style={styles.readOnlyTimeBox}>
                     <Text style={styles.dateLabel}>{formatDayLabel(slot.dayIso)}</Text>
-                    <Text style={styles.timeLabel}>{formatTimeMs(slot.startMs)} – {formatTimeMs(slot.endMs)}</Text>
+                    <Text style={styles.timeLabel}>{formatTimeMs(displayStartMs)} - {formatTimeMs(displayEndMs)}</Text>
                   </View>
+                  <View style={styles.rangeBarWrap}>
+                    <MeetingDurationFlexTimeline
+                      durationMinutes={bookingDurationMinutes}
+                      flexBeforeMinutes={flexBeforeMinutes}
+                      flexAfterMinutes={flexAfterMinutes}
+                      showFlexHandles={isFlexible}
+                      onDurationChange={handleTimelineDurationChange}
+                      onFlexBeforeChange={handleFlexBeforeChange}
+                      onFlexAfterChange={handleFlexAfterChange}
+                      maxMinutes={MAX_DURATION_MINUTES}
+                      stepMinutes={FLEX_STEP_MINUTES}
+                      maxFlexPerSideMinutes={maxFlexPerSideMinutes}
+                    />
+                  </View>
+                  <Text style={styles.durationSummary}>
+                    Duration: {formatMinutesLabel(bookingDurationMinutes)}
+                  </Text>
                   <View style={styles.flexibleToggleRow}>
-                    <Text style={styles.flexibleLabel}>Flexible meeting time</Text>
+                    <View style={styles.flexToggleTextWrap}>
+                      <Text style={styles.flexibleLabel}>Flexible meeting time</Text>
+                      <Text style={styles.flexToggleHint}>
+                        Turn on to allow earlier/later start around this meeting.
+                      </Text>
+                    </View>
                     <Switch
                       value={isFlexible}
                       onValueChange={handleFlexibleToggle}
-                      trackColor={{ false: '#767577', true: '#cce3f5' }}
-                      thumbColor={isFlexible ? MS_BLUE : '#f4f3f4'}
+                      trackColor={{ false: '#CBD5E1', true: '#F59E0B' }}
+                      thumbColor={isFlexible ? '#FFFFFF' : '#F8FAFC'}
                     />
                   </View>
                   {isFlexible && (
-                    <View style={styles.flexRangeWrap}>
-                      <View style={styles.flexSummaryRow}>
-                        <Text style={styles.flexOptionLabel}>From {formatSlot15(flexStartSlot15)}</Text>
-                        <Text style={styles.flexOptionLabel}>To {formatSlot15(flexEndSlot15)}</Text>
+                    <View style={styles.flexSummaryRow}>
+                      <View style={styles.flexSummaryBadge}>
+                        <Text style={styles.flexSummaryBadgeLabel}>Before</Text>
+                        <Text style={styles.flexSummaryBadgeValue}>
+                          {formatMinutesLabel(flexEarlyMinutes)}
+                        </Text>
                       </View>
-                      <FlexibleRangeSlider
-                        startSlot15={flexStartSlot15}
-                        endSlot15={flexEndSlot15}
-                        onStartChange={setFlexStartSlot15}
-                        onEndChange={setFlexEndSlot15}
-                        onSlidingComplete={() => {}}
-                        onDragStateChange={setIsFlexDragging}
-                        canEdit
-                      />
-                      <View style={styles.flexSummaryRow}>
-                        <Text style={styles.flexOffsetText}>Early {formatMinutesLabel(flexEarlyMinutes)}</Text>
-                        <Text style={styles.flexOffsetText}>Late {formatMinutesLabel(flexLateMinutes)}</Text>
+                      <View style={styles.flexSummaryBadge}>
+                        <Text style={styles.flexSummaryBadgeLabel}>After</Text>
+                        <Text style={styles.flexSummaryBadgeValue}>
+                          {formatMinutesLabel(flexLateMinutes)}
+                        </Text>
                       </View>
                     </View>
                   )}
@@ -641,73 +588,67 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#323130',
   },
+  rangeBarWrap: {
+    marginTop: 10,
+    paddingVertical: 6,
+  },
+  durationSummary: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
   flexibleToggleRow: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 8,
-    marginTop: 4,
+    gap: 12,
+  },
+  flexToggleTextWrap: {
+    flex: 1,
   },
   flexibleLabel: {
-    fontSize: 15,
-    color: '#323130',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 2,
   },
-  flexRangeWrap: {
-    marginTop: 8,
-    paddingBottom: 4,
+  flexToggleHint: {
+    fontSize: 12,
+    color: '#64748B',
   },
   flexSummaryRow: {
+    marginTop: 10,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
+    gap: 8,
   },
-  flexOptionLabel: {
+  flexSummaryBadge: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#FFFBEB',
+  },
+  flexSummaryBadgeLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400E',
+    marginBottom: 2,
+    letterSpacing: 0.3,
+  },
+  flexSummaryBadgeValue: {
     fontSize: 13,
-    color: '#605E5C',
-  },
-  flexOffsetText: {
-    fontSize: 12,
-    color: '#605E5C',
-  },
-  flexSliderShell: {
-    height: 40,
-    justifyContent: 'center',
-    width: '100%',
-  },
-  flexRangeTrack: {
-    width: '100%',
-    backgroundColor: '#E5E7EB',
-    borderRadius: 4,
-    position: 'relative',
-  },
-  flexRangeFill: {
-    position: 'absolute',
-    top: 0,
-    backgroundColor: MS_BLUE,
-    borderRadius: 4,
-  },
-  flexThumbHitArea: {
-    position: 'absolute',
-    top: (40 - (FLEX_THUMB_SIZE + 20)) / 2,
-    width: FLEX_THUMB_SIZE + 20,
-    height: FLEX_THUMB_SIZE + 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-  },
-  flexRangeThumb: {
-    width: FLEX_THUMB_SIZE,
-    height: FLEX_THUMB_SIZE,
-    borderRadius: FLEX_THUMB_SIZE / 2,
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: MS_BLUE,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
+    fontWeight: '700',
+    color: '#78350F',
   },
   readOnlyInput: {
     paddingVertical: 10,

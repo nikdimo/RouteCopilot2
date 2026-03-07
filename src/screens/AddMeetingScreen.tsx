@@ -8,9 +8,10 @@ import {
   ActivityIndicator,
   Modal,
   Alert,
+  Switch,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { startOfDay } from 'date-fns';
+import { getISOWeek, startOfDay } from 'date-fns';
 import Constants from 'expo-constants';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
@@ -40,9 +41,13 @@ import TimeframeSelector, {
   getSearchWindow,
   type TimeframeSelection,
 } from '../components/TimeframeSelector';
+import MeetingDurationFlexTimeline from '../components/MeetingDurationFlexTimeline';
 import DayTimeline, { buildTimelineEntries } from '../components/DayTimeline';
 import GhostSlotCard from '../components/GhostSlotCard';
-import ConfirmBookingSheet, { type ContactInput } from '../components/ConfirmBookingSheet';
+import ConfirmBookingSheet, {
+  type ContactInput,
+  type ConfirmFlexConfig,
+} from '../components/ConfirmBookingSheet';
 
 const isExpoGo = Constants.appOwnership === 'expo';
 const MapPreviewModal = React.lazy(() => import('../components/MapPreviewModal'));
@@ -78,6 +83,16 @@ function toCoord(ev: CalendarEvent): Coordinate | null {
 }
 
 const DURATION_OPTS = [30, 60, 90] as const;
+const MAX_DURATION_MINUTES = 8 * 60;
+const DURATION_STEP_MINUTES = 15;
+const FLEXIBLE_WINDOW_TAG_REGEX = /\[Flexible Window:[^\]]+\]/i;
+type DurationPreset = (typeof DURATION_OPTS)[number] | 'custom';
+type MeetingConfigSnapshot = {
+  durationMinutes: number;
+  flexibleMeetingEnabled: boolean;
+  flexBeforeMinutes: number;
+  flexAfterMinutes: number;
+};
 
 function formatDayLabel(dayIso: string): string {
   const [y, mo, d] = dayIso.split('-').map((x) => parseInt(x, 10));
@@ -123,6 +138,52 @@ function formatDetourKmDisplay(detourKm: number): string {
   if (detourKm === 0) return '0 km';
   if (detourKm < 0) return `Saves ${Math.abs(detourKm).toFixed(1)} km`;
   return `+${detourKm.toFixed(1)} km`;
+}
+
+function formatDurationLabel(minutes: number): string {
+  if (minutes <= 0) return '0m';
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours > 0 && mins > 0) return `${hours}h ${mins}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${mins}m`;
+}
+
+function formatTimeframeSummaryLabel(selection: TimeframeSelection): string {
+  if (selection.mode === 'best') return 'Best Match';
+  if (selection.mode === 'anytime') return 'Any Time';
+  return `Week ${getISOWeek(new Date(selection.weekStartMs))}`;
+}
+
+function formatClockFromMinutes(minutes: number): string {
+  const safe = Math.max(0, Math.min(23 * 60 + 59, minutes));
+  const h = Math.floor(safe / 60);
+  const m = safe % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
+function buildFlexibleWindowTag(
+  slotStartMs: number,
+  flexBeforeMinutes: number,
+  flexAfterMinutes: number
+): string | null {
+  if (flexBeforeMinutes <= 0 && flexAfterMinutes <= 0) return null;
+  const dayStartMs = startOfDay(new Date(slotStartMs)).getTime();
+  const startMinutes = Math.round((slotStartMs - dayStartMs) / MS_PER_MIN);
+  const minStart = Math.max(0, startMinutes - flexBeforeMinutes);
+  const maxStart = Math.min(23 * 60 + 59, startMinutes + flexAfterMinutes);
+  if (maxStart <= minStart) return null;
+  return `[Flexible Window: ${formatClockFromMinutes(minStart)} to ${formatClockFromMinutes(maxStart)} | source=plan-visit]`;
+}
+
+function composeEventBodyWithFlexibleWindow(
+  baseBody: string | undefined,
+  flexibleWindowTag: string | null
+): string | undefined {
+  const cleanedBase = (baseBody ?? '').replace(FLEXIBLE_WINDOW_TAG_REGEX, '').trim();
+  if (!flexibleWindowTag) return cleanedBase || undefined;
+  if (!cleanedBase) return flexibleWindowTag;
+  return `${cleanedBase}\n\n${flexibleWindowTag}`;
 }
 
 function getProposalPreviewDebugFlag(): boolean {
@@ -200,7 +261,13 @@ export default function AddMeetingScreen() {
 
   const [locationSelection, setLocationSelection] = useState<LocationSelection>({ type: 'none' });
   const [durationMinutes, setDurationMinutes] = useState(60);
-  const [timeframe, setTimeframe] = useState<TimeframeSelection>({ mode: 'anytime' });
+  const [durationPreset, setDurationPreset] = useState<DurationPreset>(60);
+  const [flexibleMeetingEnabled, setFlexibleMeetingEnabled] = useState(false);
+  const [flexBeforeMinutes, setFlexBeforeMinutes] = useState(15);
+  const [flexAfterMinutes, setFlexAfterMinutes] = useState(15);
+  const [showSearchInputs, setShowSearchInputs] = useState(true);
+  const [searchMeetingConfig, setSearchMeetingConfig] = useState<MeetingConfigSnapshot | null>(null);
+  const [timeframe, setTimeframe] = useState<TimeframeSelection>({ mode: 'best' });
   const [hasSearched, setHasSearched] = useState(false);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [mapSlot, setMapSlot] = useState<ScoredSlot | null>(null);
@@ -222,6 +289,66 @@ export default function AddMeetingScreen() {
   const bestOptionsScrollXRef = React.useRef(0);
 
   const searchWindow = useMemo(() => getSearchWindow(timeframe), [timeframe]);
+  const maxFlexPerSideMinutes = useMemo(() => {
+    const raw = (MAX_DURATION_MINUTES - durationMinutes) / 2;
+    if (raw <= 0) return 0;
+    return Math.floor(raw / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES;
+  }, [durationMinutes]);
+
+  const applyDurationPreset = React.useCallback((nextDuration: number) => {
+    const snapped = Math.max(
+      DURATION_STEP_MINUTES,
+      Math.min(MAX_DURATION_MINUTES, Math.round(nextDuration / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES)
+    );
+    setDurationMinutes(snapped);
+    if (DURATION_OPTS.includes(snapped as (typeof DURATION_OPTS)[number])) {
+      setDurationPreset(snapped as DurationPreset);
+    } else {
+      setDurationPreset('custom');
+    }
+  }, []);
+
+  const handleTimelineDurationChange = React.useCallback((nextDuration: number) => {
+    const snapped = Math.max(
+      DURATION_STEP_MINUTES,
+      Math.min(MAX_DURATION_MINUTES, Math.round(nextDuration / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES)
+    );
+    setDurationMinutes(snapped);
+    setDurationPreset('custom');
+  }, []);
+
+  const handleFlexBeforeChange = React.useCallback((next: number) => {
+    const snapped = Math.max(
+      0,
+      Math.min(maxFlexPerSideMinutes, Math.round(next / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES)
+    );
+    setFlexBeforeMinutes(snapped);
+  }, [maxFlexPerSideMinutes]);
+
+  const handleFlexAfterChange = React.useCallback((next: number) => {
+    const snapped = Math.max(
+      0,
+      Math.min(maxFlexPerSideMinutes, Math.round(next / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES)
+    );
+    setFlexAfterMinutes(snapped);
+  }, [maxFlexPerSideMinutes]);
+
+  const handleFlexibleToggle = React.useCallback((enabled: boolean) => {
+    setFlexibleMeetingEnabled(enabled);
+    if (enabled) {
+      const defaultFlex = Math.min(15, maxFlexPerSideMinutes);
+      setFlexBeforeMinutes((prev) => (prev > 0 ? Math.min(prev, maxFlexPerSideMinutes) : defaultFlex));
+      setFlexAfterMinutes((prev) => (prev > 0 ? Math.min(prev, maxFlexPerSideMinutes) : defaultFlex));
+    } else {
+      setFlexBeforeMinutes(0);
+      setFlexAfterMinutes(0);
+    }
+  }, [maxFlexPerSideMinutes]);
+
+  useEffect(() => {
+    setFlexBeforeMinutes((prev) => Math.min(prev, maxFlexPerSideMinutes));
+    setFlexAfterMinutes((prev) => Math.min(prev, maxFlexPerSideMinutes));
+  }, [maxFlexPerSideMinutes]);
 
   const newLocation: Coordinate | null = useMemo(() => {
     if (locationSelection.type === 'contact') return locationSelection.coords;
@@ -256,7 +383,7 @@ export default function AddMeetingScreen() {
       durationMinutes,
       preferences,
       searchWindow,
-      clampSearchStartToToday: timeframe.mode === 'anytime',
+      clampSearchStartToToday: timeframe.mode !== 'week',
       includeExplain: __DEV__,
       onSlotConsidered: __DEV__ && qaLog
         ? (e) => { qaEntriesRef.current.push(e); }
@@ -280,6 +407,10 @@ export default function AddMeetingScreen() {
     () => new Set(bestBadgeSlotId ? [bestBadgeSlotId] : []),
     [bestBadgeSlotId]
   );
+  const anyTimeSlots = useMemo(() => rankedSlots, [rankedSlots]);
+  const showBestMatchResults = timeframe.mode === 'best';
+  const showAnyTimeResults = timeframe.mode === 'anytime';
+  const showPickWeekResults = timeframe.mode === 'week';
 
   useEffect(() => {
     const devEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
@@ -440,6 +571,13 @@ export default function AddMeetingScreen() {
 
   const handleFindBestTime = async () => {
     if (!canFindBestTime) return;
+    setShowSearchInputs(false);
+    setSearchMeetingConfig({
+      durationMinutes,
+      flexibleMeetingEnabled,
+      flexBeforeMinutes: flexibleMeetingEnabled ? flexBeforeMinutes : 0,
+      flexAfterMinutes: flexibleMeetingEnabled ? flexAfterMinutes : 0,
+    });
     setHasSearched(true);
     setSearchLoading(true);
     setSearchAppointments(null);
@@ -505,9 +643,11 @@ export default function AddMeetingScreen() {
   // Reset results when user changes inputs (must press CTA again)
   useEffect(() => {
     setHasSearched(false);
+    setShowSearchInputs(true);
     setSearchAppointments(null);
+    setSearchMeetingConfig(null);
     setHighlightedShiftEventIds([]);
-  }, [locationSelection, durationMinutes, timeframe]);
+  }, [locationSelection, durationMinutes, timeframe, flexibleMeetingEnabled, flexBeforeMinutes, flexAfterMinutes]);
 
   const handleSelectSlot = (slot: ScoredSlot) => {
     logProposalSelection(slot, 'select');
@@ -543,7 +683,8 @@ export default function AddMeetingScreen() {
 
   const handleConfirmBooking = async (
     event: CalendarEvent,
-    contactInput?: ContactInput
+    contactInput?: ContactInput,
+    flexConfig?: ConfirmFlexConfig
   ) => {
     const guestSave = !userToken;
 
@@ -566,7 +707,21 @@ export default function AddMeetingScreen() {
     /** We propose only feasible, optimal slots. No save-time checks—trust the proposals. */
     const isLocalId = finalEvent.id.startsWith('local-');
     const token = userToken ?? (getValidToken ? await getValidToken() : null);
-    const eventBody = (finalEvent.bodyPreview ?? finalEvent.notes ?? '').trim() || undefined;
+    const baseEventBody = (finalEvent.bodyPreview ?? finalEvent.notes ?? '').trim() || undefined;
+    const effectiveFlexEnabled = Boolean(flexConfig?.enabled);
+    const effectiveFlexBeforeMinutes = effectiveFlexEnabled ? Math.max(0, flexConfig?.earlyMinutes ?? 0) : 0;
+    const effectiveFlexAfterMinutes = effectiveFlexEnabled ? Math.max(0, flexConfig?.lateMinutes ?? 0) : 0;
+    const flexibleWindowTag = confirmSlot && effectiveFlexEnabled
+      ? buildFlexibleWindowTag(confirmSlot.startMs, effectiveFlexBeforeMinutes, effectiveFlexAfterMinutes)
+      : null;
+    const eventBody = composeEventBodyWithFlexibleWindow(baseEventBody, flexibleWindowTag);
+    if (eventBody) {
+      finalEvent = {
+        ...finalEvent,
+        notes: eventBody,
+        bodyPreview: eventBody,
+      };
+    }
 
     if (confirmSlot) {
       logProposalSelection(confirmSlot, 'confirm');
@@ -884,9 +1039,39 @@ export default function AddMeetingScreen() {
   const token = canUseContactLookup ? userToken ?? null : null;
   const isWide = useIsWideScreen();
   const insets = useSafeAreaInsets();
+  const timeframeSummaryLabel = useMemo(
+    () => formatTimeframeSummaryLabel(timeframe),
+    [timeframe]
+  );
+  const collapsedSearchSummary = useMemo(() => {
+    const summaryLocation = locationLabel || 'No location';
+    return `${summaryLocation} • Duration: ${formatDurationLabel(durationMinutes)} • Type: ${timeframeSummaryLabel}`;
+  }, [durationMinutes, locationLabel, timeframeSummaryLabel]);
+  const showCollapsedSearchHeader = hasSearched && !showSearchInputs;
+  const showSearchInputsPanel = !hasSearched || showSearchInputs;
+
+  const bookingDefaultFlexibleEnabled = useMemo(
+    () => searchMeetingConfig?.flexibleMeetingEnabled ?? flexibleMeetingEnabled,
+    [searchMeetingConfig?.flexibleMeetingEnabled, flexibleMeetingEnabled]
+  );
+  const bookingDefaultFlexBeforeMinutes = useMemo(
+    () => searchMeetingConfig?.flexBeforeMinutes ?? (flexibleMeetingEnabled ? flexBeforeMinutes : 0),
+    [searchMeetingConfig?.flexBeforeMinutes, flexibleMeetingEnabled, flexBeforeMinutes]
+  );
+  const bookingDefaultFlexAfterMinutes = useMemo(
+    () => searchMeetingConfig?.flexAfterMinutes ?? (flexibleMeetingEnabled ? flexAfterMinutes : 0),
+    [searchMeetingConfig?.flexAfterMinutes, flexibleMeetingEnabled, flexAfterMinutes]
+  );
+  const bookingDefaultDurationMinutes = useMemo(
+    () => searchMeetingConfig?.durationMinutes ?? durationMinutes,
+    [searchMeetingConfig?.durationMinutes, durationMinutes]
+  );
 
   /** Slot to display on map: selected for booking, or tapped for map, or Best Match. */
-  const displayedMapSlot = confirmSlot ?? mapSlot ?? (bestOptions[0] ?? null);
+  const defaultMapSlot = showBestMatchResults
+    ? (bestOptions[0] ?? null)
+    : (anyTimeSlots[0] ?? null);
+  const displayedMapSlot = confirmSlot ?? mapSlot ?? defaultMapSlot;
 
   return (
     <View style={[styles.container, isWide && styles.splitContainer]}>
@@ -904,7 +1089,7 @@ export default function AddMeetingScreen() {
           showsVerticalScrollIndicator={true}
           keyboardShouldPersistTaps="handled"
         >
-          {(!hasSearched) && (
+          {!hasSearched && (
             <View style={{ alignItems: 'center', marginTop: 16, marginBottom: 24 }}>
               <View style={[styles.sectionIconBox, { backgroundColor: '#DBEAFE' }]}>
                 <Text style={{ fontSize: 18 }}>📅</Text>
@@ -913,7 +1098,24 @@ export default function AddMeetingScreen() {
             </View>
           )}
 
-          <View style={!hasSearched ? styles.sectionCard : {}}>
+          {showCollapsedSearchHeader && (
+            <TouchableOpacity
+              style={styles.searchSummaryHeader}
+              onPress={() => setShowSearchInputs(true)}
+              activeOpacity={0.88}
+            >
+              <View style={styles.searchSummaryRow}>
+                <Text style={styles.searchSummaryText} numberOfLines={1}>
+                  {collapsedSearchSummary}
+                </Text>
+                <Text style={styles.searchSummaryEdit}>Edit</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {showSearchInputsPanel && (
+            <>
+              <View style={!hasSearched ? styles.sectionCard : {}}>
             <LocationSearch
               token={token}
               searchContacts={async (t, q) => {
@@ -1016,21 +1218,86 @@ export default function AddMeetingScreen() {
                     key={d}
                     style={[
                       styles.durationPill,
-                      durationMinutes === d && styles.durationPillActive,
+                      durationPreset === d && styles.durationPillActive,
                     ]}
-                    onPress={() => setDurationMinutes(d)}
+                    onPress={() => applyDurationPreset(d)}
                   >
                     <Text
                       style={[
                         styles.durationPillText,
-                        durationMinutes === d && styles.durationPillTextActive,
+                        durationPreset === d && styles.durationPillTextActive,
                       ]}
                     >
                       {d} min
                     </Text>
                   </TouchableOpacity>
                 ))}
+                <TouchableOpacity
+                  style={[
+                    styles.durationPill,
+                    durationPreset === 'custom' && styles.durationPillActive,
+                  ]}
+                  onPress={() => setDurationPreset('custom')}
+                >
+                  <Text
+                    style={[
+                      styles.durationPillText,
+                      durationPreset === 'custom' && styles.durationPillTextActive,
+                    ]}
+                  >
+                    Custom
+                  </Text>
+                </TouchableOpacity>
               </View>
+              <Text style={styles.durationSummary}>
+                Selected: {formatDurationLabel(durationMinutes)}
+              </Text>
+              {(durationPreset === 'custom' || flexibleMeetingEnabled) && (
+                <View style={styles.rangeBarWrap}>
+                  <MeetingDurationFlexTimeline
+                    durationMinutes={durationMinutes}
+                    flexBeforeMinutes={flexBeforeMinutes}
+                    flexAfterMinutes={flexAfterMinutes}
+                    showFlexHandles={flexibleMeetingEnabled}
+                    onDurationChange={handleTimelineDurationChange}
+                    onFlexBeforeChange={handleFlexBeforeChange}
+                    onFlexAfterChange={handleFlexAfterChange}
+                    maxMinutes={MAX_DURATION_MINUTES}
+                    stepMinutes={DURATION_STEP_MINUTES}
+                    maxFlexPerSideMinutes={maxFlexPerSideMinutes}
+                  />
+                </View>
+              )}
+              <View style={styles.flexToggleRow}>
+                <View style={styles.flexToggleTextWrap}>
+                  <Text style={styles.flexToggleTitle}>Flexible meeting</Text>
+                  <Text style={styles.flexToggleHint}>
+                    Add earlier/later flexibility around the selected meeting duration.
+                  </Text>
+                </View>
+                <Switch
+                  value={flexibleMeetingEnabled}
+                  onValueChange={handleFlexibleToggle}
+                  trackColor={{ false: '#CBD5E1', true: '#F59E0B' }}
+                  thumbColor={flexibleMeetingEnabled ? '#FFFFFF' : '#F8FAFC'}
+                />
+              </View>
+              {flexibleMeetingEnabled && (
+                <View style={styles.flexSummaryRow}>
+                  <View style={styles.flexSummaryBadge}>
+                    <Text style={styles.flexSummaryBadgeLabel}>Before</Text>
+                    <Text style={styles.flexSummaryBadgeValue}>
+                      {formatDurationLabel(flexBeforeMinutes)}
+                    </Text>
+                  </View>
+                  <View style={styles.flexSummaryBadge}>
+                    <Text style={styles.flexSummaryBadgeLabel}>After</Text>
+                    <Text style={styles.flexSummaryBadgeValue}>
+                      {formatDurationLabel(flexAfterMinutes)}
+                    </Text>
+                  </View>
+                </View>
+              )}
             </View>
 
             <View style={{ marginBottom: 16 }}>
@@ -1069,7 +1336,9 @@ export default function AddMeetingScreen() {
                 </Text>
               </View>
             )}
-          </View>
+              </View>
+            </>
+          )}
 
           {__DEV__ && (Object.keys(devDebug).length > 0 || hasSearched) && (
             <TouchableOpacity
@@ -1134,88 +1403,126 @@ export default function AddMeetingScreen() {
               </View>
             ) : (
               <>
-                <View style={styles.sectionHeaderRow}>
-                  <Text style={styles.sectionTitle}>Best Options</Text>
-                  {bestOptions.length > 0 && (
-                    <View style={styles.carouselControls}>
-                      <TouchableOpacity
-                        style={styles.carouselControlBtn}
-                        onPress={() => scrollBestOptionsBy(-1)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.carouselControlText}>‹</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.carouselControlBtn}
-                        onPress={() => scrollBestOptionsBy(1)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.carouselControlText}>›</Text>
-                      </TouchableOpacity>
+                {showBestMatchResults && (
+                  <>
+                    <View style={styles.sectionHeaderRow}>
+                      <Text style={styles.sectionTitle}>Best Match</Text>
+                      {bestOptions.length > 0 && (
+                        <View style={styles.carouselControls}>
+                          <TouchableOpacity
+                            style={styles.carouselControlBtn}
+                            onPress={() => scrollBestOptionsBy(-1)}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={styles.carouselControlText}>‹</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.carouselControlBtn}
+                            onPress={() => scrollBestOptionsBy(1)}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={styles.carouselControlText}>›</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
                     </View>
-                  )}
-                </View>
-                {bestOptions.length === 0 ? (
-                  <Text style={styles.emptyHint}>
-                    No slots found. Try a different timeframe or client.
-                  </Text>
-                ) : (
-                  <ScrollView
-                    ref={bestOptionsScrollRef}
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.bestOptionsRow}
-                    style={styles.bestOptionsScroll}
-                    onLayout={(e) => setBestOptionsViewportWidth(e.nativeEvent.layout.width)}
-                    onScroll={(e) => {
-                      bestOptionsScrollXRef.current = e.nativeEvent.contentOffset.x;
-                    }}
-                    scrollEventThrottle={16}
-                  >
-                    {bestOptions.map((slot) => (
-                      <View key={slotId(slot)} style={styles.bestOptionCard}>
-                        <GhostSlotCard
-                          slot={slot}
-                          preBuffer={preBuffer}
-                          postBuffer={postBuffer}
-                          isSelected={selectedSlotId === slotId(slot)}
-                          isBestOption={bestBadgeSlotId != null && slotId(slot) === bestBadgeSlotId}
-                          showDate={true}
-                          onSelect={() => handleSelectSlot(slot)}
-                          onMapPress={() => handleMapPress(slot)}
-                          onBookPress={() => handleBookSlot(slot)}
-                          onPusherToggle={handlePusherToggle}
-                        />
-                      </View>
-                    ))}
-                  </ScrollView>
+                    {bestOptions.length === 0 ? (
+                      <Text style={styles.emptyHint}>
+                        No slots found. Try a different timeframe or client.
+                      </Text>
+                    ) : (
+                      <ScrollView
+                        ref={bestOptionsScrollRef}
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.bestOptionsRow}
+                        style={styles.bestOptionsScroll}
+                        onLayout={(e) => setBestOptionsViewportWidth(e.nativeEvent.layout.width)}
+                        onScroll={(e) => {
+                          bestOptionsScrollXRef.current = e.nativeEvent.contentOffset.x;
+                        }}
+                        scrollEventThrottle={16}
+                      >
+                        {bestOptions.map((slot) => (
+                          <View key={slotId(slot)} style={styles.bestOptionCard}>
+                            <GhostSlotCard
+                              slot={slot}
+                              preBuffer={preBuffer}
+                              postBuffer={postBuffer}
+                              isSelected={selectedSlotId === slotId(slot)}
+                              isBestOption={bestBadgeSlotId != null && slotId(slot) === bestBadgeSlotId}
+                              showDate={true}
+                              onSelect={() => handleSelectSlot(slot)}
+                              onMapPress={() => handleMapPress(slot)}
+                              onBookPress={() => handleBookSlot(slot)}
+                              onPusherToggle={handlePusherToggle}
+                            />
+                          </View>
+                        ))}
+                      </ScrollView>
+                    )}
+                  </>
                 )}
 
-                <Text style={[styles.sectionTitle, styles.sectionTitleSpaced]}>
-                  By Day
-                </Text>
-                {dayGroups.length === 0 ? (
-                  <Text style={styles.emptyHint}>
-                    No schedule in this window. Add meetings or choose another
-                    timeframe.
-                  </Text>
-                ) : (
-                  dayGroups.map((group) => (
-                    <DayTimeline
-                      key={group.dayIso}
-                      dayIso={group.dayIso}
-                      dayLabel={group.dayLabel}
-                      entries={group.entries}
-                      preBuffer={preBuffer}
-                      postBuffer={postBuffer}
-                      selectedSlotId={selectedSlotId}
-                      bestOptionIds={bestOptionIds}
-                      onSelectSlot={handleSelectSlot}
-                      onMapPress={handleMapPress}
-                      onBookSlot={handleBookSlot}
-                      onPusherToggle={handlePusherToggle}
-                    />
-                  ))
+                {showAnyTimeResults && (
+                  <>
+                    <Text style={[styles.sectionTitle, styles.sectionTitleSpaced]}>
+                      Any Time
+                    </Text>
+                    {anyTimeSlots.length === 0 ? (
+                      <Text style={styles.emptyHint}>
+                        No slots found. Try a different location or duration.
+                      </Text>
+                    ) : (
+                      anyTimeSlots.map((slot) => (
+                        <View key={slotId(slot)} style={styles.anyTimeCard}>
+                          <GhostSlotCard
+                            slot={slot}
+                            preBuffer={preBuffer}
+                            postBuffer={postBuffer}
+                            isSelected={selectedSlotId === slotId(slot)}
+                            isBestOption={bestBadgeSlotId != null && slotId(slot) === bestBadgeSlotId}
+                            showDate={true}
+                            onSelect={() => handleSelectSlot(slot)}
+                            onMapPress={() => handleMapPress(slot)}
+                            onBookPress={() => handleBookSlot(slot)}
+                            onPusherToggle={handlePusherToggle}
+                          />
+                        </View>
+                      ))
+                    )}
+                  </>
+                )}
+
+                {showPickWeekResults && (
+                  <>
+                    <Text style={[styles.sectionTitle, styles.sectionTitleSpaced]}>
+                      Pick a Week
+                    </Text>
+                    {dayGroups.length === 0 ? (
+                      <Text style={styles.emptyHint}>
+                        No schedule in this window. Add meetings or choose another
+                        timeframe.
+                      </Text>
+                    ) : (
+                      dayGroups.map((group) => (
+                        <DayTimeline
+                          key={group.dayIso}
+                          dayIso={group.dayIso}
+                          dayLabel={group.dayLabel}
+                          entries={group.entries}
+                          preBuffer={preBuffer}
+                          postBuffer={postBuffer}
+                          selectedSlotId={selectedSlotId}
+                          bestOptionIds={bestOptionIds}
+                          onSelectSlot={handleSelectSlot}
+                          onMapPress={handleMapPress}
+                          onBookSlot={handleBookSlot}
+                          onPusherToggle={handlePusherToggle}
+                        />
+                      ))
+                    )}
+                  </>
                 )}
               </>
             )
@@ -1313,6 +1620,10 @@ export default function AddMeetingScreen() {
         locationLabel={locationLabel}
         locationForEvent={locationForEvent || undefined}
         coordinates={newLocation ?? { lat: 0, lon: 0 }}
+        defaultFlexibleEnabled={bookingDefaultFlexibleEnabled}
+        defaultFlexBeforeMinutes={bookingDefaultFlexBeforeMinutes}
+        defaultFlexAfterMinutes={bookingDefaultFlexAfterMinutes}
+        defaultDurationMinutes={bookingDefaultDurationMinutes}
         onClose={() => {
           setConfirmSlot(null);
         }}
@@ -1394,6 +1705,36 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
   },
+  searchSummaryHeader: {
+    width: '100%',
+    maxWidth: 600,
+    alignSelf: 'center',
+    marginBottom: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#38BDF8',
+    backgroundColor: '#0369A1',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  searchSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchSummaryText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#E0F2FE',
+  },
+  searchSummaryEdit: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    color: '#BAE6FD',
+    textTransform: 'uppercase',
+  },
   durationRow: {
     paddingHorizontal: 16,
     marginBottom: 16,
@@ -1402,6 +1743,7 @@ const styles = StyleSheet.create({
   durationPills: {
     flexDirection: 'row',
     gap: 8,
+    flexWrap: 'wrap',
   },
   durationPill: {
     paddingVertical: 10,
@@ -1422,6 +1764,68 @@ const styles = StyleSheet.create({
   },
   durationPillTextActive: {
     color: '#fff',
+  },
+  durationSummary: {
+    marginTop: 10,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  rangeBarWrap: {
+    marginTop: 10,
+    paddingVertical: 6,
+  },
+  flexToggleRow: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  flexToggleTextWrap: {
+    flex: 1,
+  },
+  flexToggleTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 2,
+  },
+  flexToggleHint: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  flexSummaryRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  flexSummaryBadge: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#FFFBEB',
+  },
+  flexSummaryBadgeLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400E',
+    marginBottom: 2,
+    letterSpacing: 0.3,
+  },
+  flexSummaryBadgeValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#78350F',
   },
   ctaButton: {
     backgroundColor: MS_BLUE,
@@ -1549,6 +1953,9 @@ const styles = StyleSheet.create({
   bestOptionCard: {
     width: 300,
     marginRight: 12,
+  },
+  anyTimeCard: {
+    marginBottom: 10,
   },
   emptyHint: {
     fontSize: 14,

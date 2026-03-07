@@ -12,10 +12,11 @@ import { addWeeks, startOfWeek, startOfDay, addDays, endOfDay } from 'date-fns';
 
 const MS_BLUE = '#0078D4';
 
-export type TimeframeMode = 'anytime' | 'week';
+export type TimeframeMode = 'best' | 'anytime' | 'week';
 
 /** Selected week = Monday 00:00 of that week (epoch ms). Only used when mode === 'week'. */
 export type TimeframeSelection =
+  | { mode: 'best' }
   | { mode: 'anytime' }
   | { mode: 'week'; weekStartMs: number };
 
@@ -26,7 +27,7 @@ export type TimeframeSelectorProps = {
 
 /**
  * Search window:
- * - Best Match: today → today + 13 days (14 days incl. today)
+ * - Best Match / Any Time: today → today + 13 days (14 days incl. today)
  * - Pick Week: Mon 00:00 → Sun 23:59:59.999 of selected week (weekStartsOn: 1)
  */
 export function getSearchWindow(
@@ -35,7 +36,7 @@ export function getSearchWindow(
   const now = new Date();
   const today = startOfDay(now);
 
-  if (selection.mode === 'anytime') {
+  if (selection.mode === 'best' || selection.mode === 'anytime') {
     return {
       start: today,
       end: endOfDay(addDays(today, 13)),
@@ -106,6 +107,20 @@ export default function TimeframeSelector({
         style={styles.scroll}
       >
         <TouchableOpacity
+          style={[styles.pill, selected.mode === 'best' && styles.pillActive]}
+          onPress={() => onSelect({ mode: 'best' })}
+          activeOpacity={0.8}
+        >
+          <Text
+            style={[
+              styles.label,
+              selected.mode === 'best' && styles.labelActive,
+            ]}
+          >
+            Best Match
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           style={[styles.pill, selected.mode === 'anytime' && styles.pillActive]}
           onPress={() => onSelect({ mode: 'anytime' })}
           activeOpacity={0.8}
@@ -116,7 +131,7 @@ export default function TimeframeSelector({
               selected.mode === 'anytime' && styles.labelActive,
             ]}
           >
-            Best Match
+            Any Time
           </Text>
         </TouchableOpacity>
         <TouchableOpacity

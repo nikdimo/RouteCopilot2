@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  type LayoutChangeEvent,
   View,
   Text,
   StyleSheet,
@@ -13,8 +12,6 @@ import {
   Linking,
   Switch,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { ScheduleStackParamList } from '../navigation/ScheduleStack';
@@ -30,14 +27,13 @@ import {
   deleteCalendarEvent,
 } from '../services/graph';
 import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subscription';
+import MeetingDurationFlexTimeline from '../components/MeetingDurationFlexTimeline';
 
 const MS_BLUE = '#2563EB'; // Vibrant Blue
 const RED = '#EF4444'; // Modern Red
-const FLEX_STEP_MINUTES = 15;
-const FLEX_SLOTS_PER_DAY = (24 * 60) / FLEX_STEP_MINUTES;
-const FLEX_MAX_SLOT = FLEX_SLOTS_PER_DAY - 1;
-const FLEX_TRACK_HEIGHT = 8;
-const FLEX_THUMB_SIZE = 24;
+const DURATION_STEP_MINUTES = 15;
+const MAX_DURATION_MINUTES = 8 * 60;
+const FLEXIBLE_WINDOW_TAG_REGEX = /\[Flexible Window:[^\]]+\]/i;
 const FLEX_WINDOW_REGEX = /\[Flexible Window:\s*([0-2]?\d:[0-5]\d)\s*to\s*([0-2]?\d:[0-5]\d)(?:\s*\|[^\]]*)?\]/i;
 
 type MeetingDetailsNav = NativeStackNavigationProp<ScheduleStackParamList, 'MeetingDetails'>;
@@ -48,22 +44,11 @@ type WebDialogHost = {
   confirm?: (message?: string) => boolean;
 };
 
-type FlexibleRangeSliderProps = {
-  startSlot15: number;
-  endSlot15: number;
-  meetingStartSlot15: number;
-  meetingEndSlot15: number;
-  onStartChange: (slot15: number) => void;
-  onEndChange: (slot15: number) => void;
-  canEdit: boolean;
-  onDragStateChange?: (dragging: boolean) => void;
-};
-
 type ParsedFlexibleWindow = {
   notesText: string;
   isFlexible: boolean;
-  startSlot15: number | null;
-  endSlot15: number | null;
+  startMinutes: number | null;
+  endMinutes: number | null;
 };
 
 function parseClockToMinutes(value: string): number | null {
@@ -74,28 +59,8 @@ function parseClockToMinutes(value: string): number | null {
   return hours * 60 + minutes;
 }
 
-function clampSlot(slot15: number): number {
-  return Math.max(0, Math.min(FLEX_MAX_SLOT, Math.round(slot15)));
-}
-
-function minutesToSlot15Round(minutes: number): number {
-  return clampSlot(minutes / FLEX_STEP_MINUTES);
-}
-
-function minutesToSlot15Floor(minutes: number): number {
-  return clampSlot(Math.floor(minutes / FLEX_STEP_MINUTES));
-}
-
-function minutesToSlot15Ceil(minutes: number): number {
-  return clampSlot(Math.ceil(minutes / FLEX_STEP_MINUTES));
-}
-
-function formatSlot15(slot15: number): string {
-  const clamped = clampSlot(slot15);
-  const totalMinutes = clamped * FLEX_STEP_MINUTES;
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function formatMinutesLabel(minutes: number): string {
@@ -106,9 +71,26 @@ function formatMinutesLabel(minutes: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+function formatClockFromMinutes(minutes: number): string {
+  const safe = clamp(minutes, 0, 23 * 60 + 59);
+  const h = Math.floor(safe / 60);
+  const m = safe % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
+function snapDuration(value: number): number {
+  return Math.max(
+    DURATION_STEP_MINUTES,
+    Math.min(
+      MAX_DURATION_MINUTES,
+      Math.round(value / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES
+    )
+  );
+}
+
 function parseRangeFromTimeText(
   value: string | undefined
-): { startSlot15: number; endSlot15: number } | null {
+): { startMinutes: number; endMinutes: number } | null {
   const raw = value?.trim();
   if (!raw) return null;
   const normalized = raw.replace(/[\u2013\u2014]/g, '-');
@@ -117,15 +99,13 @@ function parseRangeFromTimeText(
   const startMinutes = parseClockToMinutes(match[1] ?? '');
   const endMinutes = parseClockToMinutes(match[2] ?? '');
   if (startMinutes == null || endMinutes == null || endMinutes <= startMinutes) return null;
-  const startSlot15 = minutesToSlot15Floor(startMinutes);
-  const endSlot15 = Math.max(startSlot15 + 1, minutesToSlot15Ceil(endMinutes));
-  return { startSlot15, endSlot15 };
+  return { startMinutes, endMinutes };
 }
 
 function parseRangeFromIso(
   startIso?: string,
   endIso?: string
-): { startSlot15: number; endSlot15: number } | null {
+): { startMinutes: number; endMinutes: number } | null {
   if (!startIso || !endIso) return null;
   const start = new Date(startIso);
   const end = new Date(endIso);
@@ -134,15 +114,30 @@ function parseRangeFromIso(
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
   const startMinutes = start.getHours() * 60 + start.getMinutes();
   const endMinutes = end.getHours() * 60 + end.getMinutes();
-  const startSlot15 = minutesToSlot15Floor(startMinutes);
-  const endSlot15 = Math.max(startSlot15 + 1, minutesToSlot15Ceil(endMinutes));
-  return { startSlot15, endSlot15 };
+  if (endMinutes <= startMinutes) return null;
+  return { startMinutes, endMinutes };
 }
 
-function defaultFlexRangeFromAnchor(anchorStartSlot15: number): { startSlot15: number; endSlot15: number } {
-  const startSlot15 = Math.max(0, anchorStartSlot15 - 2);
-  const endSlot15 = Math.min(FLEX_MAX_SLOT, anchorStartSlot15 + 2);
-  return { startSlot15, endSlot15: Math.max(startSlot15 + 1, endSlot15) };
+function buildFlexibleWindowTag(
+  meetingStartMinutes: number,
+  flexBeforeMinutes: number,
+  flexAfterMinutes: number
+): string | null {
+  if (flexBeforeMinutes <= 0 && flexAfterMinutes <= 0) return null;
+  const minStart = Math.max(0, meetingStartMinutes - flexBeforeMinutes);
+  const maxStart = Math.min(23 * 60 + 59, meetingStartMinutes + flexAfterMinutes);
+  if (maxStart <= minStart) return null;
+  return `[Flexible Window: ${formatClockFromMinutes(minStart)} to ${formatClockFromMinutes(maxStart)} | source=meeting-details]`;
+}
+
+function composeNotesWithFlexibleWindow(
+  notesText: string | undefined,
+  flexibleWindowTag: string | null
+): string | undefined {
+  const cleanedBase = (notesText ?? '').replace(FLEXIBLE_WINDOW_TAG_REGEX, '').trim();
+  if (!flexibleWindowTag) return cleanedBase || undefined;
+  if (!cleanedBase) return flexibleWindowTag;
+  return `${cleanedBase}\n\n${flexibleWindowTag}`;
 }
 
 function parseFlexibleWindow(notesRaw: string | undefined): ParsedFlexibleWindow {
@@ -152,8 +147,8 @@ function parseFlexibleWindow(notesRaw: string | undefined): ParsedFlexibleWindow
     return {
       notesText: source.trim(),
       isFlexible: false,
-      startSlot15: null,
-      endSlot15: null,
+      startMinutes: null,
+      endMinutes: null,
     };
   }
   const startMinutes = parseClockToMinutes(match[1] ?? '');
@@ -169,122 +164,9 @@ function parseFlexibleWindow(notesRaw: string | undefined): ParsedFlexibleWindow
   return {
     notesText: strippedNotes,
     isFlexible: hasValidRange,
-    startSlot15: hasValidRange ? minutesToSlot15Round(startMinutes!) : null,
-    endSlot15: hasValidRange ? Math.max(minutesToSlot15Round(startMinutes!) + 1, minutesToSlot15Round(endMinutes!)) : null,
+    startMinutes: hasValidRange ? startMinutes! : null,
+    endMinutes: hasValidRange ? endMinutes! : null,
   };
-}
-
-function FlexibleRangeSlider({
-  startSlot15,
-  endSlot15,
-  meetingStartSlot15,
-  meetingEndSlot15,
-  onStartChange,
-  onEndChange,
-  canEdit,
-  onDragStateChange,
-}: FlexibleRangeSliderProps) {
-  const trackRef = useRef<View>(null);
-  const trackLayout = useRef({ x: 0, width: 300 });
-  const [trackWidth, setTrackWidth] = useState(300);
-
-  const onTrackLayout = useCallback((e: LayoutChangeEvent) => {
-    const width = Math.max(1, e.nativeEvent.layout.width);
-    setTrackWidth(width);
-    trackRef.current?.measureInWindow((x) => {
-      trackLayout.current = { x, width };
-    });
-  }, []);
-
-  const absoluteXToSlot15 = useCallback((absoluteX: number) => {
-    const { x, width } = trackLayout.current;
-    const pct = (absoluteX - x) / width;
-    return clampSlot(Math.round(pct * FLEX_MAX_SLOT));
-  }, []);
-
-  const setDragging = useCallback((dragging: boolean) => {
-    onDragStateChange?.(dragging);
-  }, [onDragStateChange]);
-
-  const handleStartUpdate = useCallback((absoluteX: number) => {
-    const slot = absoluteXToSlot15(absoluteX);
-    const clamped = Math.min(slot, endSlot15 - 1);
-    onStartChange(Math.max(0, clamped));
-  }, [absoluteXToSlot15, endSlot15, onStartChange]);
-
-  const handleEndUpdate = useCallback((absoluteX: number) => {
-    const slot = absoluteXToSlot15(absoluteX);
-    const clamped = Math.max(slot, startSlot15 + 1);
-    onEndChange(Math.min(FLEX_MAX_SLOT, clamped));
-  }, [absoluteXToSlot15, onEndChange, startSlot15]);
-
-  const finishDrag = useCallback(() => {
-    onDragStateChange?.(false);
-  }, [onDragStateChange]);
-
-  const startGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .enabled(canEdit)
-        .activeOffsetX([-4, 4])
-        .failOffsetY([-20, 20])
-        .onBegin(() => {
-          runOnJS(setDragging)(true);
-        })
-        .onUpdate((e) => {
-          runOnJS(handleStartUpdate)(e.absoluteX);
-        })
-        .onFinalize(() => {
-          runOnJS(finishDrag)();
-        }),
-    [canEdit, finishDrag, handleStartUpdate, setDragging]
-  );
-
-  const endGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .enabled(canEdit)
-        .activeOffsetX([-4, 4])
-        .failOffsetY([-20, 20])
-        .onBegin(() => {
-          runOnJS(setDragging)(true);
-        })
-        .onUpdate((e) => {
-          runOnJS(handleEndUpdate)(e.absoluteX);
-        })
-        .onFinalize(() => {
-          runOnJS(finishDrag)();
-        }),
-    [canEdit, finishDrag, handleEndUpdate, setDragging]
-  );
-
-  const startLeft = (startSlot15 / FLEX_MAX_SLOT) * trackWidth - FLEX_THUMB_SIZE / 2;
-  const endLeft = (endSlot15 / FLEX_MAX_SLOT) * trackWidth - FLEX_THUMB_SIZE / 2;
-  const fillLeft = (startSlot15 / FLEX_MAX_SLOT) * trackWidth;
-  const fillWidth = ((endSlot15 - startSlot15) / FLEX_MAX_SLOT) * trackWidth;
-  const meetingLeft = (meetingStartSlot15 / FLEX_MAX_SLOT) * trackWidth;
-  const meetingWidth = Math.max(2, ((meetingEndSlot15 - meetingStartSlot15) / FLEX_MAX_SLOT) * trackWidth);
-
-  return (
-    <View ref={trackRef} onLayout={onTrackLayout} style={styles.flexSliderShell} pointerEvents="box-none">
-      <View style={[styles.flexRangeTrack, { height: FLEX_TRACK_HEIGHT }]} pointerEvents="none">
-        <View style={[styles.flexRangeFill, { left: fillLeft, width: Math.max(0, fillWidth), height: FLEX_TRACK_HEIGHT }]} />
-        <View style={[styles.flexMeetingFill, { left: meetingLeft, width: meetingWidth, height: FLEX_TRACK_HEIGHT }]} />
-      </View>
-
-      <GestureDetector gesture={startGesture}>
-        <View style={[styles.flexThumbHitArea, { left: startLeft - 10 }]}>
-          <View style={styles.flexRangeThumb} />
-        </View>
-      </GestureDetector>
-
-      <GestureDetector gesture={endGesture}>
-        <View style={[styles.flexThumbHitArea, { left: endLeft - 10 }]}>
-          <View style={styles.flexRangeThumb} />
-        </View>
-      </GestureDetector>
-    </View>
-  );
 }
 
 function confirmDestructiveAction(
@@ -326,12 +208,18 @@ export default function MeetingDetailsScreen() {
   const [timeRange, setTimeRange] = useState('');
   const [location, setLocation] = useState('');
   const [notes, setNotes] = useState('');
+  const [durationMinutes, setDurationMinutes] = useState(60);
   const [isFlexible, setIsFlexible] = useState(false);
-  const [flexStartSlot15, setFlexStartSlot15] = useState(0);
-  const [flexEndSlot15, setFlexEndSlot15] = useState(0);
-  const [isFlexDragging, setIsFlexDragging] = useState(false);
+  const [flexBeforeMinutes, setFlexBeforeMinutes] = useState(0);
+  const [flexAfterMinutes, setFlexAfterMinutes] = useState(0);
   const isUserEditingRef = useRef(false);
   const hydratedEventIdRef = useRef<string | null>(null);
+
+  const maxFlexPerSideMinutes = useMemo(() => {
+    const raw = (MAX_DURATION_MINUTES - durationMinutes) / 2;
+    if (raw <= 0) return 0;
+    return Math.floor(raw / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES;
+  }, [durationMinutes]);
 
   const applyEventToForm = useCallback((payload: {
     title?: string;
@@ -347,32 +235,34 @@ export default function MeetingDetailsScreen() {
     const nextLocation = payload.location ?? '';
     const rawNotes = payload.notes ?? payload.bodyPreview ?? '';
     const parsedFlex = parseFlexibleWindow(rawNotes);
-    const meetingSlots =
+    const meetingRange =
       parseRangeFromTimeText(nextTime) ??
       parseRangeFromIso(payload.startIso, payload.endIso) ??
-      { startSlot15: 36, endSlot15: 40 };
-    const defaults = defaultFlexRangeFromAnchor(meetingSlots.startSlot15);
+      { startMinutes: 9 * 60, endMinutes: 10 * 60 };
+    const parsedDuration = snapDuration(meetingRange.endMinutes - meetingRange.startMinutes);
+    const initialMaxFlexPerSide = Math.floor(
+      Math.max(0, (MAX_DURATION_MINUTES - parsedDuration) / 2) / DURATION_STEP_MINUTES
+    ) * DURATION_STEP_MINUTES;
+    const parsedFlexBefore = parsedFlex.isFlexible && parsedFlex.startMinutes != null
+      ? Math.max(0, meetingRange.startMinutes - parsedFlex.startMinutes)
+      : 0;
+    const parsedFlexAfter = parsedFlex.isFlexible && parsedFlex.endMinutes != null
+      ? Math.max(0, parsedFlex.endMinutes - meetingRange.startMinutes)
+      : 0;
 
     setTitle(nextTitle);
-    setTimeRange(nextTime);
+    setTimeRange(nextTime || `${formatClockFromMinutes(meetingRange.startMinutes)} - ${formatClockFromMinutes(meetingRange.endMinutes)}`);
     setLocation(nextLocation);
     setNotes(parsedFlex.notesText);
-
-    if (parsedFlex.isFlexible && parsedFlex.startSlot15 != null && parsedFlex.endSlot15 != null) {
-      setIsFlexible(true);
-      setFlexStartSlot15(parsedFlex.startSlot15);
-      setFlexEndSlot15(parsedFlex.endSlot15);
-    } else {
-      setIsFlexible(false);
-      setFlexStartSlot15(defaults.startSlot15);
-      setFlexEndSlot15(defaults.endSlot15);
-    }
+    setDurationMinutes(parsedDuration);
+    setIsFlexible(parsedFlexBefore > 0 || parsedFlexAfter > 0);
+    setFlexBeforeMinutes(clamp(parsedFlexBefore, 0, initialMaxFlexPerSide));
+    setFlexAfterMinutes(clamp(parsedFlexAfter, 0, initialMaxFlexPerSide));
   }, []);
 
   useEffect(() => {
     if (event) {
       isUserEditingRef.current = false;
-      setIsFlexDragging(false);
       applyEventToForm(event);
     }
   }, [applyEventToForm, event?.id]);
@@ -381,22 +271,67 @@ export default function MeetingDetailsScreen() {
     isUserEditingRef.current = true;
   }, []);
 
-  const meetingSlotRange = useMemo(() => {
+  const meetingRange = useMemo(() => {
     return (
       parseRangeFromTimeText(timeRange || event?.time) ??
       parseRangeFromIso(event?.startIso, event?.endIso) ??
-      { startSlot15: 36, endSlot15: 40 }
+      { startMinutes: 9 * 60, endMinutes: 10 * 60 }
     );
   }, [event?.endIso, event?.startIso, event?.time, timeRange]);
 
-  const flexEarlyMinutes = Math.max(
-    0,
-    (meetingSlotRange.startSlot15 - flexStartSlot15) * FLEX_STEP_MINUTES
-  );
-  const flexLateMinutes = Math.max(
-    0,
-    (flexEndSlot15 - meetingSlotRange.startSlot15) * FLEX_STEP_MINUTES
-  );
+  const flexEarlyMinutes = isFlexible ? flexBeforeMinutes : 0;
+  const flexLateMinutes = isFlexible ? flexAfterMinutes : 0;
+
+  useEffect(() => {
+    setFlexBeforeMinutes((prev) => Math.min(prev, maxFlexPerSideMinutes));
+    setFlexAfterMinutes((prev) => Math.min(prev, maxFlexPerSideMinutes));
+  }, [maxFlexPerSideMinutes]);
+
+  const handleTimelineDurationChange = useCallback((nextDuration: number) => {
+    markUserEditing();
+    const snapped = snapDuration(nextDuration);
+    setDurationMinutes(snapped);
+    const startMinutes = meetingRange.startMinutes;
+    const endMinutes = Math.min(23 * 60 + 59, startMinutes + snapped);
+    setTimeRange(`${formatClockFromMinutes(startMinutes)} - ${formatClockFromMinutes(endMinutes)}`);
+  }, [markUserEditing, meetingRange.startMinutes]);
+
+  const handleFlexBeforeChange = useCallback((next: number) => {
+    markUserEditing();
+    const snapped = Math.max(
+      0,
+      Math.min(maxFlexPerSideMinutes, Math.round(next / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES)
+    );
+    setFlexBeforeMinutes(snapped);
+  }, [markUserEditing, maxFlexPerSideMinutes]);
+
+  const handleFlexAfterChange = useCallback((next: number) => {
+    markUserEditing();
+    const snapped = Math.max(
+      0,
+      Math.min(maxFlexPerSideMinutes, Math.round(next / DURATION_STEP_MINUTES) * DURATION_STEP_MINUTES)
+    );
+    setFlexAfterMinutes(snapped);
+  }, [markUserEditing, maxFlexPerSideMinutes]);
+
+  const handleFlexibleToggle = useCallback((next: boolean) => {
+    markUserEditing();
+    setIsFlexible(next);
+    if (next) {
+      const fallbackFlex = Math.min(15, maxFlexPerSideMinutes);
+      setFlexBeforeMinutes((prev) => {
+        if (prev > 0) return Math.min(prev, maxFlexPerSideMinutes);
+        return fallbackFlex;
+      });
+      setFlexAfterMinutes((prev) => {
+        if (prev > 0) return Math.min(prev, maxFlexPerSideMinutes);
+        return fallbackFlex;
+      });
+    } else {
+      setFlexBeforeMinutes(0);
+      setFlexAfterMinutes(0);
+    }
+  }, [markUserEditing, maxFlexPerSideMinutes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -455,29 +390,33 @@ export default function MeetingDetailsScreen() {
   const canEditInOutlook = Boolean(outlookEventLink) && !eventId.startsWith('local-');
 
   const handleSave = async () => {
-    const notesValue = notes.trim();
-    const flexMetaValue = isFlexible
-      ? `[Flexible Window: ${formatSlot15(flexStartSlot15)} to ${formatSlot15(flexEndSlot15)} | Early ${formatMinutesLabel(flexEarlyMinutes)}, Late ${formatMinutesLabel(flexLateMinutes)}]`
-      : '';
-    const composedNotes = [notesValue, flexMetaValue].filter(Boolean).join('\n\n').trim();
+    const notesValue = notes.trim() || undefined;
+    const parsedTimeRange = parseRangeFromTimeText(timeRange || event.time || '09:00 - 10:00');
+    if (!parsedTimeRange) {
+      Alert.alert('Invalid time', 'Use format HH:MM - HH:MM.');
+      return;
+    }
+    const startMinutes = parsedTimeRange.startMinutes;
+    const endMinutes = Math.min(23 * 60 + 59, startMinutes + durationMinutes);
+    if (endMinutes <= startMinutes) {
+      Alert.alert('Invalid time', 'Duration is too long for the selected start time.');
+      return;
+    }
+    const normalizedTimeRange = `${formatClockFromMinutes(startMinutes)} - ${formatClockFromMinutes(endMinutes)}`;
+    const flexibleWindowTag = isFlexible
+      ? buildFlexibleWindowTag(startMinutes, flexBeforeMinutes, flexAfterMinutes)
+      : null;
+    const composedNotes = composeNotesWithFlexibleWindow(notesValue, flexibleWindowTag);
     const existingNotesRaw = event.notes ?? event.bodyPreview;
     const existingNotesValue = (existingNotesRaw ?? '').trim();
-    const includeNotesPatch = composedNotes !== existingNotesValue || existingNotesRaw != null;
+    const includeNotesPatch = (composedNotes ?? '') !== existingNotesValue || existingNotesRaw != null;
     const patch = {
       title: title.trim() || event.title,
-      time: timeRange.trim() || event.time,
+      time: normalizedTimeRange,
       location: location.trim() || event.location,
       notes: includeNotesPatch ? (composedNotes || undefined) : event.notes,
     };
     const baseDate = event.startIso ? new Date(event.startIso) : new Date();
-    const normalizedTimeRange = (timeRange || event.time || '09:00 - 10:00').replace(/[\u2013\u2014]/g, '-');
-    const timeMatch = normalizedTimeRange.match(/([0-2]?\d:[0-5]\d)\s*-\s*([0-2]?\d:[0-5]\d)/);
-    const startMinutes = parseClockToMinutes(timeMatch?.[1] ?? '');
-    const endMinutes = parseClockToMinutes(timeMatch?.[2] ?? '');
-    if (startMinutes == null || endMinutes == null) {
-      Alert.alert('Invalid time', 'Use format HH:MM - HH:MM.');
-      return;
-    }
     const sh = Math.floor(startMinutes / 60);
     const sm = startMinutes % 60;
     const eh = Math.floor(endMinutes / 60);
@@ -627,7 +566,6 @@ export default function MeetingDetailsScreen() {
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
-          scrollEnabled={!isFlexDragging}
         >
           {/* Custom Header */}
           <View style={styles.headerRow}>
@@ -688,6 +626,10 @@ export default function MeetingDetailsScreen() {
               onChangeText={(text) => {
                 markUserEditing();
                 setTimeRange(text);
+                const parsed = parseRangeFromTimeText(text);
+                if (parsed) {
+                  setDurationMinutes(snapDuration(parsed.endMinutes - parsed.startMinutes));
+                }
               }}
               placeholder="09:00 - 10:00"
               placeholderTextColor="#94A3B8"
@@ -699,58 +641,50 @@ export default function MeetingDetailsScreen() {
             <Text style={styles.label}>FLEXIBILITY</Text>
           </View>
           <View style={styles.flexCard}>
+            <View style={styles.rangeBarWrap}>
+              <MeetingDurationFlexTimeline
+                durationMinutes={durationMinutes}
+                flexBeforeMinutes={flexBeforeMinutes}
+                flexAfterMinutes={flexAfterMinutes}
+                showFlexHandles={isFlexible}
+                onDurationChange={handleTimelineDurationChange}
+                onFlexBeforeChange={handleFlexBeforeChange}
+                onFlexAfterChange={handleFlexAfterChange}
+                maxMinutes={MAX_DURATION_MINUTES}
+                stepMinutes={DURATION_STEP_MINUTES}
+                maxFlexPerSideMinutes={maxFlexPerSideMinutes}
+              />
+            </View>
+            <Text style={styles.durationSummary}>
+              Duration: {formatMinutesLabel(durationMinutes)}
+            </Text>
             <View style={styles.flexToggleRow}>
-              <Text style={styles.flexTitle}>Flexible meeting time</Text>
+              <View style={styles.flexToggleTextWrap}>
+                <Text style={styles.flexTitle}>Flexible meeting time</Text>
+                <Text style={styles.flexToggleHint}>
+                  Turn on to allow earlier/later start around this meeting.
+                </Text>
+              </View>
               <Switch
                 value={isFlexible}
-                onValueChange={(next) => {
-                  markUserEditing();
-                  setIsFlexible(next);
-                  if (next) {
-                    const defaults = defaultFlexRangeFromAnchor(meetingSlotRange.startSlot15);
-                    setFlexStartSlot15(defaults.startSlot15);
-                    setFlexEndSlot15(defaults.endSlot15);
-                  }
-                }}
-                trackColor={{ false: '#CBD5E1', true: '#BFDBFE' }}
-                thumbColor={isFlexible ? MS_BLUE : '#F8FAFC'}
+                onValueChange={handleFlexibleToggle}
+                trackColor={{ false: '#CBD5E1', true: '#F59E0B' }}
+                thumbColor={isFlexible ? '#FFFFFF' : '#F8FAFC'}
               />
             </View>
             {isFlexible && (
-              <View style={styles.flexRangeWrap}>
-                <View style={styles.flexSummaryRow}>
-                  <Text style={styles.flexOptionLabel}>From {formatSlot15(flexStartSlot15)}</Text>
-                  <Text style={styles.flexOptionLabel}>To {formatSlot15(flexEndSlot15)}</Text>
+              <View style={styles.flexSummaryRow}>
+                <View style={styles.flexSummaryBadge}>
+                  <Text style={styles.flexSummaryBadgeLabel}>Before</Text>
+                  <Text style={styles.flexSummaryBadgeValue}>
+                    {formatMinutesLabel(flexEarlyMinutes)}
+                  </Text>
                 </View>
-                <FlexibleRangeSlider
-                  startSlot15={flexStartSlot15}
-                  endSlot15={flexEndSlot15}
-                  meetingStartSlot15={meetingSlotRange.startSlot15}
-                  meetingEndSlot15={meetingSlotRange.endSlot15}
-                  onStartChange={(slot15) => {
-                    markUserEditing();
-                    setFlexStartSlot15(slot15);
-                  }}
-                  onEndChange={(slot15) => {
-                    markUserEditing();
-                    setFlexEndSlot15(slot15);
-                  }}
-                  onDragStateChange={setIsFlexDragging}
-                  canEdit
-                />
-                <View style={styles.flexSummaryRow}>
-                  <Text style={styles.flexOffsetText}>Early {formatMinutesLabel(flexEarlyMinutes)}</Text>
-                  <Text style={styles.flexOffsetText}>Late {formatMinutesLabel(flexLateMinutes)}</Text>
-                </View>
-                <View style={styles.flexLegendRow}>
-                  <View style={styles.flexLegendItem}>
-                    <View style={styles.flexLegendBlue} />
-                    <Text style={styles.flexLegendText}>Flexible window</Text>
-                  </View>
-                  <View style={styles.flexLegendItem}>
-                    <View style={styles.flexLegendRed} />
-                    <Text style={styles.flexLegendText}>Actual meeting</Text>
-                  </View>
+                <View style={styles.flexSummaryBadge}>
+                  <Text style={styles.flexSummaryBadgeLabel}>After</Text>
+                  <Text style={styles.flexSummaryBadgeValue}>
+                    {formatMinutesLabel(flexLateMinutes)}
+                  </Text>
                 </View>
               </View>
             )}
@@ -929,106 +863,66 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   flexToggleRow: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 12,
   },
   flexTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#334155',
-  },
-  flexRangeWrap: {
-    marginTop: 10,
-  },
-  flexSummaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  flexOptionLabel: {
-    fontSize: 13,
-    color: '#475569',
-    fontWeight: '600',
-  },
-  flexOffsetText: {
-    fontSize: 12,
-    color: '#64748B',
-  },
-  flexLegendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 2,
-  },
-  flexLegendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  flexLegendBlue: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: MS_BLUE,
-    marginRight: 6,
-  },
-  flexLegendRed: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: RED,
-    marginRight: 6,
-  },
-  flexLegendText: {
-    fontSize: 12,
-    color: '#64748B',
-  },
-  flexSliderShell: {
-    height: 40,
-    justifyContent: 'center',
-    width: '100%',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
     marginBottom: 2,
   },
-  flexRangeTrack: {
-    width: '100%',
-    backgroundColor: '#E5E7EB',
-    borderRadius: 4,
-    position: 'relative',
+  rangeBarWrap: {
+    marginTop: 10,
+    paddingVertical: 6,
   },
-  flexRangeFill: {
-    position: 'absolute',
-    top: 0,
-    backgroundColor: MS_BLUE,
-    borderRadius: 4,
+  durationSummary: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
   },
-  flexMeetingFill: {
-    position: 'absolute',
-    top: 0,
-    backgroundColor: RED,
-    borderRadius: 4,
+  flexToggleTextWrap: {
+    flex: 1,
   },
-  flexThumbHitArea: {
-    position: 'absolute',
-    top: (40 - (FLEX_THUMB_SIZE + 20)) / 2,
-    width: FLEX_THUMB_SIZE + 20,
-    height: FLEX_THUMB_SIZE + 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
+  flexToggleHint: {
+    fontSize: 12,
+    color: '#64748B',
   },
-  flexRangeThumb: {
-    width: FLEX_THUMB_SIZE,
-    height: FLEX_THUMB_SIZE,
-    borderRadius: FLEX_THUMB_SIZE / 2,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: MS_BLUE,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
+  flexSummaryRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  flexSummaryBadge: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#FFFBEB',
+  },
+  flexSummaryBadgeLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400E',
+    marginBottom: 2,
+    letterSpacing: 0.3,
+  },
+  flexSummaryBadgeValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#78350F',
   },
   doneRow: {
     flexDirection: 'row',
