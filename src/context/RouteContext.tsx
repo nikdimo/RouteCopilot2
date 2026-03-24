@@ -11,6 +11,17 @@ import { BACKEND_API_ENABLED } from '../config/backend';
 import { backendGetUserState, backendUpsertUserState } from '../services/backendApi';
 
 export type UserLocation = { latitude: number; longitude: number };
+export type PendingLocalDayState = {
+  dayKey: string;
+  event: CalendarEvent;
+  /**
+   * Optional optimistic full-day snapshot used to prevent cache/raw fetch from
+   * briefly overwriting freshly booked pusher shifts.
+   */
+  daySnapshot?: CalendarEvent[];
+  /** Number of merge passes this optimistic state should survive (cache/raw/enriched). */
+  remainingMerges?: number;
+};
 
 const COMPLETED_IDS_KEY = 'wiseplan_completedEventIds';
 const DAY_ORDER_PREFIX = 'wiseplan_dayOrder_';
@@ -72,8 +83,8 @@ type RouteContextValue = {
   /** Reorder appointments to match saved order; append events not in saved. */
   applyDayOrder: (events: CalendarEvent[], dayKey: string) => Promise<CalendarEvent[]>;
   /** When set, SelectedDateSync merges this event into the day's list (so new meeting shows immediately). */
-  pendingLocalEvent: { dayKey: string; event: CalendarEvent } | null;
-  setPendingLocalEvent: (p: { dayKey: string; event: CalendarEvent } | null) => void;
+  pendingLocalEvent: PendingLocalDayState | null;
+  setPendingLocalEvent: (p: PendingLocalDayState | null) => void;
   /** When set from schedule (e.g. tap waypoint number), map highlights that waypoint/leg. Map consumes and clears. */
   highlightWaypointIndex: number | null;
   setHighlightWaypointIndex: (index: number | null) => void;
@@ -99,7 +110,7 @@ export function RouteProvider({ children }: { children: React.ReactNode }) {
   const appointmentsLoading =
     appointmentsRequestStatus === 'idle' || appointmentsRequestStatus === 'loading';
   const [appointmentsEnriching, setAppointmentsEnriching] = useState(false);
-  const [pendingLocalEvent, setPendingLocalEvent] = useState<{ dayKey: string; event: CalendarEvent } | null>(null);
+  const [pendingLocalEvent, setPendingLocalEvent] = useState<PendingLocalDayState | null>(null);
   const [highlightWaypointIndex, setHighlightWaypointIndex] = useState<number | null>(null);
   const [completedEventIds, setCompletedEventIds] = useState<string[]>([]);
   const completedIdsRef = useRef<string[]>([]);

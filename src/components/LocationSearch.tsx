@@ -67,6 +67,12 @@ export type LocationSearchProps = {
   allowDirectAddressSubmit?: boolean;
   /** Visual variant used for Profile Home Base. */
   variant?: 'default' | 'profile_home_base';
+  /**
+   * When true, typing/clearing enters local edit mode without immediately
+   * emitting `onSelectionChange({ type: 'none' })`.
+   * Useful for profile forms where backend defaults can rehydrate mid-edit.
+   */
+  deferSelectionClearWhileEditing?: boolean;
   containerStyle?: StyleProp<ViewStyle>;
   inputRowStyle?: StyleProp<ViewStyle>;
   inputStyle?: StyleProp<TextStyle>;
@@ -90,6 +96,7 @@ export default function LocationSearch({
   placeholder = 'Search Client or Address',
   allowDirectAddressSubmit = false,
   variant = 'default',
+  deferSelectionClearWhileEditing = false,
   containerStyle,
   inputRowStyle,
   inputStyle,
@@ -300,6 +307,23 @@ export default function LocationSearch({
     }
 
     if (lat == null || lon == null) {
+      setResolvingPlaceId(true);
+      try {
+        const geocoded = await propsRef.current.geocodeAddress(suggestion.displayName);
+        if (geocoded.success && geocoded.lat != null && geocoded.lon != null) {
+          lat = geocoded.lat;
+          lon = geocoded.lon;
+        } else {
+          propsRef.current.onGraphError?.(geocoded.error ?? 'Could not resolve this address');
+          selectingRef.current = false;
+          return;
+        }
+      } finally {
+        setResolvingPlaceId(false);
+      }
+    }
+
+    if (lat == null || lon == null) {
       propsRef.current.onGraphError?.('Missing coordinates for this suggestion');
       selectingRef.current = false;
       return;
@@ -324,7 +348,9 @@ export default function LocationSearch({
   const handleClear = () => {
     cancelSelectRef.current = true;
     setResolvingContact(null);
-    onSelectionChange({ type: 'none' });
+    if (!deferSelectionClearWhileEditing) {
+      onSelectionChange({ type: 'none' });
+    }
     setClearPending(true);
     setQuery('');
     setContacts([]);
@@ -409,7 +435,21 @@ export default function LocationSearch({
           placeholderTextColor={isProfileHomeBase ? '#475569' : '#605E5C'}
           value={displayValue}
           onChangeText={(t) => {
-            if (hasSelection && !clearPending) handleClear();
+            if (hasSelection && !clearPending) {
+              if (deferSelectionClearWhileEditing) {
+                // In deferred-clear mode, entering edit should not immediately
+                // persist "none" to preferences while user is still typing.
+                cancelSelectRef.current = true;
+                setResolvingContact(null);
+                setClearPending(true);
+                setContacts([]);
+                setAddressSuggestions([]);
+                setGraphError(null);
+                setAddressError(null);
+              } else {
+                handleClear();
+              }
+            }
             setQuery(t);
           }}
           autoCapitalize="none"

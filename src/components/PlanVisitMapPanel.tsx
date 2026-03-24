@@ -5,6 +5,7 @@ import type { CalendarEvent } from '../services/graph';
 import type { ScoredSlot } from '../utils/scheduler';
 import type { Coordinate } from '../utils/scheduler';
 import { buildRouteWithInsertionMeta } from '../utils/mapPreview';
+import { getMarkerPositions } from '../utils/mapClusters';
 
 export type PlanVisitMapPanelProps = {
   /** Selected address (before Find Best Time) – shows single pin */
@@ -22,6 +23,9 @@ const DEFAULT_REGION = {
   latitudeDelta: 0.1,
   longitudeDelta: 0.1,
 };
+const PUSHED_MEETING_PASTEL_YELLOW = '#FDE68A';
+const MARKER_LAYOUT_ZOOM = 12;
+const BEST_MATCH_MARKER_GAP_PX = 42;
 
 export default function PlanVisitMapPanel({
   newLocation,
@@ -36,18 +40,24 @@ export default function PlanVisitMapPanel({
     [highlightedEventIds]
   );
 
-  const homePoint = { latitude: homeBase.lat, longitude: homeBase.lon };
-  const insertionPoint =
-    newLocation != null
-      ? { latitude: newLocation.lat, longitude: newLocation.lon }
-      : null;
+  const homePoint = React.useMemo(
+    () => ({ latitude: homeBase.lat, longitude: homeBase.lon }),
+    [homeBase.lat, homeBase.lon]
+  );
+  const insertionPoint = React.useMemo(
+    () =>
+      newLocation != null
+        ? { latitude: newLocation.lat, longitude: newLocation.lon }
+        : null,
+    [newLocation?.lat, newLocation?.lon]
+  );
 
   const routeWithInsertion = React.useMemo(
     () =>
       slot != null && newLocation != null && dayEvents.length > 0
         ? buildRouteWithInsertionMeta(dayEvents, newLocation, slot, homeBase, 'NEW')
         : null,
-    [dayEvents, homeBase, newLocation, slot]
+    [dayEvents, homeBase.lat, homeBase.lon, newLocation?.lat, newLocation?.lon, slot]
   );
 
   const coordsWithInsertion = routeWithInsertion?.coordsWithInsertion ?? [];
@@ -65,12 +75,82 @@ export default function PlanVisitMapPanel({
     [dayEvents]
   );
 
-  const coordsForFit =
-    coordsWithInsertion.length >= 2
-      ? coordsWithInsertion
-      : insertionPoint != null
-        ? [homePoint, insertionPoint]
-        : [homePoint];
+  const sortedStops = React.useMemo(
+    () =>
+      sortedEventIds
+        .map((id, routeIndex) => {
+          const event = eventById.get(id);
+          if (!event) return null;
+          return {
+            eventId: id,
+            routeIndex,
+            coordinate: event.coordinates,
+            title: event.title ?? undefined,
+          };
+        })
+        .filter((stop): stop is {
+          eventId: string;
+          routeIndex: number;
+          coordinate: { latitude: number; longitude: number };
+          title?: string;
+        } => stop != null),
+    [eventById, sortedEventIds]
+  );
+
+  const displayStops = React.useMemo(
+    () => {
+      const items: Array<{
+        id: string;
+        coordinate: { latitude: number; longitude: number };
+        kind: 'new' | 'event';
+        label: string;
+        title?: string;
+        eventId?: string;
+      }> = [];
+
+      if (insertionPoint != null) {
+        items.push({
+          id: 'new-meeting',
+          coordinate: insertionPoint,
+          kind: 'new',
+          label: 'New',
+          title: 'New meeting',
+        });
+      }
+
+      sortedStops.forEach((stop) => {
+        items.push({
+          id: `stop-${stop.eventId}`,
+          coordinate: stop.coordinate,
+          kind: 'event',
+          label: String(stop.routeIndex + 1),
+          title: stop.title ?? `Stop ${stop.routeIndex + 1}`,
+          eventId: stop.eventId,
+        });
+      });
+
+      return items;
+    },
+    [insertionPoint, sortedStops]
+  );
+
+  const markerPositions = React.useMemo(
+    () =>
+      getMarkerPositions(displayStops.map((stop) => stop.coordinate), MARKER_LAYOUT_ZOOM, {
+        pixelGap: BEST_MATCH_MARKER_GAP_PX,
+      }),
+    [displayStops]
+  );
+
+  const coordsForFit = React.useMemo(
+    () =>
+      coordsWithInsertion.length >= 2
+        ? coordsWithInsertion
+        : insertionPoint != null
+          ? [homePoint, insertionPoint]
+          : [homePoint],
+    [coordsWithInsertion, homePoint, insertionPoint]
+  );
 
   useEffect(() => {
     if (coordsForFit.length === 0) return;
@@ -119,24 +199,30 @@ export default function PlanVisitMapPanel({
         showsUserLocation
       >
         <Marker coordinate={homePoint} title="Home Base" pinColor="green" />
-        {insertionPoint != null && (
-          <Marker
-            coordinate={insertionPoint}
-            title="Proposed visit"
-            pinColor="#D13438"
-          />
-        )}
-        {sortedEventIds
-          .map((id) => eventById.get(id))
-          .filter((a): a is NonNullable<typeof a> => a != null)
-          .map((a) => (
-            <Marker
-              key={a.id}
-              coordinate={a.coordinates}
-              title={a.title ?? undefined}
-              pinColor={highlightedSet.has(a.id) ? '#EAB308' : '#0078D4'}
+        {markerPositions
+          .filter((marker) => marker.realCoordinate != null)
+          .map((marker) => (
+            <Polyline
+              key={`connector-${displayStops[marker.index]?.id ?? marker.index}`}
+              coordinates={[marker.coordinate, marker.realCoordinate!]}
+              strokeColor="#64748b"
+              strokeWidth={2}
+              lineDashPattern={[4, 4]}
             />
           ))}
+        {markerPositions.map((marker) => {
+          const stop = displayStops[marker.index];
+          if (!stop) return null;
+          const isHighlighted = stop.kind === 'event' && stop.eventId != null && highlightedSet.has(stop.eventId);
+          return (
+          <Marker
+            key={stop.id}
+            coordinate={marker.coordinate}
+            title={stop.title}
+            pinColor={stop.kind === 'new' ? '#D13438' : isHighlighted ? PUSHED_MEETING_PASTEL_YELLOW : '#0078D4'}
+          />
+          );
+        })}
         {coordsWithInsertion.length >= 2 && (
           <Polyline
             coordinates={coordsWithInsertion}

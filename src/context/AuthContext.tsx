@@ -4,6 +4,7 @@ import * as Linking from 'expo-linking';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BACKEND_API_BASE_URL, BACKEND_API_ENABLED } from '../config/backend';
+import { resetBackendUnauthorizedNotification } from '../services/backendApi';
 import { clearGraphSession, isMagicAuthToken } from '../services/graphAuth';
 
 const BACKEND_BASE_FALLBACK = 'http://localhost:4000';
@@ -183,6 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isRestoringSession, setIsRestoringSession] = useState(true);
 
   const signOut = useCallback(() => {
+    resetBackendUnauthorizedNotification();
     setUserToken(null);
     setUserData(null);
     tokenStorage.removeItem(TOKEN_KEY).catch(() => { });
@@ -198,7 +200,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(buildApiUrl('/me'), {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.status === 401) return false;
+      if (res.status === 401) {
+        if (isMagicAuthToken(token)) {
+          setUserData(userDataFromJwt(token));
+          return true;
+        }
+        return false;
+      }
       if (!res.ok) {
         // Keep session on non-auth failures (e.g. endpoint temporarily unavailable).
         setUserData(userDataFromJwt(token));
@@ -218,12 +226,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = useCallback(
     async (token: string) => {
+      resetBackendUnauthorizedNotification();
       setUserToken(token);
       await tokenStorage.setItem(TOKEN_KEY, token);
       const ok = await fetchUserData(token);
       if (!ok) {
-        // Keep magic-link sessions alive on transient backend auth races.
         if (isMagicAuthToken(token)) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          const retryOk = await fetchUserData(token);
+          if (retryOk) return;
           setUserData(userDataFromJwt(token));
           return;
         }
@@ -278,20 +289,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      setUserToken(token);
-      setUserData(userDataFromJwt(token));
-      setIsRestoringSession(false);
+      let restoredToken: string | null = token;
+      let restoredUserData: UserData | null = userDataFromJwt(token);
 
       if (BACKEND_API_ENABLED) {
-        fetch(buildApiUrl('/me'), { headers: { Authorization: `Bearer ${token}` } })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((data) => {
-            if (data && !cancelled) {
-              setUserData({ email: data.email ?? null, displayName: data.name ?? data.email ?? null });
+        try {
+          const first = await fetch(buildApiUrl('/me'), {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (first.status === 401 && isMagicAuthToken(token)) {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            const second = await fetch(buildApiUrl('/me'), {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (second.status === 401) {
+              // Keep local magic session; backend may be temporarily unavailable or token
+              // validation might lag across environments.
+              restoredUserData = userDataFromJwt(token);
+            } else if (second.ok) {
+              const data = await second.json();
+              restoredUserData = {
+                email: data.email ?? null,
+                displayName: data.name ?? data.email ?? null,
+              };
             }
-          })
-          .catch(() => { });
+          } else if (first.status === 401) {
+            restoredToken = null;
+            restoredUserData = null;
+            await tokenStorage.removeItem(TOKEN_KEY);
+          } else if (first.ok) {
+            const data = await first.json();
+            restoredUserData = {
+              email: data.email ?? null,
+              displayName: data.name ?? data.email ?? null,
+            };
+          }
+        } catch {
+          // Keep local session on transient network/backend failures.
+        }
       }
+
+      if (cancelled) {
+        setIsRestoringSession(false);
+        return;
+      }
+      setUserToken(restoredToken);
+      setUserData(restoredUserData);
+      setIsRestoringSession(false);
     })();
     return () => { cancelled = true; };
   }, [signOut]);

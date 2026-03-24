@@ -19,6 +19,7 @@ export function useEnsureMeetingCountsForDate() {
   const { canSyncCalendar } = getTierEntitlements(subscriptionTier);
   const shouldSyncCalendar = canSyncCalendar || Boolean(userToken);
   const syncModeRef = useRef<'local' | 'remote'>(shouldSyncCalendar ? 'remote' : 'local');
+  const inflightRangeRef = useRef<Map<string, Promise<void>>>(new Map());
 
   // Avoid startup races: if mode flips local<->remote (e.g. prefs hydrate after auth),
   // invalidate the loaded range so we do not skip the first fetch for the new mode.
@@ -96,6 +97,21 @@ export function useEnsureMeetingCountsForDate() {
         return;
       }
 
+      const rangeKey = `${startKey}|${endKey}|remote`;
+      if (!forceRefetch) {
+        const inflight = inflightRangeRef.current.get(rangeKey);
+        if (inflight) {
+          if (ROUTE_COUNTS_DEBUG) {
+            console.log('[RouteQC] MeetingCounts: skip (range already in-flight)', {
+              startKey,
+              endKey,
+            });
+          }
+          await inflight;
+          return;
+        }
+      }
+
       const token = userToken ?? (getValidToken ? await getValidToken() : null);
       if (!token) {
         if (ROUTE_COUNTS_DEBUG) {
@@ -106,8 +122,9 @@ export function useEnsureMeetingCountsForDate() {
         }
         return;
       }
-      getCalendarEventsRaw(token, windowStart, windowEnd)
-        .then((events) => {
+      const runRemote = (async () => {
+        try {
+          const events = await getCalendarEventsRaw(token, windowStart, windowEnd);
           const counts: Record<string, number> = {};
           for (const ev of events) {
             if (ev.startIso) {
@@ -152,8 +169,7 @@ export function useEnsureMeetingCountsForDate() {
               dotCount,
             });
           }
-        })
-        .catch((error) => {
+        } catch (error) {
           if (ROUTE_COUNTS_DEBUG) {
             console.log('[RouteQC] MeetingCounts: remote error', {
               startKey,
@@ -161,7 +177,12 @@ export function useEnsureMeetingCountsForDate() {
               error: error instanceof Error ? error.message : String(error),
             });
           }
-        });
+        } finally {
+          inflightRangeRef.current.delete(rangeKey);
+        }
+      })();
+      inflightRangeRef.current.set(rangeKey, runRemote);
+      await runRemote;
     },
     [shouldSyncCalendar, userToken, getValidToken, loadedRange, setMeetingCountByDay, setLoadedRange]
   );

@@ -264,6 +264,7 @@ function WaypointMarkersLayer({
   etas,
   legStress,
   focusedClusterKey,
+  onMarkerPress,
   onSelect,
 }: {
   coordList: Array<{ latitude: number; longitude: number }>;
@@ -271,6 +272,7 @@ function WaypointMarkersLayer({
   etas: (number | null | undefined)[];
   legStress?: ('ok' | 'tight' | 'late')[];
   focusedClusterKey: string | null;
+  onMarkerPress?: () => void;
   onSelect: (index: number, clusterInfo: ClusterTapInfo | null) => void;
 }) {
   const map = useMap();
@@ -330,7 +332,7 @@ function WaypointMarkersLayer({
         const icon = createNumberedIcon(index + 1, color, etaLabel, isFocused ? 40 : 28);
         const clusterInfo: ClusterTapInfo | null =
           isCluster && clusterKey != null
-            ? { clusterKey, coordinate, isCluster: true }
+            ? { clusterKey, coordinate: realCoordinate ?? coordinate, isCluster: true }
             : null;
         return (
           <Marker
@@ -338,7 +340,12 @@ function WaypointMarkersLayer({
             position={pos}
             icon={icon}
             eventHandlers={{
-              click: () => onSelect(index, clusterInfo),
+              click: (event) => {
+                event.originalEvent?.preventDefault?.();
+                event.originalEvent?.stopPropagation?.();
+                onMarkerPress?.();
+                onSelect(index, clusterInfo);
+              },
             }}
           />
         );
@@ -377,6 +384,7 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
   const [selectedWaypointIndices, setSelectedWaypointIndices] = useState<number[] | null>(null);
   const [focusedClusterKey, setFocusedClusterKey] = useState<string | null>(null);
   const [focusedClusterCoord, setFocusedClusterCoord] = useState<{ latitude: number; longitude: number } | null>(null);
+  const ignoreNextMapClickRef = useRef(false);
   const autoResolveAttemptedDayRef = useRef<string | null>(null);
   const { load } = useLoadAppointmentsForDate(undefined);
   const clearSelection = useCallback(() => {
@@ -484,6 +492,12 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
       fullPolyline.map((c) => [c.latitude, c.longitude]),
     [fullPolyline]
   );
+  const routeCoordinatesLatLon = useMemo((): [number, number][] => {
+    if (osrmRoute?.coordinates?.length) {
+      return osrmRoute.coordinates.map((c) => [c.latitude, c.longitude]);
+    }
+    return fullPolylineLatLon;
+  }, [fullPolylineLatLon, osrmRoute?.coordinates]);
   const showHomeBase = fullPolyline.length > 0;
   const unresolvedAddressCount = useMemo(
     () =>
@@ -711,7 +725,21 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
           />
           <MapFitBounds coords={boundsCoords} />
           <ZoomToFocusedCluster coord={focusedClusterCoord} zoom={FOCUSED_ZOOM} />
-          <MapClickToClear onClear={clearSelection} />
+          <MapClickToClear
+            onClear={() => {
+              if (ignoreNextMapClickRef.current) {
+                ignoreNextMapClickRef.current = false;
+                return;
+              }
+              clearSelection();
+            }}
+          />
+          {routeCoordinatesLatLon.length >= 2 && (
+            <Polyline
+              positions={routeCoordinatesLatLon}
+              pathOptions={{ color: MS_BLUE, weight: 5, opacity: 0.92 }}
+            />
+          )}
           {showHomeBase && (
             <Marker
               position={[homeBase.lat, homeBase.lon]}
@@ -733,6 +761,9 @@ export default function MapScreen({ embeddedInSchedule, emptyAnimationState }: M
             etas={etas}
             legStress={legStress}
             focusedClusterKey={focusedClusterKey}
+            onMarkerPress={() => {
+              ignoreNextMapClickRef.current = true;
+            }}
             onSelect={(index, clusterInfo) => {
               if (clusterInfo?.isCluster) {
                 const clusterIndices = clusterMembersByKey.get(clusterInfo.clusterKey) ?? [index];

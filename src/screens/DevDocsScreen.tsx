@@ -12,10 +12,269 @@ import { runFullQASuite, runTravelFeasibilityQA, runOverlapSanityCheck, runFakeM
 import { useRoute } from '../context/RouteContext';
 import { useQALog } from '../context/QALogContext';
 import { useDevUI } from '../context/DevUIContext';
+import { useAuth } from '../context/AuthContext';
+import { useUserPreferences } from '../context/UserPreferencesContext';
 import { MS_SCOPES } from '../config/auth';
 import { BACKEND_API_BASE_URL, BACKEND_API_ENABLED } from '../config/backend';
+import {
+  compareScoredSlots,
+  findSmartSlots,
+  getBestBadgeSlotId,
+  pickBestOptionsWithDayDiversity,
+  slotId,
+  type QASlotConsidered,
+} from '../utils/scheduler';
+import { toLocalDayKey } from '../utils/dateUtils';
+import {
+  GraphUnauthorizedError,
+  createCalendarEvent,
+  updateCalendarEvent,
+  type CalendarEvent,
+} from '../services/graph';
+import {
+  allocateMeetingDecisionCode,
+  appendMeetingCodeSuffix,
+  appendMeetingDecisionEntry,
+  type MeetingDecisionAction,
+  type MeetingDecisionCandidate,
+  type MeetingDecisionConsideredSlot,
+} from '../services/meetingDecisionLog';
+import { backendAppendMeetingDecisionAudit } from '../services/backendApi';
 
 const MS_BLUE = '#0078D4';
+const QA_SEED_COORDS = [
+  { label: 'Kobenhavn K', location: 'Radhuspladsen 1, 1550 Copenhagen', lat: 55.6761, lon: 12.5683 },
+  { label: 'Osterbro', location: 'Trianglen 1, 2100 Copenhagen', lat: 55.6997, lon: 12.5767 },
+  { label: 'Valby', location: 'Toftegards Alle 43, 2500 Valby', lat: 55.6618, lon: 12.5162 },
+  { label: 'Lyngby', location: 'Lyngby Hovedgade 50, 2800 Kongens Lyngby', lat: 55.7704, lon: 12.5038 },
+  { label: 'Hillerod', location: 'Slotsgade 26, 3400 Hillerod', lat: 55.9279, lon: 12.3008 },
+  { label: 'Roskilde', location: 'Algade 51, 4000 Roskilde', lat: 55.6415, lon: 12.0803 },
+  { label: 'Koge', location: 'Torvet 1, 4600 Koge', lat: 55.4580, lon: 12.1821 },
+  { label: 'Taastrup', location: 'Cityringen 6, 2630 Taastrup', lat: 55.6518, lon: 12.2871 },
+  { label: 'Ballerup', location: 'Centrumgaden 7, 2750 Ballerup', lat: 55.7317, lon: 12.3636 },
+  { label: 'Helsingor', location: 'Stengade 59, 3000 Helsingor', lat: 56.0361, lon: 12.6136 },
+];
+const QA_ADDRESS_CATALOG = [
+  { label: 'City Hall', location: 'Radhuspladsen 1, 1550 Copenhagen', lat: 55.6761, lon: 12.5683 },
+  { label: 'Nyhavn', location: 'Nyhavn 1, 1051 Copenhagen', lat: 55.6798, lon: 12.5910 },
+  { label: 'Norreport', location: 'Norreport 1, 1165 Copenhagen', lat: 55.6833, lon: 12.5714 },
+  { label: 'Osterbro', location: 'Trianglen 1, 2100 Copenhagen', lat: 55.6997, lon: 12.5767 },
+  { label: 'Parken', location: 'Per Henrik Lings Alle 2, 2100 Copenhagen', lat: 55.7026, lon: 12.5723 },
+  { label: 'Valby', location: 'Toftegards Alle 43, 2500 Valby', lat: 55.6618, lon: 12.5162 },
+  { label: 'Carlsberg', location: 'Ny Carlsberg Vej 100, 1799 Copenhagen V', lat: 55.6672, lon: 12.5371 },
+  { label: 'Frederiksberg', location: 'Frederiksberg Alle 21, 1820 Frederiksberg', lat: 55.6735, lon: 12.5410 },
+  { label: 'Lyngby', location: 'Lyngby Hovedgade 50, 2800 Kongens Lyngby', lat: 55.7704, lon: 12.5038 },
+  { label: 'DTU', location: 'Anker Engelunds Vej 1, 2800 Kongens Lyngby', lat: 55.7853, lon: 12.5213 },
+  { label: 'Ballerup', location: 'Centrumgaden 7, 2750 Ballerup', lat: 55.7317, lon: 12.3636 },
+  { label: 'Herlev', location: 'Herlev Hovedgade 119, 2730 Herlev', lat: 55.7230, lon: 12.4396 },
+  { label: 'Taastrup', location: 'Cityringen 6, 2630 Taastrup', lat: 55.6518, lon: 12.2871 },
+  { label: 'Roskilde', location: 'Algade 51, 4000 Roskilde', lat: 55.6415, lon: 12.0803 },
+  { label: 'Koge', location: 'Torvet 1, 4600 Koge', lat: 55.4580, lon: 12.1821 },
+  { label: 'Hillerod', location: 'Slotsgade 26, 3400 Hillerod', lat: 55.9279, lon: 12.3008 },
+  { label: 'Helsingor', location: 'Stengade 59, 3000 Helsingor', lat: 56.0361, lon: 12.6136 },
+  { label: 'Gentofte', location: 'Jagersborg Alle 14, 2920 Charlottenlund', lat: 55.7540, lon: 12.5744 },
+  { label: 'Hvidovre', location: 'Hvidovrevej 278, 2650 Hvidovre', lat: 55.6571, lon: 12.4734 },
+  { label: 'Amager', location: 'Amagerbrogade 145, 2300 Copenhagen S', lat: 55.6586, lon: 12.6131 },
+];
+const QA_EVENT_DURATION_MINUTES = [30, 45, 60, 90];
+const QA_GENERATOR_SEED = 20260309;
+const QA_SCHEDULER_BATCH_COUNT = 20;
+const QA_SCHEDULER_MAX_ATTEMPTS = 300;
+const FLEXIBLE_WINDOW_TAG_REGEX = /\[Flexible Window:[^\]]+\]/i;
+const DECISION_CODE_TAG_REGEX = /\[Decision Code:\s*\d{4}\]/i;
+const QA_WRITE_RETRY_DELAYS_MS = [0, 400, 1000];
+
+function mulberry32(seed: number) {
+  let t = seed >>> 0;
+  return function next() {
+    t += 0x6d2b79f5;
+    let x = Math.imul(t ^ (t >>> 15), 1 | t);
+    x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function pick<T>(rng: () => number, items: T[]): T {
+  return items[Math.floor(rng() * items.length)]!;
+}
+
+function offsetCoordinateKm(
+  base: { lat: number; lon: number },
+  dxKm: number,
+  dyKm: number
+) {
+  const lat = base.lat + dyKm / 110.574;
+  const lon = base.lon + dxKm / (111.320 * Math.cos((base.lat * Math.PI) / 180));
+  return {
+    lat: Number(lat.toFixed(6)),
+    lon: Number(lon.toFixed(6)),
+  };
+}
+
+function sortAppointmentsByStart(events: CalendarEvent[]) {
+  return [...events].sort((a, b) => {
+    const aStart = a.startIso ? new Date(a.startIso).getTime() : 0;
+    const bStart = b.startIso ? new Date(b.startIso).getTime() : 0;
+    return aStart - bStart;
+  });
+}
+
+function formatClock(ms: number): string {
+  const date = new Date(ms);
+  return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+}
+
+function formatDayLabel(dayIso: string) {
+  const [y, m, d] = dayIso.split('-').map((value) => parseInt(value, 10));
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function buildFlexibleWindowTag(slotStartMs: number, flexBeforeMinutes: number, flexAfterMinutes: number): string | null {
+  if (flexBeforeMinutes <= 0 && flexAfterMinutes <= 0) return null;
+  const day = new Date(slotStartMs);
+  const dayStart = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
+  const startMinutes = Math.round((slotStartMs - dayStart) / 60_000);
+  const minStart = Math.max(0, startMinutes - flexBeforeMinutes);
+  const maxStart = Math.min(23 * 60 + 59, startMinutes + flexAfterMinutes);
+  const formatMinutes = (minutes: number) =>
+    `${Math.floor(minutes / 60).toString().padStart(2, '0')}:${(minutes % 60).toString().padStart(2, '0')}`;
+  return `[Flexible Window: ${formatMinutes(minStart)} to ${formatMinutes(maxStart)} | source=qa-scheduler]`;
+}
+
+function composeEventBodyWithFlexibleWindow(baseBody: string | undefined, flexibleWindowTag: string | null) {
+  const cleanedBase = (baseBody ?? '').replace(FLEXIBLE_WINDOW_TAG_REGEX, '').trim();
+  if (!flexibleWindowTag) return cleanedBase || undefined;
+  if (!cleanedBase) return flexibleWindowTag;
+  return `${cleanedBase}\n\n${flexibleWindowTag}`;
+}
+
+function composeEventBodyWithDecisionCode(baseBody: string | undefined, decisionCode: string) {
+  const cleanedBase = (baseBody ?? '').replace(DECISION_CODE_TAG_REGEX, '').trim();
+  const decisionTag = `[Decision Code: ${decisionCode}]`;
+  if (!cleanedBase) return decisionTag;
+  return `${cleanedBase}\n\n${decisionTag}`;
+}
+
+function buildSchedulerQaRequest(index: number, sourceEvents: CalendarEvent[], rng: () => number) {
+  const anchors = sourceEvents
+    .filter(
+      (event) =>
+        event.coordinates &&
+        typeof event.coordinates.latitude === 'number' &&
+        typeof event.coordinates.longitude === 'number'
+    )
+    .map((event) => ({
+      title: event.title ?? 'Meeting',
+      lat: event.coordinates!.latitude,
+      lon: event.coordinates!.longitude,
+    }));
+  const fallbackAnchors = QA_SEED_COORDS.map((entry) => ({
+    title: entry.label,
+    lat: entry.lat,
+    lon: entry.lon,
+  }));
+  const sourceAnchors = anchors.length > 0 ? anchors : fallbackAnchors;
+  const anchor = pick(rng, sourceAnchors);
+  const sortedCatalog = [...QA_ADDRESS_CATALOG]
+    .map((entry) => ({
+      ...entry,
+      distScore: Math.hypot(entry.lat - anchor.lat, entry.lon - anchor.lon),
+    }))
+    .sort((a, b) => a.distScore - b.distScore);
+  const preferredPool = sortedCatalog.slice(0, Math.min(6, sortedCatalog.length));
+  const catalogEntry = pick(rng, preferredPool);
+  const flexibleEnabled = rng() < 0.35;
+  const flexBeforeMinutes = flexibleEnabled ? pick(rng, [15, 30, 45, 60]) : 0;
+  const flexAfterMinutes = flexibleEnabled ? pick(rng, [15, 30, 45, 60, 90]) : 0;
+  return {
+    index,
+    titleBase: `QA Sched ${index} near ${anchor.title}`,
+    locationLabel: catalogEntry.label,
+    locationForEvent: catalogEntry.location,
+    coord: { lat: catalogEntry.lat, lon: catalogEntry.lon },
+    anchorTitle: anchor.title,
+    durationMinutes: pick(rng, QA_EVENT_DURATION_MINUTES),
+    flexibleEnabled,
+    flexBeforeMinutes,
+    flexAfterMinutes,
+  };
+}
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function retryGraphWrite<T>(
+  operation: () => Promise<T>,
+  isSuccess: (result: T) => boolean
+) {
+  let lastResult: T | null = null;
+  for (const delayMs of QA_WRITE_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    const result = await operation();
+    lastResult = result;
+    if (isSuccess(result)) {
+      return result;
+    }
+  }
+  return lastResult;
+}
+
+function summarizeRejectedSlots(entries: QASlotConsidered[]) {
+  const rejected = entries.filter((entry) => entry.status === 'rejected');
+  return rejected.slice(0, 3).map((entry) => `${entry.dayLabel} ${entry.timeRange}: ${entry.reason ?? 'Rejected'}`);
+}
+
+function mapConsideredSlots(entries: QASlotConsidered[]): MeetingDecisionConsideredSlot[] {
+  return entries.map((entry) => ({
+    dayIso: entry.dayIso,
+    dayLabel: entry.dayLabel,
+    timeRange: entry.timeRange,
+    status: entry.status,
+    reason: entry.reason,
+    detourKm: entry.detourKm,
+    addToRouteMin: entry.addToRouteMin,
+    baselineMin: entry.baselineMin,
+    newPathMin: entry.newPathMin,
+    slackMin: entry.slackMin,
+    score: entry.score,
+    label: entry.label,
+    prev: entry.prev,
+    next: entry.next,
+    summary: entry.summary,
+  }));
+}
+
+function buildExistingMeetingsByDay(events: CalendarEvent[]) {
+  const result: Record<string, Array<{
+    id: string;
+    title: string;
+    time: string;
+    location: string;
+    startIso?: string;
+    endIso?: string;
+  }>> = {};
+  for (const event of events) {
+    if (!event.startIso) continue;
+    const dayKey = toLocalDayKey(new Date(event.startIso));
+    if (!result[dayKey]) result[dayKey] = [];
+    result[dayKey]!.push({
+      id: event.id,
+      title: event.title ?? '(No title)',
+      time: event.time ?? '-',
+      location: event.location ?? '-',
+      startIso: event.startIso ?? undefined,
+      endIso: event.endIso ?? undefined,
+    });
+  }
+  return result;
+}
 
 /** Human-readable purpose for each Microsoft OAuth scope used by the app */
 const SCOPE_PURPOSE: Record<string, string> = {
@@ -319,6 +578,20 @@ function LogicSpecsSection() {
         detourKm = d(prev→new) + d(new→next) − d(prev→next) using straight-line haversine.
         Empty day: 2 × d(home, newLoc). Rounds to 1 decimal.
       </Text>
+      <Text style={styles.body}>
+        Detour is a measure of the extra travel footprint added to your day by squeezing a new meeting into your existing schedule. It compares the day's route without the new meeting versus the route with the new meeting.
+      </Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• Without meeting: Home → Meeting A → Home = 20 km</Text>
+        <Text style={styles.ruleItem}>• With new meeting: Home → Meeting A → Meeting B → Home = 45 km</Text>
+        <Text style={styles.ruleItem}>• Detour: 45 - 20 = 25 km extra driving</Text>
+      </View>
+      <Text style={styles.body}>
+        Max Same-Day Detour Distance (The Limit): If the detour exceeds this limit, the app considers it "too far out of the way" and dismisses the slot, looking for a day when you will naturally be closer.
+      </Text>
+      <Text style={styles.body}>
+        Required Savings vs Empty Day (The Override): If a meeting has a massive detour (e.g., 50 km or +50 min) but going there on an empty day is even worse, the app checks the savings. If (Empty Day Travel − Detour) &gt; Far Detour Override, the meeting is approved. Units match your “Prefer Time or Distance” setting.
+      </Text>
 
       <Text style={styles.h2}>Score Formula (v3)</Text>
       <View style={styles.ruleList}>
@@ -332,6 +605,7 @@ function LogicSpecsSection() {
         <Text style={styles.ruleItem}>• Cross-day adjacency bonus: −20 if slot ends within 15 km of tomorrow's first meeting (field mode only; see below)</Text>
         <Text style={styles.ruleItem}>• Sort: tier asc → score asc → startMs asc → dayIso asc</Text>
         <Text style={styles.ruleItem}>• Empty week: dayIso asc → startMs asc (chronological)</Text>
+        <Text style={styles.ruleItem}>• Primary metric: detourKm when “Prefer Distance”, detourMinutes when “Prefer Time”. detour base = detourKm×10 (km mode) or detourMinutes (time mode).</Text>
       </View>
 
       <Text style={styles.h2}>Gap Candidates (v3)</Text>
@@ -394,6 +668,59 @@ function LogicSpecsSection() {
         <Text style={styles.ruleItem}>• Non-working days skipped entirely</Text>
       </View>
 
+      <Text style={styles.h2}>Dismissal Checklist (Simple)</Text>
+      <Text style={styles.body}>
+        These are the same rule names shown in "Testing: Evaluated Slots" in Show all.
+      </Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>
+          {'• Working-hours window\n'}
+          {'  Meetings must stay within your working hours, based on Return to base daily.\n'}
+          {'  ON: Working hours include travel from home to the first meeting and from the last meeting back home.\n'}
+          {'  OFF: Home travel is ignored at the start and end of the day, so the first meeting can start at work start and the last meeting can end at work end.\n'}
+          {'  Examples:\n'}
+          {'  ON: A meeting may be rejected even if it ends by 17:00, if the trip home would push the total day past working hours.\n'}
+          {'  OFF: A meeting ending at 17:00 can still be valid, because the trip home is not counted.'}
+        </Text>
+        <Text style={styles.ruleItem}>
+          • Not in the past: The meeting cannot start in a time that has already passed.
+          Today safety: if leaving now plus travel plus buffer misses arrive-by, it is dismissed.
+          Example: It is 10:05 now, so a 09:45 slot or any slot needing departure before now is dismissed.
+        </Text>
+        <Text style={styles.ruleItem}>
+          • No overlap with existing meetings: Two meetings cannot occupy the same time.
+          Example: Existing meeting 11:00-12:00, new slot 11:30-12:30 is dismissed.
+        </Text>
+        <Text style={styles.ruleItem}>
+          • Travel + buffers feasible: You must be able to drive and still keep pre/post buffers (and return-home cutoff if Return to base daily is ON).
+          Example: Arrival ETA is after required buffer time, or return-home ETA would miss work end, so the slot is dismissed.
+        </Text>
+        <Text style={styles.ruleItem}>
+          • Gap can fit duration + buffers: The free gap must be big enough for travel + buffers + meeting.
+          Example: Gap is 50 minutes but needs 80 minutes, so it is dismissed.
+        </Text>
+        <Text style={styles.ruleItem}>
+          • Detour &lt;= [Max Same-Day Detour Distance] km or override &gt;= [Required Savings vs Empty Day] (min or km):
+          Very far detours are blocked unless they save enough versus doing the meeting on an empty day.
+          Example: Adds 40 km with 30 km limit and saves only 5 min when 20 min is required, so dismissed.
+        </Text>
+        <Text style={styles.ruleItem}>
+          • Flexible-chain limits: If other meetings must move, those moves must stay within allowed flexibility and not overlap or move into the past.
+          Example: Slot needs a 150 min shift but max allowed is 120 min, or the shifted chain would overlap, so dismissed.
+        </Text>
+      </View>
+
+      <Text style={styles.h2}>Dismissal Rules Quick Table</Text>
+      <View style={styles.ruleList}>
+        <Text style={styles.ruleItem}>• Working-hours window — Must fit workday; Return-to-base ON counts home legs, OFF ignores them.</Text>
+        <Text style={styles.ruleItem}>• Not in the past — Slot start can’t be before “now”; today also checks “leave now + travel + buffer”.</Text>
+        <Text style={styles.ruleItem}>• No overlap — Slot must not collide with any existing meeting (even no-coords ones).</Text>
+        <Text style={styles.ruleItem}>• Travel + buffers feasible — Pre/post buffers and travel (and return-home cutoff if ON) must fit.</Text>
+        <Text style={styles.ruleItem}>• Gap can fit duration + buffers — Gap must be large enough for travel + buffers + duration.</Text>
+        <Text style={styles.ruleItem}>• Detour &lt;= threshold or override &gt;= savings — Far slots need either low detour or enough savings vs empty day (minutes or km, matching preference).</Text>
+        <Text style={styles.ruleItem}>• Flexible-chain limits — Required shifts must be within flex caps, not create overlap, not push into past.</Text>
+      </View>
+
       <Text style={styles.h2}>Gap Formula (Buffer-Aware)</Text>
       <Text style={styles.body}>
         prevDepartMs = event.endMs + postBuffer (Start anchor: event.endMs only).
@@ -412,8 +739,7 @@ function LogicSpecsSection() {
 
       <Text style={styles.h2}>Ghost-Slot Timeline (Plan Visit)</Text>
       <Text style={styles.body}>
-        Gated setup → results flow. Setup: location, duration (30/60/90 min), timeframe, CTA.
-        Results only after CTA press.
+        Current flow: tap +, enter address → best match appears immediately with defaults (duration/flex/timeframe), map shows route, and “Find more options” reveals all slots.
       </Text>
       <View style={styles.ruleList}>
         <Text style={styles.ruleItem}>• Best Options: top 3, one per unique day (v3)</Text>
@@ -522,6 +848,8 @@ function UISection() {
     mockMapStyleIndex,
     setMockMapStyleIndex,
     mockMapStyleCount,
+    showQaDebug,
+    setShowQaDebug,
   } = useDevUI();
 
   return (
@@ -553,6 +881,33 @@ function UISection() {
           >
             <Text style={[styles.uiOptionText, showOldUI && styles.uiOptionTextActive]}>
               Old UI
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.uiCard}>
+        <Text style={styles.h2}>QA Debug Overlays</Text>
+        <Text style={styles.body}>
+          Toggle verbose slot/debug info in Add Meeting and related screens. Default is off; turn on only in QA/dev builds.
+        </Text>
+        <View style={styles.uiOptionsRow}>
+          <TouchableOpacity
+            style={[styles.uiOption, !showQaDebug && styles.uiOptionActive]}
+            onPress={() => setShowQaDebug(false)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.uiOptionText, !showQaDebug && styles.uiOptionTextActive]}>
+              Hidden
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.uiOption, showQaDebug && styles.uiOptionActive]}
+            onPress={() => setShowQaDebug(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.uiOptionText, showQaDebug && styles.uiOptionTextActive]}>
+              Visible
             </Text>
           </TouchableOpacity>
         </View>
@@ -697,7 +1052,10 @@ function QALogViewerSection() {
 
 function QASection() {
   const navigation = useNavigation();
-  const { setAppointments } = useRoute();
+  const { appointments, setAppointments, addAppointment, updateAppointment } = useRoute();
+  const { getValidToken } = useAuth();
+  const { preferences } = useUserPreferences();
+  const [isCreatingSeedMeetings, setIsCreatingSeedMeetings] = useState(false);
 
   const runQA = () => {
     runFullQASuite();
@@ -723,6 +1081,236 @@ function QASection() {
     );
   };
 
+  const createQaSeedMeetings = async () => {
+    if (isCreatingSeedMeetings) return;
+    setIsCreatingSeedMeetings(true);
+    try {
+      const token = await getValidToken();
+      if (!token) {
+        Alert.alert('Sign in required', 'You need an active account session before creating Outlook events.');
+        return;
+      }
+
+      const rng = mulberry32(QA_GENERATOR_SEED);
+      let workingSchedule = sortAppointmentsByStart(appointments);
+      const created: string[] = [];
+      const failed: string[] = [];
+
+      for (let attempt = 1; attempt <= QA_SCHEDULER_MAX_ATTEMPTS && created.length < QA_SCHEDULER_BATCH_COUNT; attempt += 1) {
+        try {
+          const request = buildSchedulerQaRequest(attempt, workingSchedule, rng);
+          const qaEntries: QASlotConsidered[] = [];
+          const searchWindow = {
+            start: new Date(),
+            end: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
+          };
+
+          const allSlots = findSmartSlots({
+            schedule: workingSchedule,
+            newLocation: request.coord,
+            durationMinutes: request.durationMinutes,
+            preferences,
+            searchWindow,
+            clampSearchStartToToday: false,
+            includeExplain: true,
+            onSlotConsidered: (entry) => {
+              qaEntries.push(entry);
+            },
+          });
+          const rankedSlots = [...allSlots].sort(compareScoredSlots);
+          const bestOptions = pickBestOptionsWithDayDiversity(rankedSlots, 3);
+          const bestSlot = bestOptions[0] ?? null;
+          if (!bestSlot) {
+            failed.push(`${request.titleBase}: no valid slots. ${summarizeRejectedSlots(qaEntries).join(' | ')}`);
+            continue;
+          }
+
+          const decisionCode = await allocateMeetingDecisionCode();
+          const title = appendMeetingCodeSuffix(request.titleBase, decisionCode);
+          const flexibleWindowTag = request.flexibleEnabled
+            ? buildFlexibleWindowTag(bestSlot.startMs, request.flexBeforeMinutes, request.flexAfterMinutes)
+            : null;
+          let eventBody = composeEventBodyWithFlexibleWindow(
+            `Generated by QA scheduler batch.\nLabel: ${request.locationLabel}\nAnchor: ${request.anchorTitle}\nRequest ${request.index}/${QA_SCHEDULER_BATCH_COUNT}`,
+            flexibleWindowTag
+          );
+          eventBody = composeEventBodyWithDecisionCode(eventBody, decisionCode);
+
+          const scheduleSnapshotBeforeBooking = sortAppointmentsByStart(workingSchedule);
+          const shiftedEvents = bestSlot.explain?.shiftedEvents ?? [];
+          let shiftFailed = false;
+
+          for (const shift of shiftedEvents) {
+            const existing = workingSchedule.find((event) => event.id === shift.id);
+            if (!existing) continue;
+            const newStartIso = new Date(shift.toStartMs).toISOString();
+            const newEndIso = new Date(shift.toEndMs).toISOString();
+            const newTime = `${formatClock(shift.toStartMs)} - ${formatClock(shift.toEndMs)}`;
+            if (!existing.id.startsWith('local-')) {
+              const updateResult = await retryGraphWrite(
+                () =>
+                  updateCalendarEvent(token, existing.id, {
+                    startIso: newStartIso,
+                    endIso: newEndIso,
+                  }),
+                (result) => result.success
+              );
+              if (!updateResult || !updateResult.success) {
+                failed.push(`${title}: could not push ${shift.title} (${updateResult && 'error' in updateResult ? updateResult.error : 'Unknown error'})`);
+                shiftFailed = true;
+                break;
+              }
+            }
+            updateAppointment(existing.id, {
+              startIso: newStartIso,
+              endIso: newEndIso,
+              time: newTime,
+            });
+            workingSchedule = workingSchedule.map((event) =>
+              event.id === existing.id
+                ? { ...event, startIso: newStartIso, endIso: newEndIso, time: newTime }
+                : event
+            );
+          }
+          if (shiftFailed) {
+            continue;
+          }
+
+          const proposedStartIso = new Date(bestSlot.startMs).toISOString();
+          const proposedEndIso = new Date(bestSlot.endMs).toISOString();
+          const proposedTime = `${formatClock(bestSlot.startMs)} - ${formatClock(bestSlot.endMs)}`;
+          const createResult = await retryGraphWrite(
+            () =>
+              createCalendarEvent(token, {
+                subject: title,
+                startIso: proposedStartIso,
+                endIso: proposedEndIso,
+                location: request.locationForEvent,
+                body: eventBody,
+              }),
+            (result) => result.success
+          );
+          if (!createResult || !createResult.success) {
+            failed.push(`${title}: ${createResult && 'error' in createResult ? createResult.error : 'Unknown error'}`);
+            continue;
+          }
+
+          const finalEvent: CalendarEvent = {
+            ...('event' in createResult ? createResult.event : {}),
+            id: 'event' in createResult ? createResult.event.id : `local-${Math.random().toString(36).substr(2, 9)}`,
+            title,
+            location: request.locationForEvent,
+            startIso: proposedStartIso,
+            endIso: proposedEndIso,
+            time: proposedTime,
+            notes: eventBody,
+            bodyPreview: eventBody,
+            coordinates: {
+              latitude: request.coord.lat,
+              longitude: request.coord.lon,
+            },
+            status: 'pending',
+          };
+
+          addAppointment(finalEvent);
+          workingSchedule = sortAppointmentsByStart([...workingSchedule, finalEvent]);
+
+          const rankedCandidates: MeetingDecisionCandidate[] = rankedSlots.map((candidate, index) => ({
+            proposalId: slotId(candidate),
+            rank: index + 1,
+            dayIso: candidate.dayIso,
+            startMs: candidate.startMs,
+            endMs: candidate.endMs,
+            score: candidate.score,
+            tier: candidate.tier,
+            label: candidate.label,
+            metrics: {
+              detourKm: candidate.metrics.detourKm ?? 0,
+              detourMinutes: candidate.metrics.detourMinutes ?? 0,
+              slackMinutes: candidate.metrics.slackMinutes ?? 0,
+              travelToMinutes: candidate.metrics.travelToMinutes ?? 0,
+              travelFromMinutes: candidate.metrics.travelFromMinutes ?? 0,
+            },
+            explain: candidate.explain as Record<string, unknown> | undefined,
+          }));
+          const actions: MeetingDecisionAction[] = [
+            { atIso: new Date().toISOString(), type: 'auto-best', proposalId: slotId(bestSlot) },
+            { atIso: new Date().toISOString(), type: 'book', proposalId: slotId(bestSlot) },
+          ];
+          const decisionEntry = await appendMeetingDecisionEntry({
+            code: decisionCode,
+            bookedMeeting: {
+              eventId: finalEvent.id,
+              title,
+              titleBase: request.titleBase,
+              location: request.locationForEvent,
+              startIso: finalEvent.startIso ?? undefined,
+              endIso: finalEvent.endIso ?? undefined,
+            },
+            searchInput: {
+              locationLabel: request.locationLabel,
+              locationForEvent: request.locationForEvent,
+              locationCoords: request.coord,
+              timeframeMode: 'best',
+              durationMinutes: request.durationMinutes,
+              flexibleMeetingEnabled: request.flexibleEnabled,
+              flexBeforeMinutes: request.flexBeforeMinutes,
+              flexAfterMinutes: request.flexAfterMinutes,
+              searchWindowStartIso: searchWindow.start.toISOString(),
+              searchWindowEndIso: searchWindow.end.toISOString(),
+            },
+            selected: {
+              proposalId: slotId(bestSlot),
+              dayIso: bestSlot.dayIso,
+              startMs: bestSlot.startMs,
+              endMs: bestSlot.endMs,
+              bestBadgeProposalId: getBestBadgeSlotId(bestOptions),
+            },
+            ranking: {
+              candidateCount: rankedSlots.length,
+              orderedProposalIds: rankedSlots.map((candidate) => slotId(candidate)),
+            },
+            candidates: rankedCandidates,
+            consideredSlots: mapConsideredSlots(qaEntries),
+            existingMeetingsByDay: buildExistingMeetingsByDay(scheduleSnapshotBeforeBooking),
+            actions,
+          });
+          if (BACKEND_API_ENABLED) {
+            await backendAppendMeetingDecisionAudit(decisionEntry, token).catch(() => false);
+          }
+
+          created.push(`${title} · ${formatDayLabel(bestSlot.dayIso)} ${proposedTime}`);
+        } catch (attemptError) {
+          failed.push(
+            `Attempt ${attempt}: ${attemptError instanceof Error ? attemptError.message : 'Unknown error'}`
+          );
+          continue;
+        }
+      }
+
+      Alert.alert(
+        failed.length === 0 ? 'Scheduler batch created' : 'Scheduler batch finished with issues',
+        [
+          `Created: ${created.length}`,
+          failed.length > 0 ? `Failed: ${failed.length}` : null,
+          '',
+          'All created meetings were booked through the scheduler and written to the decision log.',
+          'Titles start with "QA Sched". Refresh the calendar view if they do not appear immediately.',
+          failed.length > 0 ? '' : null,
+          failed.length > 0 ? failed.slice(0, 5).join('\n') : null,
+        ].filter(Boolean).join('\n')
+      );
+    } catch (error) {
+      if (error instanceof GraphUnauthorizedError) {
+        Alert.alert('Session expired', 'Reconnect Outlook, then run the scheduler batch again.');
+        return;
+      }
+      Alert.alert('Failed to create meetings', error instanceof Error ? error.message : 'Unknown error');
+    } finally {
+      setIsCreatingSeedMeetings(false);
+    }
+  };
+
   return (
     <View style={styles.section}>
       <Text style={styles.h1}>Scheduler QA</Text>
@@ -744,6 +1332,16 @@ function QASection() {
       </Text>
       <TouchableOpacity style={[styles.segment, { marginTop: 8, alignSelf: 'flex-start' }]} onPress={loadQAScenarioAndOpenPlanVisit}>
         <Text style={styles.segmentText}>Load QA scenario & open Plan Visit</Text>
+      </TouchableOpacity>
+      <Text style={[styles.body, { marginTop: 24 }]}>
+        Create 20 real Outlook meetings through the scheduler. Each one uses the same `best match` logic as normal booking, applies pushers if needed, and writes a full decision log.
+      </Text>
+      <TouchableOpacity
+        style={[styles.segment, { marginTop: 8, alignSelf: 'flex-start', opacity: isCreatingSeedMeetings ? 0.7 : 1 }]}
+        onPress={() => { void createQaSeedMeetings(); }}
+        disabled={isCreatingSeedMeetings}
+      >
+        <Text style={styles.segmentText}>{isCreatingSeedMeetings ? 'Creating scheduler batch...' : 'Create 20 scheduler-booked meetings'}</Text>
       </TouchableOpacity>
     </View>
   );

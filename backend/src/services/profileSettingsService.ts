@@ -8,6 +8,8 @@ import {
 import type { SubscriptionTier, TierEntitlements } from "./subscriptionTierService.js";
 
 type WorkingDaysTuple = [boolean, boolean, boolean, boolean, boolean, boolean, boolean];
+type DurationPresetTuple = [number, number, number];
+type DecisionOptimizationMetric = "minutes" | "km";
 
 const DEFAULT_WORKING_DAYS: WorkingDaysTuple = [
   false,
@@ -29,6 +31,9 @@ const DEFAULT_PROFILE_SETTINGS = {
   homeBaseLabel: "Copenhagen",
   workingDays: DEFAULT_WORKING_DAYS,
   distanceThresholdKm: 30,
+  farDetourOverrideMinSavingsMinutes: 20,
+  decisionOptimizationMetric: "minutes" as DecisionOptimizationMetric,
+  meetingDurationPresets: [30, 60, 90] as DurationPresetTuple,
   alwaysStartFromHomeBase: true,
   useGoogleGeocoding: false,
   useTrafficAwareRouting: false,
@@ -48,6 +53,11 @@ type ProfileSettingsRow = {
   home_base_label: string | null;
   working_days: unknown;
   distance_threshold_km: number | string | null;
+  far_detour_override_min_savings_minutes: number | null;
+  decision_optimization_metric: string | null;
+  meeting_duration_preset_1_minutes: number | null;
+  meeting_duration_preset_2_minutes: number | null;
+  meeting_duration_preset_3_minutes: number | null;
   always_start_from_home_base: boolean | null;
   use_advanced_geocoding: boolean | null;
   use_traffic_routing: boolean | null;
@@ -72,6 +82,9 @@ export type UserProfileSettings = {
   homeBaseLabel: string;
   workingDays: WorkingDaysTuple;
   distanceThresholdKm: number;
+  farDetourOverrideMinSavingsMinutes: number;
+  decisionOptimizationMetric: DecisionOptimizationMetric;
+  meetingDurationPresets: DurationPresetTuple;
   alwaysStartFromHomeBase: boolean;
   useGoogleGeocoding: boolean;
   useTrafficAwareRouting: boolean;
@@ -119,6 +132,9 @@ export type UpdateUserProfileSettingsInput = {
   homeBaseLabel?: string | null;
   workingDays?: WorkingDaysTuple;
   distanceThresholdKm?: number;
+  farDetourOverrideMinSavingsMinutes?: number;
+  decisionOptimizationMetric?: DecisionOptimizationMetric;
+  meetingDurationPresets?: DurationPresetTuple;
   alwaysStartFromHomeBase?: boolean;
   useGoogleGeocoding?: boolean;
   useTrafficAwareRouting?: boolean;
@@ -155,6 +171,46 @@ function toFiniteNumber(value: number | string | null, fallback: number) {
   return fallback;
 }
 
+function normalizeDurationPresetMinutes(value: number, fallback: number) {
+  if (!Number.isFinite(value)) return fallback;
+  const snapped = Math.round(value / 15) * 15;
+  return Math.max(15, Math.min(480, snapped));
+}
+
+function normalizeDurationPresets(
+  values: DurationPresetTuple | null | undefined
+): DurationPresetTuple {
+  const fallback = DEFAULT_PROFILE_SETTINGS.meetingDurationPresets;
+  if (!values || values.length !== 3) return fallback;
+  const snapped = values
+    .map((value, index) =>
+      normalizeDurationPresetMinutes(value, fallback[index] ?? 60)
+    )
+    .sort((a, b) => a - b) as number[];
+
+  for (let i = 1; i < snapped.length; i++) {
+    if (snapped[i] <= snapped[i - 1]) {
+      snapped[i] = Math.min(480, snapped[i - 1] + 15);
+    }
+  }
+
+  if (snapped[2] <= snapped[1]) {
+    snapped[2] = Math.min(480, snapped[1] + 15);
+  }
+  if (snapped[1] <= snapped[0]) {
+    snapped[1] = Math.min(480, snapped[0] + 15);
+  }
+
+  return [snapped[0]!, snapped[1]!, snapped[2]!];
+}
+
+function normalizeDecisionOptimizationMetric(
+  value: string | null | undefined
+): DecisionOptimizationMetric {
+  if (value === "km") return "km";
+  return "minutes";
+}
+
 async function getProfileSettingsRow(userId: string): Promise<ProfileSettingsRow | null> {
   const found = await query<ProfileSettingsRow>(
     `SELECT
@@ -168,6 +224,11 @@ async function getProfileSettingsRow(userId: string): Promise<ProfileSettingsRow
        p.home_base_label,
        p.working_days,
        p.distance_threshold_km,
+       p.far_detour_override_min_savings_minutes,
+       p.decision_optimization_metric,
+       p.meeting_duration_preset_1_minutes,
+       p.meeting_duration_preset_2_minutes,
+       p.meeting_duration_preset_3_minutes,
        p.always_start_from_home_base,
        p.use_advanced_geocoding,
        p.use_traffic_routing,
@@ -199,6 +260,14 @@ function buildSettings(
     Number.isFinite(row.home_base_lat) &&
     typeof row.home_base_lon === "number" &&
     Number.isFinite(row.home_base_lon);
+  const meetingDurationPresets = normalizeDurationPresets([
+    row.meeting_duration_preset_1_minutes ??
+      DEFAULT_PROFILE_SETTINGS.meetingDurationPresets[0],
+    row.meeting_duration_preset_2_minutes ??
+      DEFAULT_PROFILE_SETTINGS.meetingDurationPresets[1],
+    row.meeting_duration_preset_3_minutes ??
+      DEFAULT_PROFILE_SETTINGS.meetingDurationPresets[2]
+  ]);
 
   return {
     workingHours: {
@@ -223,6 +292,14 @@ function buildSettings(
       row.distance_threshold_km,
       DEFAULT_PROFILE_SETTINGS.distanceThresholdKm
     ),
+    farDetourOverrideMinSavingsMinutes: toFiniteNumber(
+      row.far_detour_override_min_savings_minutes,
+      DEFAULT_PROFILE_SETTINGS.farDetourOverrideMinSavingsMinutes
+    ),
+    decisionOptimizationMetric: normalizeDecisionOptimizationMetric(
+      row.decision_optimization_metric ?? DEFAULT_PROFILE_SETTINGS.decisionOptimizationMetric
+    ),
+    meetingDurationPresets,
     alwaysStartFromHomeBase:
       row.always_start_from_home_base ?? DEFAULT_PROFILE_SETTINGS.alwaysStartFromHomeBase,
     useGoogleGeocoding: forceAdvancedGeocodingForSignedInBasic
@@ -276,10 +353,11 @@ export async function getUserProfileSettings(userId: string): Promise<UserProfil
 export async function updateUserProfileSettings(
   userId: string,
   patch: UpdateUserProfileSettingsInput,
-  source = "app"
+  source = "app",
+  options?: { bypassAccessChecks?: boolean }
 ): Promise<UserProfileSettingsResponse> {
   const current = await getUserProfileSettings(userId);
-  if (!current.access.canEditSettings) {
+  if (!options?.bypassAccessChecks && !current.access.canEditSettings) {
     throw new SettingsAccessLockedError(
       "Profile settings are locked. Start or reactivate a paid plan to edit settings."
     );
@@ -321,6 +399,22 @@ export async function updateUserProfileSettings(
     ...(patch.distanceThresholdKm !== undefined
       ? { distanceThresholdKm: patch.distanceThresholdKm }
       : {}),
+    ...(patch.farDetourOverrideMinSavingsMinutes !== undefined
+      ? {
+          farDetourOverrideMinSavingsMinutes:
+            patch.farDetourOverrideMinSavingsMinutes
+        }
+      : {}),
+    ...(patch.decisionOptimizationMetric !== undefined
+      ? { decisionOptimizationMetric: patch.decisionOptimizationMetric }
+      : {}),
+    ...(patch.meetingDurationPresets !== undefined
+      ? {
+          meetingDurationPresets: normalizeDurationPresets(
+            patch.meetingDurationPresets
+          )
+        }
+      : {}),
     ...(patch.alwaysStartFromHomeBase !== undefined
       ? { alwaysStartFromHomeBase: patch.alwaysStartFromHomeBase }
       : {}),
@@ -346,7 +440,11 @@ export async function updateUserProfileSettings(
       : {})
   };
 
-  if (nextSettings.useGoogleGeocoding && !current.entitlements.canUseBetterGeocoding) {
+  if (
+    !options?.bypassAccessChecks &&
+    nextSettings.useGoogleGeocoding &&
+    !current.entitlements.canUseBetterGeocoding
+  ) {
     throw new FeatureNotIncludedError(
       "Advanced geocoding is not included in the current subscription tier",
       {
@@ -356,7 +454,11 @@ export async function updateUserProfileSettings(
     );
   }
 
-  if (nextSettings.useTrafficAwareRouting && !current.entitlements.canUseTrafficAwareRouting) {
+  if (
+    !options?.bypassAccessChecks &&
+    nextSettings.useTrafficAwareRouting &&
+    !current.entitlements.canUseTrafficAwareRouting
+  ) {
     throw new FeatureNotIncludedError(
       "Traffic-aware routing is not included in the current subscription tier",
       {
@@ -366,7 +468,11 @@ export async function updateUserProfileSettings(
     );
   }
 
-  if (nextSettings.calendarConnected && !current.entitlements.canSyncCalendar) {
+  if (
+    !options?.bypassAccessChecks &&
+    nextSettings.calendarConnected &&
+    !current.entitlements.canSyncCalendar
+  ) {
     throw new FeatureNotIncludedError(
       "Calendar sync is not included in the current subscription tier",
       {
@@ -392,6 +498,11 @@ export async function updateUserProfileSettings(
        home_base_label,
        working_days,
        distance_threshold_km,
+       far_detour_override_min_savings_minutes,
+       decision_optimization_metric,
+       meeting_duration_preset_1_minutes,
+       meeting_duration_preset_2_minutes,
+       meeting_duration_preset_3_minutes,
        always_start_from_home_base,
        use_advanced_geocoding,
        use_traffic_routing,
@@ -417,7 +528,12 @@ export async function updateUserProfileSettings(
        $14,
        $15,
        $16,
-       $17
+       $17,
+       $18,
+       $19,
+       $20,
+       $21,
+       $22
      )
      ON CONFLICT (user_id) DO UPDATE
        SET working_hours_start = EXCLUDED.working_hours_start,
@@ -429,6 +545,11 @@ export async function updateUserProfileSettings(
            home_base_label = EXCLUDED.home_base_label,
            working_days = EXCLUDED.working_days,
            distance_threshold_km = EXCLUDED.distance_threshold_km,
+           far_detour_override_min_savings_minutes = EXCLUDED.far_detour_override_min_savings_minutes,
+           decision_optimization_metric = EXCLUDED.decision_optimization_metric,
+           meeting_duration_preset_1_minutes = EXCLUDED.meeting_duration_preset_1_minutes,
+           meeting_duration_preset_2_minutes = EXCLUDED.meeting_duration_preset_2_minutes,
+           meeting_duration_preset_3_minutes = EXCLUDED.meeting_duration_preset_3_minutes,
            always_start_from_home_base = EXCLUDED.always_start_from_home_base,
            use_advanced_geocoding = EXCLUDED.use_advanced_geocoding,
            use_traffic_routing = EXCLUDED.use_traffic_routing,
@@ -448,6 +569,11 @@ export async function updateUserProfileSettings(
       nextSettings.homeBaseLabel,
       JSON.stringify(nextSettings.workingDays),
       nextSettings.distanceThresholdKm,
+      nextSettings.farDetourOverrideMinSavingsMinutes,
+      nextSettings.decisionOptimizationMetric,
+      nextSettings.meetingDurationPresets[0],
+      nextSettings.meetingDurationPresets[1],
+      nextSettings.meetingDurationPresets[2],
       nextSettings.alwaysStartFromHomeBase,
       nextSettings.useGoogleGeocoding,
       nextSettings.useTrafficAwareRouting,

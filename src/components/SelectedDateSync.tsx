@@ -2,7 +2,7 @@
  * Syncs appointments to selectedDate. When selectedDate changes (from Schedule or Map DaySlider),
  * fetches for that date and updates RouteContext. Single source of fetch - Map just displays.
  * Clears appointments immediately when switching days so we never show another day's data.
- * Preloads appointments for the next 5 days in the background for faster day switching.
+ * Preloads appointments for the next 3 days in the background for faster day switching.
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
@@ -10,6 +10,7 @@ import { startOfDay, endOfDay, addDays, subDays } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
+import type { PendingLocalDayState } from '../context/RouteContext';
 import { getCalendarEventsRaw, enrichCalendarEventsAll, GraphUnauthorizedError } from '../services/graph';
 import { clearGraphSession, isMagicAuthToken } from '../services/graphAuth';
 import { getLocalMeetingsForDay } from '../services/localMeetings';
@@ -19,7 +20,7 @@ import { getEffectiveSubscriptionTier, getTierEntitlements } from '../utils/subs
 import { useEnsureMeetingCountsForDate } from '../hooks/useEnsureMeetingCountsForDate';
 import { getMeetingSyncMode } from '../utils/meetingSyncMode';
 
-const PRELOAD_DAYS_AHEAD = 5;
+const PRELOAD_DAYS_AHEAD = 3;
 
 /** Route diagnostics for auth/fetch/count sync races. */
 const ROUTE_QC_LOG = __DEV__ || Platform.OS === 'android' || process.env.EXPO_PUBLIC_DEBUG_ROUTE_SYNC === '1';
@@ -68,7 +69,7 @@ export default function SelectedDateSync() {
   /** Track which day is currently "active" so background enrichment doesn't clobber a switched day. */
   const activeDayKey = useRef<string>('');
 
-  const pendingEventRef = useRef(pendingLocalEvent);
+  const pendingEventRef = useRef<PendingLocalDayState | null>(pendingLocalEvent);
   useEffect(() => {
     pendingEventRef.current = pendingLocalEvent;
   }, [pendingLocalEvent]);
@@ -87,15 +88,29 @@ export default function SelectedDateSync() {
     }
   }, [syncMode]);
 
-  /** Merge pending local event into list for this day (so newly confirmed meeting shows immediately). */
+  /** Merge pending local optimistic updates into this day (new booking + optional pusher snapshot). */
   const mergePendingIfSameDay = useCallback(
     (dayKey: string, list: Awaited<ReturnType<typeof sortAppointmentsByTime>>) => {
       const pending = pendingEventRef.current;
       if (!pending || pending.dayKey !== dayKey) return list;
-      const hasId = list.some((e) => e.id === pending.event.id);
-      if (hasId) return list;
-      const merged = sortAppointmentsByTime([...list, { ...pending.event, status: 'pending' as const }]);
-      setPendingLocalEvent(null);
+      const snapshot = Array.isArray(pending.daySnapshot) ? pending.daySnapshot : null;
+      const merged = snapshot && snapshot.length > 0
+        ? sortAppointmentsByTime(snapshot)
+        : (() => {
+            const hasId = list.some((e) => e.id === pending.event.id);
+            if (hasId) return list;
+            return sortAppointmentsByTime([...list, { ...pending.event, status: 'pending' as const }]);
+          })();
+
+      const remaining = Math.max(0, (pending.remainingMerges ?? 1) - 1);
+      if (remaining <= 0) {
+        pendingEventRef.current = null;
+        setPendingLocalEvent(null);
+      } else {
+        const nextPending: PendingLocalDayState = { ...pending, remainingMerges: remaining };
+        pendingEventRef.current = nextPending;
+        setPendingLocalEvent(nextPending);
+      }
       return merged;
     },
     [setPendingLocalEvent]
@@ -261,7 +276,7 @@ export default function SelectedDateSync() {
     [isRestoringSession, shouldSyncCalendar, syncMode, userToken, getValidToken, setAppointments, setAppointmentsRequestState, setAppointmentsEnriching, getDayOrder, signOut, mergePendingIfSameDay]
   );
 
-  /** Preload a future day fully (raw + enrich) and store in cache. Does not update context. */
+  /** Preload a future day raw-only and store in cache. Does not update context. */
   const preloadOneDay = useCallback(
     async (date: Date) => {
       if (!shouldSyncCalendar) return;
@@ -281,14 +296,6 @@ export default function SelectedDateSync() {
         const rawOrdered = applyOrderSync(rawSorted, savedOrder);
         dayCache.current.set(dayKey, rawOrdered);
 
-        // Then enrich and update cache with richer data
-        enrichCalendarEventsAll(token, rawEvents)
-          .then((enriched) => {
-            const enrichedSorted = sortAppointmentsByTime(enriched);
-            const enrichedOrdered = applyOrderSync(enrichedSorted, savedOrder);
-            dayCache.current.set(dayKey, enrichedOrdered);
-          })
-          .catch(() => {});
       } catch {
         // ignore; preload is best-effort
       }
@@ -337,11 +344,11 @@ export default function SelectedDateSync() {
     let cancelled = false;
     const run = async () => {
       // Preload yesterday for instant day switch when going back
-      preloadOneDay(subDays(selectedDate, 1));
+      await preloadOneDay(subDays(selectedDate, 1));
       for (let i = 1; i <= PRELOAD_DAYS_AHEAD; i++) {
         if (cancelled) return;
-        preloadOneDay(addDays(selectedDate, i));
-        if (i < PRELOAD_DAYS_AHEAD) await new Promise((r) => setTimeout(r, 400));
+        await preloadOneDay(addDays(selectedDate, i));
+        if (i < PRELOAD_DAYS_AHEAD) await new Promise((r) => setTimeout(r, 700));
       }
     };
     run();

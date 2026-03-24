@@ -14,6 +14,7 @@ export type LeafletMarker = {
   label?: string;
   title?: string;
   color?: string;
+  textColor?: string;
   index?: number;
   isCluster?: boolean;
   clusterKey?: string;
@@ -132,12 +133,15 @@ const LEAFLET_HTML = `<!doctype html>
 
         function renderMarkerHtml(marker) {
           var color = marker.color || '#0078D4';
+          var textColor = marker.textColor || '#fff';
           var label = escapeHtml(marker.label || '');
           var isCluster = !!marker.isCluster;
           var minWidth = isCluster ? 36 : 28;
           return (
             '<div class="wiseplan-label" style="background:' +
             color +
+            ';color:' +
+            textColor +
             ';min-width:' +
             minWidth +
             'px;">' +

@@ -45,6 +45,67 @@
       </section>
 
       <section class="card">
+        <h2>Settings Tab (Decision Engine)</h2>
+        <div class="row wrap">
+          <input id="settingsUserIdInput" type="text" placeholder="User UUID" />
+          <button id="loadDecisionSettingsBtn" type="button">Load settings</button>
+          <button id="saveDecisionSettingsBtn" type="button">Save settings</button>
+        </div>
+
+        <div class="grid two" style="margin-top: 12px;">
+          <label>
+            Working hours start (HH:mm)
+            <input id="decisionWorkingStartInput" type="text" value="08:00" />
+          </label>
+          <label>
+            Working hours end (HH:mm)
+            <input id="decisionWorkingEndInput" type="text" value="17:00" />
+          </label>
+          <label>
+            Pre-meeting buffer (min)
+            <input id="decisionPreBufferInput" type="number" min="0" max="240" step="1" value="15" />
+          </label>
+          <label>
+            Post-meeting buffer (min)
+            <input id="decisionPostBufferInput" type="number" min="0" max="240" step="1" value="15" />
+          </label>
+          <label>
+            Max same-day detour (km)
+            <input id="decisionDistanceThresholdInput" type="number" min="0" max="1000" step="1" value="30" />
+          </label>
+          <label>
+            Far-detour min savings (min)
+            <input id="decisionFarDetourSavingsInput" type="number" min="0" max="240" step="1" value="20" />
+          </label>
+          <label>
+            Duration preset 1 (min)
+            <input id="decisionDurationPreset1Input" type="number" min="15" max="480" step="15" value="30" />
+          </label>
+          <label>
+            Duration preset 2 (min)
+            <input id="decisionDurationPreset2Input" type="number" min="15" max="480" step="15" value="60" />
+          </label>
+          <label>
+            Duration preset 3 (min)
+            <input id="decisionDurationPreset3Input" type="number" min="15" max="480" step="15" value="90" />
+          </label>
+          <label>
+            Always start from home base
+            <select id="decisionAlwaysStartInput">
+              <option value="true" selected>true</option>
+              <option value="false">false</option>
+            </select>
+          </label>
+        </div>
+
+        <h3>Loaded user settings</h3>
+        <pre id="decisionSettingsPre" class="pre"></pre>
+
+        <h3>Hardcoded engine constants (reference)</h3>
+        <div id="engineConstantsTableWrap" class="tableWrap"></div>
+      </section>
+
+      <section class="card">
         <h2>Admin Allowlist</h2>
         <div class="row wrap">
           <input id="allowUserIdInput" type="text" placeholder="User UUID" />

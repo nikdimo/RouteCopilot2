@@ -38,6 +38,19 @@ function formatTime(ms: number): string {
   return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
 }
 
+function formatCoord(coord?: { lat: number; lon: number } | null): string {
+  if (!coord) return 'n/a';
+  const lat = Number.isFinite(coord.lat) ? coord.lat.toFixed(5) : 'n/a';
+  const lon = Number.isFinite(coord.lon) ? coord.lon.toFixed(5) : 'n/a';
+  return `${lat}, ${lon}`;
+}
+
+function formatMeetingTitleForDisplay(title: string, showQaDebug: boolean): string {
+  const corrected = title.replace(/\bpsuher\b/gi, 'pusher');
+  if (showQaDebug) return corrected;
+  return corrected.replace(/\s*\[#\d+\]\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+}
+
 type PusherImpact = {
   eventId: string;
   title: string;
@@ -121,10 +134,32 @@ function ExplainSheet({ explain, onClose }: { explain: SlotExplain; onClose: () 
           <ScrollView style={explainStyles.scroll}>
             <Text style={explainStyles.section}>Gap: {explain.gapMinutes.toFixed(1)} min</Text>
             <Text style={explainStyles.section}>Travel: {explain.travelToMinutes}m to, {explain.travelFromMinutes}m from {explain.travelToUsedFallback || explain.travelFromUsedFallback ? '(fallback coords)' : ''}</Text>
+            <Text style={explainStyles.section}>Coords: HOME={formatCoord(explain.homeCoord)} | NEW={formatCoord(explain.newMeetingCoord)}</Text>
+            <Text style={explainStyles.section}>Coords: PREV={formatCoord(explain.prevCoord)} | NEXT={formatCoord(explain.nextCoord)}</Text>
             <Text style={explainStyles.section}>Buffers: pre={explain.preBuffer}m post={explain.postBuffer}m</Text>
             <Text style={explainStyles.section}>Meeting: {formatTime(explain.meetingStartMs)}–{formatTime(explain.meetingEndMs)}</Text>
             <Text style={explainStyles.section}>Baseline: {explain.baselineMinutes}m | New path: {explain.newPathMinutes}m | Detour: {explain.detourMinutes}m ({explain.detourKm.toFixed(1)} km) | Tier: {explain.tier}</Text>
             <Text style={explainStyles.section}>Slack: {explain.slackMinutes}m | Score: {explain.score}</Text>
+            {(explain.baselineDayRouteMinutes != null || explain.candidateDayRouteMinutes != null || explain.sameDayMarginalMinutes != null) && (
+              <Text style={explainStyles.section}>
+                Day route: baseline={explain.baselineDayRouteMinutes ?? 'n/a'}m | candidate={explain.candidateDayRouteMinutes ?? 'n/a'}m | marginal={explain.sameDayMarginalMinutes ?? 'n/a'}m
+              </Text>
+            )}
+            {(explain.bestEmptyDayRoundTripMinutes != null || explain.farDetourSavingsMinutes != null) && (
+              <Text style={explainStyles.section}>
+                Empty-day compare: empty={explain.bestEmptyDayRoundTripMinutes ?? 'n/a'}m | saving={explain.farDetourSavingsMinutes ?? 'n/a'}m
+              </Text>
+            )}
+            {(explain.baselineDayRouteKm != null || explain.candidateDayRouteKm != null || explain.sameDayMarginalKm != null) && (
+              <Text style={explainStyles.section}>
+                Day route km: baseline={explain.baselineDayRouteKm != null ? explain.baselineDayRouteKm.toFixed(1) : 'n/a'} | candidate={explain.candidateDayRouteKm != null ? explain.candidateDayRouteKm.toFixed(1) : 'n/a'} | marginal={explain.sameDayMarginalKm != null ? explain.sameDayMarginalKm.toFixed(1) : 'n/a'}
+              </Text>
+            )}
+            {(explain.bestEmptyDayRoundTripKm != null || explain.farDetourSavingsKm != null) && (
+              <Text style={explainStyles.section}>
+                Empty-day km compare: empty={explain.bestEmptyDayRoundTripKm != null ? explain.bestEmptyDayRoundTripKm.toFixed(1) : 'n/a'} | saving={explain.farDetourSavingsKm != null ? explain.farDetourSavingsKm.toFixed(1) : 'n/a'}
+              </Text>
+            )}
             <Text style={explainStyles.section}>Times: arriveBy={formatTime(explain.arriveByMs)} departAt={formatTime(explain.departAtMs)}</Text>
             {(Array.isArray(explain.shiftedEvents) && explain.shiftedEvents.length > 0) ? (
               <Text style={[explainStyles.section, explainStyles.warn]}>
@@ -171,6 +206,9 @@ export type GhostSlotCardProps = {
   slot: ScoredSlot;
   preBuffer: number;
   postBuffer: number;
+  decisionMetric?: 'minutes' | 'km';
+  startFromHomeBase?: boolean;
+  showQaDebug?: boolean;
   isSelected: boolean;
   isBestOption?: boolean;
   /** When true, show date in the header (e.g. for Best Options carousel) */
@@ -187,6 +225,9 @@ export default function GhostSlotCard({
   slot,
   preBuffer,
   postBuffer,
+  decisionMetric = 'minutes',
+  startFromHomeBase = true,
+  showQaDebug = false,
   isSelected,
   isBestOption,
   showDate,
@@ -201,9 +242,21 @@ export default function GhostSlotCard({
   const arriveByMs = slot.startMs - preBuffer * MS_PER_MIN;
   const departAtMs = slot.endMs + postBuffer * MS_PER_MIN;
   const isOnRoute = (slot.metrics.detourKm ?? 0) <= 5;
-  const hasExplain = typeof __DEV__ !== 'undefined' && __DEV__ && slot.explain;
+  const hasExplain = showQaDebug && slot.explain;
   const pusherImpacts = getPusherImpacts(slot);
   const hasPusher = pusherImpacts.length > 0;
+  const slackMinutes = slot.metrics.slackMinutes ?? 0;
+  const tightSlack = slackMinutes > 0 && slackMinutes < 10;
+
+  const explain = slot.explain;
+  const sameDayDeltaKm = explain?.sameDayMarginalKm ?? null;
+  const sameDayDeltaMin = explain?.sameDayMarginalMinutes ?? null;
+  const emptyDaySavingKm = explain?.farDetourSavingsKm ?? null;
+  const emptyDaySavingMin = explain?.farDetourSavingsMinutes ?? null;
+  const baselineDayKm = explain?.baselineDayRouteKm ?? null;
+  const candidateDayKm = explain?.candidateDayRouteKm ?? null;
+  const baselineDayMin = explain?.baselineDayRouteMinutes ?? null;
+  const candidateDayMin = explain?.candidateDayRouteMinutes ?? null;
 
   const handleInfoPress = () => {
     if (hasExplain) {
@@ -229,6 +282,27 @@ export default function GhostSlotCard({
   const whyLine = hasExplain && slot.explain
     ? `Prev=${slot.explain.prev.title} (${formatTime(slot.explain.prev.startMs)}–${formatTime(slot.explain.prev.endMs)}, coord=${slot.explain.prev.hasCoord ? 'yes' : 'no'}) Next=${slot.explain.next.title} (${formatTime(slot.explain.next.startMs)}–${formatTime(slot.explain.next.endMs)}, coord=${slot.explain.next.hasCoord ? 'yes' : 'no'})`
     : null;
+  const debugCoordsLine = hasExplain && slot.explain
+    ? `HOME ${formatCoord(slot.explain.homeCoord)} | NEW ${formatCoord(slot.explain.newMeetingCoord)}`
+    : null;
+  const debugAnchorCoordsLine = hasExplain && slot.explain
+    ? `PREV ${formatCoord(slot.explain.prevCoord)} | NEXT ${formatCoord(slot.explain.nextCoord)}`
+    : null;
+  const debugSavingsLine = hasExplain && slot.explain && (
+    slot.explain.sameDayMarginalMinutes != null ||
+    slot.explain.bestEmptyDayRoundTripMinutes != null ||
+    slot.explain.farDetourSavingsMinutes != null
+  )
+    ? `MARG ${slot.explain.sameDayMarginalMinutes ?? 'n/a'}m | EMPTY ${slot.explain.bestEmptyDayRoundTripMinutes ?? 'n/a'}m | SAVE ${slot.explain.farDetourSavingsMinutes ?? 'n/a'}m`
+    : null;
+  const debugSavingsKmLine = hasExplain && slot.explain && (
+    slot.explain.sameDayMarginalKm != null ||
+    slot.explain.bestEmptyDayRoundTripKm != null ||
+    slot.explain.farDetourSavingsKm != null
+  )
+    ? `MARG ${slot.explain.sameDayMarginalKm != null ? slot.explain.sameDayMarginalKm.toFixed(1) : 'n/a'}km | EMPTY ${slot.explain.bestEmptyDayRoundTripKm != null ? slot.explain.bestEmptyDayRoundTripKm.toFixed(1) : 'n/a'}km | SAVE ${slot.explain.farDetourSavingsKm != null ? slot.explain.farDetourSavingsKm.toFixed(1) : 'n/a'}km`
+    : null;
+  const displayLabel = formatMeetingTitleForDisplay(slot.label, showQaDebug);
 
   return (
     <TouchableOpacity
@@ -250,9 +324,51 @@ export default function GhostSlotCard({
               </View>
             )}
           </View>
-          <Text style={styles.label}>{slot.label}</Text>
-          {whyLine != null && (
+          <Text style={styles.label}>{displayLabel}</Text>
+          <View style={styles.metaChips}>
+            {showQaDebug && (
+              <Text style={styles.metaChip}>Return to base: {startFromHomeBase ? 'ON' : 'OFF'}</Text>
+            )}
+            {showQaDebug && (
+              <Text style={styles.metaChip}>{decisionMetric === 'km' ? 'Optimizing distance' : 'Optimizing time'}</Text>
+            )}
+            {tightSlack && <Text style={[styles.metaChip, styles.metaChipWarn]}>Tight slack: {slackMinutes}m</Text>}
+          </View>
+          {showQaDebug && whyLine != null && (
             <Text style={styles.whyLine} numberOfLines={2}>{whyLine}</Text>
+          )}
+          {showQaDebug && debugCoordsLine != null && (
+            <Text style={styles.debugLine} numberOfLines={2}>{debugCoordsLine}</Text>
+          )}
+          {showQaDebug && debugAnchorCoordsLine != null && (
+            <Text style={styles.debugLine} numberOfLines={2}>{debugAnchorCoordsLine}</Text>
+          )}
+          {showQaDebug && debugSavingsLine != null && (
+            <Text style={styles.debugLine} numberOfLines={1}>{debugSavingsLine}</Text>
+          )}
+          {showQaDebug && debugSavingsKmLine != null && (
+            <Text style={styles.debugLine} numberOfLines={1}>{debugSavingsKmLine}</Text>
+          )}
+          {showQaDebug && explain && (
+            <View style={styles.deltaBox}>
+              <Text style={styles.deltaLine}>
+                Adds vs today: {sameDayDeltaKm != null ? `${sameDayDeltaKm.toFixed(1)} km` : 'n/a'}
+                {sameDayDeltaMin != null ? ` / ${sameDayDeltaMin} min` : ''}
+              </Text>
+              {(emptyDaySavingKm != null || emptyDaySavingMin != null) && (
+                <Text style={styles.deltaLine}>
+                  Saves vs empty day: {emptyDaySavingKm != null ? `${emptyDaySavingKm.toFixed(1)} km` : 'n/a'}
+                  {emptyDaySavingMin != null ? ` / ${Math.round(emptyDaySavingMin)} min` : ''}
+                </Text>
+              )}
+              {(baselineDayKm != null || candidateDayKm != null || baselineDayMin != null || candidateDayMin != null) && (
+                <Text style={styles.deltaLine}>
+                  Total day drive: {baselineDayKm != null && candidateDayKm != null ? `${baselineDayKm.toFixed(1)} → ${candidateDayKm.toFixed(1)} km` : ''}
+                  {(baselineDayKm != null || candidateDayKm != null) && (baselineDayMin != null || candidateDayMin != null) ? ' · ' : ''}
+                  {baselineDayMin != null && candidateDayMin != null ? `${baselineDayMin} → ${candidateDayMin} min` : ''}
+                </Text>
+              )}
+            </View>
           )}
           <View style={styles.badges}>
             {slot.tier === 4 ? (
@@ -399,10 +515,35 @@ const styles = StyleSheet.create({
     color: '#605E5C',
     marginBottom: 4,
   },
+  metaChips: {
+    marginBottom: 4,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  metaChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
+    color: '#0f172a',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  metaChipWarn: {
+    backgroundColor: '#fef3c7',
+    color: '#92400e',
+  },
   whyLine: {
     fontSize: 10,
     color: '#64748b',
     marginBottom: 4,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  debugLine: {
+    fontSize: 10,
+    color: '#334155',
+    marginBottom: 2,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   badges: {
@@ -425,6 +566,18 @@ const styles = StyleSheet.create({
   detourText: {
     fontSize: 12,
     color: '#605E5C',
+  },
+  deltaBox: {
+    marginTop: 6,
+    marginBottom: 2,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#f8fafc',
+    gap: 2,
+  },
+  deltaLine: {
+    fontSize: 11,
+    color: '#0f172a',
   },
   pusherBadge: {
     paddingHorizontal: 8,
@@ -496,3 +649,6 @@ const styles = StyleSheet.create({
     padding: 6,
   },
 });
+
+
+

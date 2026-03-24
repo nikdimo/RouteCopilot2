@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAdmin, requireSuperAdmin } from "../middleware/admin.js";
 import type { AuthenticatedRequest } from "../middleware/types.js";
+import { getUserProfileSettings, updateUserProfileSettings } from "../services/profileSettingsService.js";
 import {
   getAdminMe,
   insertAdminAudit,
@@ -25,8 +26,18 @@ const listQuerySchema = z.object({
 const dayKeySchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/);
+const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const userIdSchema = z.string().uuid();
+const workingDaysSchema = z.tuple([
+  z.boolean(),
+  z.boolean(),
+  z.boolean(),
+  z.boolean(),
+  z.boolean(),
+  z.boolean(),
+  z.boolean()
+]);
 
 const adminRoleSchema = z.enum(["support_admin", "super_admin"]);
 const subscriptionTierSchema = z.enum(["free", "basic", "pro", "premium"]);
@@ -51,6 +62,60 @@ const stateQuerySchema = z.object({
 const auditQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100)
 });
+const adminDecisionSettingsPatchSchema = z
+  .object({
+    workingHours: z
+      .object({
+        start: z.string().regex(hhmmRegex).optional(),
+        end: z.string().regex(hhmmRegex).optional()
+      })
+      .optional(),
+    workingDays: workingDaysSchema.optional(),
+    preMeetingBuffer: z.number().int().min(0).max(240).optional(),
+    postMeetingBuffer: z.number().int().min(0).max(240).optional(),
+    distanceThresholdKm: z.number().finite().min(0).max(1000).optional(),
+    farDetourOverrideMinSavingsMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(240)
+      .optional(),
+    decisionOptimizationMetric: z.enum(["minutes", "km"]).optional(),
+    meetingDurationPresets: z
+      .tuple([
+        z.number().int().min(15).max(480).multipleOf(15),
+        z.number().int().min(15).max(480).multipleOf(15),
+        z.number().int().min(15).max(480).multipleOf(15)
+      ])
+      .optional(),
+    alwaysStartFromHomeBase: z.boolean().optional()
+  })
+  .refine(
+    (value) => {
+      if (!value.meetingDurationPresets) return true;
+      const [a, b, c] = value.meetingDurationPresets;
+      return a < b && b < c;
+    },
+    {
+      message: "meetingDurationPresets must be strictly increasing",
+      path: ["meetingDurationPresets"]
+    }
+  )
+  .refine(
+    (value) =>
+      value.workingHours !== undefined ||
+      value.workingDays !== undefined ||
+      value.preMeetingBuffer !== undefined ||
+      value.postMeetingBuffer !== undefined ||
+      value.distanceThresholdKm !== undefined ||
+      value.farDetourOverrideMinSavingsMinutes !== undefined ||
+      value.decisionOptimizationMetric !== undefined ||
+      value.meetingDurationPresets !== undefined ||
+      value.alwaysStartFromHomeBase !== undefined,
+    {
+      message: "At least one setting must be provided"
+    }
+  );
 
 export const adminRouter = Router();
 
@@ -234,4 +299,54 @@ adminRouter.get("/audit", async (req, res) => {
   }
   const entries = await listAdminAudit(parsed.data.limit);
   return res.json({ entries });
+});
+
+adminRouter.get("/users/:userId/profile-settings", async (req, res) => {
+  const parsed = userIdSchema.safeParse(req.params.userId);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid userId" });
+  }
+
+  try {
+    const data = await getUserProfileSettings(parsed.data);
+    return res.json(data);
+  } catch (error) {
+    console.error("Admin profile settings read error:", error);
+    return res.status(500).json({ error: "Failed to load profile settings" });
+  }
+});
+
+adminRouter.patch("/users/:userId/profile-settings", async (req: AuthenticatedRequest, res) => {
+  const userIdParsed = userIdSchema.safeParse(req.params.userId);
+  if (!userIdParsed.success) {
+    return res.status(400).json({ error: "Invalid userId" });
+  }
+
+  const bodyParsed = adminDecisionSettingsPatchSchema.safeParse(req.body);
+  if (!bodyParsed.success) {
+    return res.status(400).json({
+      error: "Invalid request body",
+      issues: bodyParsed.error.flatten()
+    });
+  }
+
+  try {
+    const data = await updateUserProfileSettings(
+      userIdParsed.data,
+      bodyParsed.data,
+      "admin",
+      { bypassAccessChecks: true }
+    );
+    await insertAdminAudit({
+      adminUserId: req.auth!.userId,
+      action: "profile.settings.admin.update",
+      targetType: "user",
+      targetId: userIdParsed.data,
+      details: bodyParsed.data
+    });
+    return res.json(data);
+  } catch (error) {
+    console.error("Admin profile settings update error:", error);
+    return res.status(500).json({ error: "Failed to update profile settings" });
+  }
 });

@@ -47,6 +47,14 @@ function parseTimeRange(timeStr: string | undefined, dayStartMs: number): { star
   return { startMs, endMs };
 }
 
+function formatMeetingTitleForDisplay(title: string | null | undefined, showQaDebug: boolean): string {
+  const raw = (title ?? '').trim();
+  if (!raw) return '(No title)';
+  if (showQaDebug) return raw;
+  // Hide debug/import suffixes like "[#4449]" in production UI.
+  return raw.replace(/\s*\[#\d+\]\s*/g, ' ').trim() || '(No title)';
+}
+
 export function buildTimelineEntries(
   dayIso: string,
   events: CalendarEvent[],
@@ -144,6 +152,9 @@ export type DayTimelineProps = {
   entries: TimelineEntry[];
   preBuffer: number;
   postBuffer: number;
+  decisionMetric?: 'minutes' | 'km';
+  startFromHomeBase?: boolean;
+  showQaDebug?: boolean;
   selectedSlotId: string | null;
   bestOptionIds: Set<string>;
   onSelectSlot: (slot: ScoredSlot) => void;
@@ -158,6 +169,9 @@ export default function DayTimeline({
   entries,
   preBuffer,
   postBuffer,
+  decisionMetric = 'minutes',
+  startFromHomeBase = true,
+  showQaDebug = false,
   selectedSlotId,
   bestOptionIds,
   onSelectSlot,
@@ -176,7 +190,7 @@ export default function DayTimeline({
             <MeetingCard
               key={entry.event.id}
               timeRange={formatTimeRange(entry.startMs, entry.endMs)}
-              client={entry.event.title ?? '(No title)'}
+              client={formatMeetingTitleForDisplay(entry.event.title, showQaDebug)}
               address={entry.event.location ?? ''}
               statusColor="#107C10"
               variantBooked
@@ -193,6 +207,9 @@ export default function DayTimeline({
             slot={slot}
             preBuffer={preBuffer}
             postBuffer={postBuffer}
+            decisionMetric={decisionMetric}
+            startFromHomeBase={startFromHomeBase}
+            showQaDebug={showQaDebug}
             isSelected={selectedSlotId === id}
             isBestOption={bestOptionIds.has(id)}
             onSelect={() => onSelectSlot(slot)}

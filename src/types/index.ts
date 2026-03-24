@@ -30,6 +30,18 @@ export type UserPreferences = {
   workingDays?: WorkingDays;
   /** Max same-day detour km (default 30). Same-day slots with detour > threshold are excluded; empty day suggested instead. */
   distanceThresholdKm?: number;
+  /**
+   * Minutes a same-day "far detour" slot must save versus the best empty-day option
+   * before it can bypass the max detour distance threshold.
+   */
+  farDetourOverrideMinSavingsMinutes?: number;
+  /**
+   * Primary optimization basis for scoring and far-detour override comparisons.
+   * 'minutes' favors total time efficiency, 'km' favors distance efficiency.
+   */
+  decisionOptimizationMetric?: 'minutes' | 'km';
+  /** Three preferred meeting duration presets in minutes (e.g. [30, 60, 90]). */
+  meetingDurationPresets?: [number, number, number];
   /** Use Google Places/Geocoding API for address search instead of free OpenStreetMap (Nominatim). Requires googleMapsApiKey. */
   useGoogleGeocoding?: boolean;
   /** Enable traffic-aware backend routing when included in subscription. */
@@ -70,6 +82,9 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   workingDays: DEFAULT_WORKING_DAYS,
   homeBase: DEFAULT_HOME_BASE,
   distanceThresholdKm: 30,
+  farDetourOverrideMinSavingsMinutes: 20,
+  decisionOptimizationMetric: 'minutes',
+  meetingDurationPresets: [30, 60, 90],
   useGoogleGeocoding: false,
   useTrafficAwareRouting: false,
   calendarConnected: false,

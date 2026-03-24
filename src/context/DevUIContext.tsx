@@ -8,6 +8,8 @@ type DevUIContextValue = {
   mockMapStyleIndex: number;
   setMockMapStyleIndex: (index: number) => void;
   mockMapStyleCount: number;
+  showQaDebug: boolean;
+  setShowQaDebug: (value: boolean) => void;
 };
 
 const DevUIContext = createContext<DevUIContextValue | null>(null);
@@ -19,8 +21,12 @@ function clampMockMapStyleIndex(index: number) {
 }
 
 export function DevUIProvider({ children }: { children: React.ReactNode }) {
+  const envQaFlag =
+    typeof process !== 'undefined' &&
+    process.env?.EXPO_PUBLIC_SHOW_QA_DEBUG === 'true';
   const [showOldUI, setShowOldUI] = useState(false);
   const [mockMapStyleIndex, setMockMapStyleIndexState] = useState(0);
+  const [showQaDebug, setShowQaDebug] = useState(Boolean(envQaFlag));
 
   const setMockMapStyleIndex = useCallback((index: number) => {
     setMockMapStyleIndexState(clampMockMapStyleIndex(index));
@@ -33,8 +39,10 @@ export function DevUIProvider({ children }: { children: React.ReactNode }) {
       mockMapStyleIndex,
       setMockMapStyleIndex,
       mockMapStyleCount: MOCK_MAP_STYLE_COUNT,
+      showQaDebug,
+      setShowQaDebug,
     }),
-    [showOldUI, mockMapStyleIndex, setMockMapStyleIndex]
+    [showOldUI, mockMapStyleIndex, setMockMapStyleIndex, showQaDebug]
   );
 
   return <DevUIContext.Provider value={value}>{children}</DevUIContext.Provider>;

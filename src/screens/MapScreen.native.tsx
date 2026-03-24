@@ -247,7 +247,7 @@ export default function MapScreen({ embeddedInSchedule }: MapScreenProps = {}) {
     }
 
     return lines;
-  }, [mainPolylineCoords]);
+  }, [mainPolylineCoords, osrmRoute?.coordinates]);
 
   const clearSelection = useCallback(() => {
     setSelectedArrivalLegIndex(null);

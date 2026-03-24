@@ -42,6 +42,20 @@ const profileSettingsPatchSchema = z
     homeBaseLabel: z.string().trim().max(300).nullable().optional(),
     workingDays: workingDaysSchema.optional(),
     distanceThresholdKm: z.number().finite().min(0).max(1000).optional(),
+    farDetourOverrideMinSavingsMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(240)
+      .optional(),
+    decisionOptimizationMetric: z.enum(["minutes", "km"]).optional(),
+    meetingDurationPresets: z
+      .tuple([
+        z.number().int().min(15).max(480).multipleOf(15),
+        z.number().int().min(15).max(480).multipleOf(15),
+        z.number().int().min(15).max(480).multipleOf(15)
+      ])
+      .optional(),
     alwaysStartFromHomeBase: z.boolean().optional(),
     useGoogleGeocoding: z.boolean().optional(),
     useTrafficAwareRouting: z.boolean().optional(),
@@ -49,6 +63,17 @@ const profileSettingsPatchSchema = z
     calendarConnected: z.boolean().optional(),
     calendarProvider: z.enum(["outlook"]).nullable().optional()
   })
+  .refine(
+    (value) => {
+      if (!value.meetingDurationPresets) return true;
+      const [a, b, c] = value.meetingDurationPresets;
+      return a < b && b < c;
+    },
+    {
+      message: "meetingDurationPresets must be strictly increasing",
+      path: ["meetingDurationPresets"]
+    }
+  )
   .refine(
     (value) =>
       value.workingHours !== undefined ||
@@ -58,6 +83,9 @@ const profileSettingsPatchSchema = z
       value.homeBaseLabel !== undefined ||
       value.workingDays !== undefined ||
       value.distanceThresholdKm !== undefined ||
+      value.farDetourOverrideMinSavingsMinutes !== undefined ||
+      value.decisionOptimizationMetric !== undefined ||
+      value.meetingDurationPresets !== undefined ||
       value.alwaysStartFromHomeBase !== undefined ||
       value.useGoogleGeocoding !== undefined ||
       value.useTrafficAwareRouting !== undefined ||

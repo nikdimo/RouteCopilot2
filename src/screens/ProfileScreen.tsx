@@ -5,7 +5,9 @@ import {
   Alert,
   LayoutChangeEvent,
   Linking,
+  Modal,
   Platform,
+  Pressable,
   ScrollView,
   Switch,
   Text,
@@ -66,6 +68,9 @@ import { clearLocalDataNow, MAX_SLOT, MAX_SLOT_15, parseNumber, slot15ToSlot5, s
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DEFAULT_BILLING_URL = 'https://www.wiseplan.dk/account/billing';
+const DURATION_PRESET_STEP_MINUTES = 15;
+const DURATION_PRESET_MINUTES_MIN = 15;
+const DURATION_PRESET_MINUTES_MAX = 8 * 60;
 
 function toPlanName(tier: 'free' | 'basic' | 'pro' | 'premium') {
   if (tier === 'premium') return 'Premium Plan';
@@ -99,6 +104,23 @@ function inferCountryCodeFromHomeBase(homeBase?: { lat: number; lon: number } | 
   return undefined;
 }
 
+function normalizeDurationPresets(
+  presets: [number, number, number] | undefined | null
+): [number, number, number] {
+  const fallback: [number, number, number] = [30, 60, 90];
+  if (!presets) return fallback;
+  const snapped = presets
+    .map((value, index) => {
+      const base = Number.isFinite(value) ? value : fallback[index]!;
+      const rounded = Math.round(base / DURATION_PRESET_STEP_MINUTES) * DURATION_PRESET_STEP_MINUTES;
+      return Math.max(DURATION_PRESET_MINUTES_MIN, Math.min(DURATION_PRESET_MINUTES_MAX, rounded));
+    })
+    .sort((a, b) => a - b);
+  if (snapped[1]! <= snapped[0]!) snapped[1] = Math.min(DURATION_PRESET_MINUTES_MAX, snapped[0]! + DURATION_PRESET_STEP_MINUTES);
+  if (snapped[2]! <= snapped[1]!) snapped[2] = Math.min(DURATION_PRESET_MINUTES_MAX, snapped[1]! + DURATION_PRESET_STEP_MINUTES);
+  return [snapped[0]!, snapped[1]!, snapped[2]!];
+}
+
 type WebDialogHost = {
   alert?: (message?: string) => void;
   confirm?: (message?: string) => boolean;
@@ -108,7 +130,9 @@ function showPlatformAlert(title: string, message?: string) {
   if (Platform.OS === 'web') {
     const host = globalThis as WebDialogHost;
     if (typeof host.alert === 'function') {
-      host.alert(message ? `${title}\n\n${message}` : title);
+      host.alert(message ? `${title}
+
+${message}` : title);
       return;
     }
   }
@@ -128,7 +152,9 @@ function confirmDestructiveAction(
   if (Platform.OS === 'web') {
     const host = globalThis as WebDialogHost;
     if (typeof host.confirm === 'function') {
-      if (host.confirm(`${title}\n\n${message}`)) {
+      if (host.confirm(`${title}
+
+${message}`)) {
         onConfirm();
       }
       return;
@@ -139,6 +165,31 @@ function confirmDestructiveAction(
     { text: 'Cancel', style: 'cancel' },
     { text: confirmText, style: 'destructive', onPress: onConfirm },
   ]);
+}
+
+function SettingHint({ meaning, example }: { meaning: string; example: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const toggleExpand = useCallback(() => {
+    setExpanded((prev) => !prev);
+  }, []);
+
+  return (
+    <>
+      <Pressable onPress={toggleExpand} style={styles.settingInfoAnchor}>
+        <View style={[styles.settingInfoBadge, expanded && { backgroundColor: '#BFDBFE', borderColor: '#60A5FA' }]}>
+          <Text style={styles.settingInfoBadgeText}>!</Text>
+        </View>
+      </Pressable>
+      
+      {expanded && (
+        <View style={styles.settingInfoInlineBox}>
+          <Text style={styles.settingInfoInlineText}>{meaning}</Text>
+          <Text style={styles.settingInfoInlineExample}>Example: {example}</Text>
+        </View>
+      )}
+    </>
+  );
 }
 
 const RANGE_THUMB_SIZE = 28;
@@ -508,6 +559,15 @@ export default function ProfileScreen() {
     profileAccess.trialPlanCode !== 'basic';
 
   const workingDays = preferences.workingDays ?? DEFAULT_WORKING_DAYS;
+  const distanceThresholdKm = Math.round(preferences.distanceThresholdKm ?? 30);
+  const farDetourOverrideMinSavingsMinutes = Math.round(
+    preferences.farDetourOverrideMinSavingsMinutes ?? 20
+  );
+  const decisionOptimizationMetric = preferences.decisionOptimizationMetric ?? 'minutes';
+  const meetingDurationPresets = useMemo(
+    () => normalizeDurationPresets(preferences.meetingDurationPresets),
+    [preferences.meetingDurationPresets]
+  );
   const highPrecisionEnabled = preferences.useGoogleGeocoding === true;
   const useGoogle = canUseBetterGeocoding && highPrecisionEnabled;
   const useTrafficRouting = canUseTrafficAwareRouting && preferences.useTrafficAwareRouting === true;
@@ -562,6 +622,10 @@ export default function ProfileScreen() {
 
   const applyRemoteProfileSettings = (remote: BackendProfileSettingsResponse) => {
     setProfileAccess(remote.access);
+    const localDecisionMetric = preferences.decisionOptimizationMetric ?? 'minutes';
+    const remoteDecisionMetric = remote.settings.decisionOptimizationMetric;
+    const resolvedDecisionMetric: 'minutes' | 'km' =
+      remoteDecisionMetric ?? localDecisionMetric;
     updatePreferences({
       subscriptionTier: remote.access.subscriptionTier,
       workingHours: remote.settings.workingHours,
@@ -574,6 +638,9 @@ export default function ProfileScreen() {
       homeBaseLabel: remote.settings.homeBaseLabel,
       workingDays: remote.settings.workingDays,
       distanceThresholdKm: remote.settings.distanceThresholdKm,
+      farDetourOverrideMinSavingsMinutes: remote.settings.farDetourOverrideMinSavingsMinutes,
+      decisionOptimizationMetric: resolvedDecisionMetric,
+      meetingDurationPresets: remote.settings.meetingDurationPresets,
       alwaysStartFromHomeBase: remote.settings.alwaysStartFromHomeBase,
       useGoogleGeocoding: remote.settings.useGoogleGeocoding,
       useTrafficAwareRouting: remote.settings.useTrafficAwareRouting,
@@ -650,6 +717,15 @@ export default function ProfileScreen() {
     if (patch.homeBaseLabel !== undefined) next.homeBaseLabel = patch.homeBaseLabel ?? undefined;
     if (patch.workingDays !== undefined) next.workingDays = patch.workingDays;
     if (patch.distanceThresholdKm !== undefined) next.distanceThresholdKm = patch.distanceThresholdKm;
+    if (patch.farDetourOverrideMinSavingsMinutes !== undefined) {
+      next.farDetourOverrideMinSavingsMinutes = patch.farDetourOverrideMinSavingsMinutes;
+    }
+    if (patch.decisionOptimizationMetric !== undefined) {
+      next.decisionOptimizationMetric = patch.decisionOptimizationMetric;
+    }
+    if (patch.meetingDurationPresets !== undefined) {
+      next.meetingDurationPresets = patch.meetingDurationPresets;
+    }
     if (patch.alwaysStartFromHomeBase !== undefined) {
       next.alwaysStartFromHomeBase = patch.alwaysStartFromHomeBase;
     }
@@ -663,12 +739,17 @@ export default function ProfileScreen() {
 
   const saveProfilePatch = async (
     patch: BackendProfileSettingsPatch,
-    key?: 'advanced' | 'traffic' | 'calendar'
+    key?: 'advanced' | 'traffic' | 'calendar',
+    options?: { optimisticLocal?: boolean; refreshOnError?: boolean }
   ) => {
     const authToken = await resolveAuthToken();
     if (!authToken || !canEditSettings) {
       showLockedSettingsMessage();
       return false;
+    }
+
+    if (options?.optimisticLocal) {
+      applyLocalPatch(patch);
     }
 
     if (!BACKEND_API_ENABLED) {
@@ -681,12 +762,16 @@ export default function ProfileScreen() {
       const result = await backendUpdateProfileSettings(patch, authToken);
       if (!result) {
         Alert.alert('Sync failed', 'Could not save profile settings right now.');
-        await refreshBackendProfileData();
+        if (options?.refreshOnError !== false) {
+          await refreshBackendProfileData();
+        }
         return false;
       }
       if (result.ok === false) {
         Alert.alert(result.status === 403 ? 'Settings locked' : 'Sync failed', result.error);
-        await refreshBackendProfileData();
+        if (options?.refreshOnError !== false) {
+          await refreshBackendProfileData();
+        }
         return false;
       }
 
@@ -1065,6 +1150,65 @@ export default function ProfileScreen() {
     void saveProfilePatch({ postMeetingBuffer: n });
   };
 
+  const adjustDistanceThresholdKm = (delta: number) => {
+    if (!canEditSettings) {
+      showLockedSettingsMessage();
+      return;
+    }
+    const next = Math.max(0, Math.min(1000, distanceThresholdKm + delta));
+    void saveProfilePatch(
+      { distanceThresholdKm: next },
+      undefined,
+      { optimisticLocal: true, refreshOnError: false }
+    );
+  };
+
+  const setDecisionOptimizationMetric = (metric: 'minutes' | 'km') => {
+    if (!canEditSettings) {
+      showLockedSettingsMessage();
+      return;
+    }
+    if (metric === decisionOptimizationMetric) return;
+    void saveProfilePatch(
+      { decisionOptimizationMetric: metric },
+      undefined,
+      { optimisticLocal: true, refreshOnError: false }
+    );
+  };
+
+  const adjustFarDetourOverrideMinutes = (delta: number) => {
+    if (!canEditSettings) {
+      showLockedSettingsMessage();
+      return;
+    }
+    const next = Math.max(0, Math.min(240, farDetourOverrideMinSavingsMinutes + delta));
+    void saveProfilePatch(
+      { farDetourOverrideMinSavingsMinutes: next },
+      undefined,
+      { optimisticLocal: true, refreshOnError: false }
+    );
+  };
+
+  const adjustMeetingDurationPreset = (index: 0 | 1 | 2, delta: number) => {
+    if (!canEditSettings) {
+      showLockedSettingsMessage();
+      return;
+    }
+    const nextDraft: [number, number, number] = [...meetingDurationPresets] as [number, number, number];
+    const raw = nextDraft[index] + delta;
+    const snapped = Math.round(raw / DURATION_PRESET_STEP_MINUTES) * DURATION_PRESET_STEP_MINUTES;
+    nextDraft[index] = Math.max(
+      DURATION_PRESET_MINUTES_MIN,
+      Math.min(DURATION_PRESET_MINUTES_MAX, snapped)
+    );
+    const normalized = normalizeDurationPresets(nextDraft);
+    void saveProfilePatch(
+      { meetingDurationPresets: normalized },
+      undefined,
+      { optimisticLocal: true, refreshOnError: false }
+    );
+  };
+
   const saveWorkingHours = (startSlot: number, endSlot: number) => {
     if (!canEditSettings) {
       showLockedSettingsMessage();
@@ -1270,7 +1414,13 @@ export default function ProfileScreen() {
 
       <View style={styles.sectionCard}>
         <Text style={styles.formLabelTop}>STARTING POINT</Text>
-        <Text style={styles.formValueBold}>Home Base Address</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+          <Text style={styles.formValueBold}>Home Base Address</Text>
+          <SettingHint
+            meaning="This is the place the app treats as your home or office when it calculates routes."
+            example="If Home Base is Copenhagen, the app checks the drive from Copenhagen to your first meeting and back home after the last one."
+          />
+        </View>
         <LocationSearch
           token={token}
           searchContacts={async (t, q) => {
@@ -1357,11 +1507,15 @@ export default function ProfileScreen() {
           placeholder="Search contacts or address (e.g. Copenhagen, Office)"
           allowDirectAddressSubmit
           variant="profile_home_base"
+          deferSelectionClearWhileEditing
         />
 
         <View style={styles.toggleRow}>
           <View style={styles.toggleTextCol}>
-            <Text style={styles.toggleTitle}>Return to base daily</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+          <Text style={styles.toggleTitle}>Return to base daily</Text>
+          <SettingHint meaning="Turn this on if you usually start from home and go back home every day." example="On: a late Koge meeting may be rejected if you cannot still get home in time. Off: the app assumes you can stay out in the field." />
+        </View>
             <Text style={styles.toggleSubtitle}>
               Calculate routes based on returning home every evening.
             </Text>
@@ -1376,13 +1530,126 @@ export default function ProfileScreen() {
 
         <View style={styles.divider} />
 
+        <View style={styles.toggleTextCol}>
+          <Text style={styles.formLabelTop}>ROUTING LIMIT</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+          <Text style={styles.formValueBold}>Max Same-Day Detour Distance</Text>
+          <SettingHint meaning="This limits how far the app is allowed to bend your route to fit a meeting into the same day." example="If this is 30 km, a slot that adds 45 km to your day will usually be dismissed." />
+        </View>
+          <Text style={styles.toggleSubtitle}>
+            Candidate slots above this distance are normally dismissed.
+          </Text>
+          <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity
+              onPress={() => adjustDistanceThresholdKm(-5)}
+              style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#EEF2FF' }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#1D4ED8', fontWeight: '700' }}>-5</Text>
+            </TouchableOpacity>
+            <Text style={{ marginHorizontal: 12, fontSize: 16, fontWeight: '700', color: '#0F172A' }}>
+              {distanceThresholdKm} km
+            </Text>
+            <TouchableOpacity
+              onPress={() => adjustDistanceThresholdKm(5)}
+              style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#EEF2FF' }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#1D4ED8', fontWeight: '700' }}>+5</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={{ marginTop: 14 }}>
+          <Text style={styles.formLabelTop}>OPTIMIZATION BASIS</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+          <Text style={styles.formValueBold}>Prefer Time or Distance</Text>
+          <SettingHint meaning="This tells the scheduler what matters more when two options are both possible." example="Minutes: the app may choose a slightly longer drive in km if it saves time. Kilometers: it may choose a slower route if it drives less." />
+        </View>
+          <Text style={styles.toggleSubtitle}>
+            Choose what the scheduler should optimize first when ranking and dismissing slots.
+          </Text>
+          <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity
+              onPress={() => setDecisionOptimizationMetric('minutes')}
+              style={{
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 10,
+                backgroundColor:
+                  decisionOptimizationMetric === 'minutes' ? '#DBEAFE' : '#EEF2FF',
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#1D4ED8', fontWeight: '700' }}>Minutes</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setDecisionOptimizationMetric('km')}
+              style={{
+                marginLeft: 8,
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 10,
+                backgroundColor:
+                  decisionOptimizationMetric === 'km' ? '#DBEAFE' : '#EEF2FF',
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#1D4ED8', fontWeight: '700' }}>Kilometers</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={{ marginTop: 14 }}>
+          <Text style={styles.formLabelTop}>FAR DETOUR OVERRIDE</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+          <Text style={styles.formValueBold}>Required Savings vs Empty Day</Text>
+          <SettingHint meaning="This is the minimum benefit a far same-day meeting must give before the app accepts it anyway." example="If this is 15 min, a far same-day slot is only allowed when it saves at least 15 minutes compared with doing that meeting on another empty day." />
+        </View>
+          <Text style={styles.toggleSubtitle}>
+            Allow a far same-day slot only if it saves this many{' '}
+            {decisionOptimizationMetric === 'km' ? 'kilometers' : 'minutes'} versus starting
+            from home on an empty day.
+          </Text>
+          <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity
+              onPress={() => adjustFarDetourOverrideMinutes(-5)}
+              style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#EEF2FF' }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#1D4ED8', fontWeight: '700' }}>
+                -5
+              </Text>
+            </TouchableOpacity>
+            <Text style={{ marginHorizontal: 12, fontSize: 16, fontWeight: '700', color: '#0F172A' }}>
+              {farDetourOverrideMinSavingsMinutes}{' '}
+              {decisionOptimizationMetric === 'km' ? 'km' : 'min'}
+            </Text>
+            <TouchableOpacity
+              onPress={() => adjustFarDetourOverrideMinutes(5)}
+              style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#EEF2FF' }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#1D4ED8', fontWeight: '700' }}>
+                +5
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.divider} />
+
         <View style={styles.toggleRow}>
           <View style={styles.toggleTextCol}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
               <Text style={styles.toggleTitle}>High-Precision Search</Text>
               <View style={styles.badgePill}>
                 <Text style={styles.badgePillText}>BASIC+</Text>
               </View>
+              <SettingHint
+                meaning="This uses stronger address search so the app can find places more accurately."
+                example="A difficult address may fail with basic search but work correctly when this is on."
+              />
             </View>
             <Text style={styles.toggleSubtitle}>
               Power your search with Google Maps for 99.9% accuracy.
@@ -1417,6 +1684,10 @@ export default function ProfileScreen() {
           </View>
           <View style={styles.toggleTextCol}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <SettingHint
+                meaning="This makes the app use live traffic instead of only normal driving estimates."
+                example="Heavy morning traffic can make a 9:00 slot invalid even if it looked fine without traffic."
+              />
               <Text style={[styles.toggleTitle, { marginBottom: 2 }]}>Traffic-Aware Routing</Text>
               <View style={[styles.badgePill, styles.badgePillPro]}>
                 <Text style={[styles.badgePillText, styles.badgePillTextPro]}>PRO</Text>
@@ -1490,6 +1761,10 @@ export default function ProfileScreen() {
           </View>
           <View style={styles.toggleTextCol}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <SettingHint
+                meaning="This lets WisePlan read and write your real meetings instead of only using local data."
+                example="When connected, booking a meeting from the app can also create or move it in Outlook."
+              />
               <Text style={[styles.toggleTitle, { marginBottom: 2 }]}>Connect Outlook Calendar</Text>
               <View style={styles.badgePill}>
                 <Text style={styles.badgePillText}>BASIC+</Text>
@@ -1541,7 +1816,10 @@ export default function ProfileScreen() {
           <View style={styles.sliderLabelRow}>
             <View>
               <Text style={styles.formLabelTop}>PREPARATION</Text>
-              <Text style={styles.formValueBold}>Pre-Meeting Buffer</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+          <Text style={styles.formValueBold}>Pre-Meeting Buffer</Text>
+          <SettingHint meaning="This is the time you want available before a meeting starts." example="If this is 15 min, arriving at 09:58 for a 10:00 meeting is not enough. The app wants you there by 09:45." />
+        </View>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
               <Text style={styles.sliderValueText}>{parseInt(preBuffer, 10) || 0}</Text>
@@ -1565,7 +1843,10 @@ export default function ProfileScreen() {
           <View style={styles.sliderLabelRow}>
             <View>
               <Text style={styles.formLabelTop}>DOCUMENTATION</Text>
-              <Text style={styles.formValueBold}>Post-Meeting Buffer</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+          <Text style={styles.formValueBold}>Post-Meeting Buffer</Text>
+          <SettingHint meaning="This is the time you want kept free after a meeting ends." example="If this is 15 min, a 10:00-11:00 meeting really blocks your day until 11:15 before travel starts again." />
+        </View>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
               <Text style={styles.sliderValueText}>{parseInt(postBuffer, 10) || 0}</Text>
@@ -1588,6 +1869,52 @@ export default function ProfileScreen() {
       </View>
 
       <View style={styles.sectionHeader}>
+        <View style={[styles.sectionIconBox, { backgroundColor: '#DBEAFE' }]}>
+          <Clock size={18} color="#2563EB" />
+        </View>
+        <Text style={styles.sectionTitle}>Meeting Defaults</Text>
+      </View>
+
+      <View style={styles.sectionCard}>
+        <Text style={styles.formLabelTop}>QUICK DURATION BUTTONS</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
+          <Text style={styles.formValueBold}>Duration Presets (3)</Text>
+          <SettingHint meaning="These are the default duration buttons shown when you add a new meeting." example="If your presets are 60, 120, and 180, the Add Meeting screen will offer those three lengths first." />
+        </View>
+        <Text style={styles.toggleSubtitle}>
+          These presets are used in Add Meeting for one-tap duration selection.
+        </Text>
+
+        {[0, 1, 2].map((rawIndex) => {
+          const index = rawIndex as 0 | 1 | 2;
+          return (
+            <View key={`duration-preset-${index}`} style={{ marginTop: 14 }}>
+              <Text style={styles.formLabelTop}>PRESET {index + 1}</Text>
+              <View style={{ marginTop: 6, flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity
+                  onPress={() => adjustMeetingDurationPreset(index, -DURATION_PRESET_STEP_MINUTES)}
+                  style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#EEF2FF' }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ color: '#1D4ED8', fontWeight: '700' }}>-15</Text>
+                </TouchableOpacity>
+                <Text style={{ marginHorizontal: 12, fontSize: 16, fontWeight: '700', color: '#0F172A' }}>
+                  {meetingDurationPresets[index]} min
+                </Text>
+                <TouchableOpacity
+                  onPress={() => adjustMeetingDurationPreset(index, DURATION_PRESET_STEP_MINUTES)}
+                  style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#EEF2FF' }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ color: '#1D4ED8', fontWeight: '700' }}>+15</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      <View style={styles.sectionHeader}>
         <View style={[styles.sectionIconBox, { backgroundColor: '#D1FAE5' }]}>
           <Clock size={18} color="#10B981" />
         </View>
@@ -1603,10 +1930,20 @@ export default function ProfileScreen() {
           onSlidingComplete={(start, end) => saveWorkingHours(start, end)}
           canEdit={canEditSettings}
         />
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4, marginTop: 10 }}>
+          <Text style={styles.formValueBold}>Working Hours</Text>
+          <SettingHint
+            meaning="These are the hours when the scheduler is allowed to place meetings."
+            example="If your workday ends at 17:00, the app should not suggest a meeting that makes you get home at 18:10."
+          />
+        </View>
         <View style={styles.divider} />
         <View>
           <Text style={styles.formLabelTop}>WORKING DAYS</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 4 }}>
           <Text style={styles.formValueBold}>Working Days</Text>
+          <SettingHint meaning="These are the days the scheduler is allowed to use." example="If Friday is turned off, the app will not suggest Friday slots even if Friday is empty." />
+        </View>
           <View style={styles.workingDaysRow}>
             {DAY_LABELS.map((label, i) => (
               <TouchableOpacity

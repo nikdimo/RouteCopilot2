@@ -4,7 +4,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { UserPreferences } from '../types';
 import { DEFAULT_USER_PREFERENCES, DEFAULT_WORKING_DAYS } from '../types';
 import { useAuth } from './AuthContext';
-import { backendGetFeatureAccess, backendGetProfileSettings } from '../services/backendApi';
+import {
+  backendGetFeatureAccess,
+  backendGetProfileSettings,
+  backendUpdateProfileSettings,
+} from '../services/backendApi';
 import { getSubscriptionTier } from '../utils/subscription';
 
 const PREFS_KEY = 'wiseplan_userPreferences';
@@ -76,7 +80,7 @@ function persistPreferences(next: UserPreferences) {
 }
 
 export function UserPreferencesProvider({ children }: { children: React.ReactNode }) {
-  const { userToken, getValidToken } = useAuth();
+  const { userToken, getValidToken, isRestoringSession } = useAuth();
   const [preferences, setPreferences] = useState<UserPreferences>(getInitialPreferences);
 
   useEffect(() => {
@@ -122,6 +126,7 @@ export function UserPreferencesProvider({ children }: { children: React.ReactNod
     let cancelled = false;
 
     (async () => {
+      if (isRestoringSession) return;
       if (!userToken) {
         if (cancelled) return;
         setPreferences((prev) => {
@@ -143,9 +148,23 @@ export function UserPreferencesProvider({ children }: { children: React.ReactNod
         backendGetFeatureAccess(token),
       ]);
       if (cancelled) return;
+      let metricToSync: 'minutes' | 'km' | null = null;
 
       setPreferences((prev) => {
         const signedInFallbackUseAdvanced = true;
+        const localDecisionMetric = prev.decisionOptimizationMetric ?? 'minutes';
+        const remoteDecisionMetric = remoteSettings?.settings.decisionOptimizationMetric;
+        const resolvedDecisionMetric: 'minutes' | 'km' =
+          remoteDecisionMetric === 'minutes' && localDecisionMetric === 'km'
+            ? 'km'
+            : (remoteDecisionMetric ?? localDecisionMetric);
+        if (
+          remoteSettings &&
+          remoteSettings.access.canEditSettings &&
+          remoteDecisionMetric !== resolvedDecisionMetric
+        ) {
+          metricToSync = resolvedDecisionMetric;
+        }
         const next = mergeStoredIntoDefaults(
           remoteSettings
             ? {
@@ -161,6 +180,10 @@ export function UserPreferencesProvider({ children }: { children: React.ReactNod
                 homeBaseLabel: remoteSettings.settings.homeBaseLabel,
                 workingDays: remoteSettings.settings.workingDays,
                 distanceThresholdKm: remoteSettings.settings.distanceThresholdKm,
+                farDetourOverrideMinSavingsMinutes:
+                  remoteSettings.settings.farDetourOverrideMinSavingsMinutes,
+                decisionOptimizationMetric: resolvedDecisionMetric,
+                meetingDurationPresets: remoteSettings.settings.meetingDurationPresets,
                 alwaysStartFromHomeBase: remoteSettings.settings.alwaysStartFromHomeBase,
                 useGoogleGeocoding: remoteSettings.settings.useGoogleGeocoding,
                 useTrafficAwareRouting: remoteSettings.settings.useTrafficAwareRouting,
@@ -190,12 +213,23 @@ export function UserPreferencesProvider({ children }: { children: React.ReactNod
         persistPreferences(next);
         return next;
       });
+
+      if (
+        !cancelled &&
+        remoteSettings?.access.canEditSettings &&
+        metricToSync != null
+      ) {
+        void backendUpdateProfileSettings(
+          { decisionOptimizationMetric: metricToSync },
+          token
+        ).catch(() => {});
+      }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [userToken, getValidToken]);
+  }, [userToken, getValidToken, isRestoringSession]);
 
   const updatePreferences = useCallback((partial: Partial<UserPreferences>) => {
     setPreferences((prev) => {

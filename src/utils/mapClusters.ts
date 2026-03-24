@@ -51,6 +51,8 @@ export type GetMarkerPositionsOptions = {
   focusedClusterKey?: string | null;
   /** Pixel gap for the focused cluster (default 64). */
   focusedPixelGap?: number;
+  /** Pixel gap for regular (non-focused) cluster spacing. */
+  pixelGap?: number;
 };
 
 /**
@@ -100,22 +102,22 @@ export function getMarkerPositions(
   options: GetMarkerPositionsOptions = {},
   regionParams?: { longitudeDelta: number; screenWidth: number }
 ): MarkerPosition[] {
-  const { focusedClusterKey, focusedPixelGap = 64 } = options;
+  const { focusedClusterKey, focusedPixelGap = 64, pixelGap = MARKER_DIAMETER_PX } = options;
   const clusters = getClusters(coords);
   const result: MarkerPosition[] = [];
   for (const cluster of clusters) {
     const { coordKey, indices, coordinate } = cluster;
     const clusterLat = coordinate.latitude;
     const isFocused = indices.length > 1 && focusedClusterKey === coordKey;
-    const pixelGap = isFocused ? focusedPixelGap : MARKER_DIAMETER_PX;
+    const markerPixelGap = isFocused ? focusedPixelGap : pixelGap;
     const deg = regionParams
       ? getMarkerOffsetDegreesFromRegion(
           regionParams.longitudeDelta,
           regionParams.screenWidth,
           clusterLat,
-          pixelGap
+          markerPixelGap
         )
-      : getMarkerOffsetDegrees(zoom, clusterLat, pixelGap);
+      : getMarkerOffsetDegrees(zoom, clusterLat, markerPixelGap);
     if (indices.length === 1) {
       result.push({ index: indices[0]!, coordinate });
       continue;

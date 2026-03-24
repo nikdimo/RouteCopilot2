@@ -19,6 +19,7 @@ const FLEX_WINDOW_REGEX = /\[Flexible Window:\s*([0-2]?\d:[0-5]\d)\s*to\s*([0-2]
 // ─── Helper Types ──────────────────────────────────────────────────────────────
 
 export type Coordinate = { lat: number; lon: number };
+type DecisionOptimizationMetric = 'minutes' | 'km';
 
 export type TimelineItem = {
   id: string;
@@ -65,6 +66,11 @@ export type SlotExplain = {
   dayKey: string;
   prev: SlotExplainAnchor;
   next: SlotExplainAnchor;
+  /** Coordinates used by the scorer for this slot */
+  homeCoord?: Coordinate;
+  newMeetingCoord?: Coordinate;
+  prevCoord?: Coordinate;
+  nextCoord?: Coordinate;
   prevDepartMs: number;
   arriveByMs: number;
   meetingStartMs: number;
@@ -116,6 +122,31 @@ export type SlotExplain = {
   shiftedEvents?: SlotExplainShift[];
   /** Weighted scoring components used in final ranking */
   scoreBreakdown?: SlotScoreBreakdown;
+  /** Full-route day comparison used by far-detour override */
+  baselineDayRouteMinutes?: number;
+  candidateDayRouteMinutes?: number;
+  sameDayMarginalMinutes?: number;
+  bestEmptyDayRoundTripMinutes?: number | null;
+  farDetourSavingsMinutes?: number | null;
+  baselineDayRouteKm?: number;
+  candidateDayRouteKm?: number;
+  sameDayMarginalKm?: number;
+  bestEmptyDayRoundTripKm?: number | null;
+  farDetourSavingsKm?: number | null;
+  farDetourCheck?: {
+    detourKmVal: number;
+    distanceThresholdKm: number;
+    farDetourOverrideThreshold: number;
+    sameDayMarginalKm: number;
+    sameDayMarginalMinutes: number;
+    bestEmptyDayRoundTripKm: number | null;
+    bestEmptyDayRoundTripMinutes: number | null;
+    savingsKm: number | null;
+    savingsMinutes: number | null;
+    decisionOptimizationMetric: DecisionOptimizationMetric;
+    passed: boolean;
+    reason?: string;
+  };
   eventsWithMissingCoordsUsed: string[];
 };
 
@@ -189,6 +220,12 @@ function getRoadFactor(distKm: number): number {
   if (distKm < 5) return 1.45;
   if (distKm <= 20) return 1.3;
   return 1.18;
+}
+
+/** Road-adjusted distance in km (straight-line scaled by road factor). */
+function getTravelDistanceKm(a: Coordinate, b: Coordinate): number {
+  const distKm = haversineKm(a, b);
+  return distKm * getRoadFactor(distKm);
 }
 
 /** Speed (km/h) by distance and time-of-day. No buffers. */
@@ -324,6 +361,15 @@ function formatTimeRangeMs(startMs: number, endMs: number): string {
   return `${fmt(startMs)}–${fmt(endMs)}`;
 }
 
+function formatClockMs(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+}
+
+function formatCoordShort(coord: Coordinate): string {
+  return `${coord.lat.toFixed(4)},${coord.lon.toFixed(4)}`;
+}
+
 /** Round UP to next 15-min boundary. Ensures we never propose "leave earlier than possible". */
 function snapStartMsUp(rawMs: number): number {
   const gridMs = SNAP_MINUTES * MS_PER_MIN;
@@ -395,6 +441,14 @@ export type QASlotConsidered = {
   timeRange: string;
   status: 'accepted' | 'rejected';
   reason?: string;
+  impactedMeetingTitle?: string;
+  eta?: string;
+  requiredBy?: string;
+  lateByMin?: number;
+  requiredShiftMin?: number;
+  maxShiftMin?: number;
+  requiredBufferMin?: number;
+  arrivalMarginMin?: number;
   detourKm?: number;
   addToRouteMin?: number;
   baselineMin?: number;
@@ -515,6 +569,221 @@ type DominoShiftPlan = {
   entries: DominoShiftEntry[];
 };
 
+type CandidateRouteStop = {
+  id: string;
+  title: string;
+  startMs: number;
+  endMs: number;
+  coord: Coordinate;
+};
+
+type RouteStopChainValidationResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: string;
+      code: 'overlap' | 'first_prebuffer' | 'leg_prebuffer' | 'return_home';
+      stopId?: string;
+      lateByMin?: number;
+    };
+
+function buildRouteStopsFromDayEvents(
+  dayEvents: DayEvent[],
+  adjustedRangesById: Map<string, { startMs: number; endMs: number }>,
+  homeCoord: Coordinate
+): CandidateRouteStop[] {
+  const stops: CandidateRouteStop[] = dayEvents.map((ev) => {
+    const adjusted = adjustedRangesById.get(ev.ev.id);
+    return {
+      id: ev.ev.id,
+      title: ev.ev.title ?? '(No title)',
+      startMs: adjusted?.startMs ?? ev.startMs,
+      endMs: adjusted?.endMs ?? ev.endMs,
+      coord: ev.hasCoord && ev.ev.coordinates
+        ? toCoord(ev.ev.coordinates)
+        : homeCoord,
+    };
+  });
+
+  stops.sort((a, b) => {
+    if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+    if (a.endMs !== b.endMs) return a.endMs - b.endMs;
+    return a.id.localeCompare(b.id);
+  });
+
+  return stops;
+}
+
+function buildCandidateRouteStops(
+  dayEvents: DayEvent[],
+  adjustedRangesById: Map<string, { startMs: number; endMs: number }>,
+  newMeeting: { startMs: number; endMs: number; coord: Coordinate },
+  homeCoord: Coordinate
+): CandidateRouteStop[] {
+  const existingStops = buildRouteStopsFromDayEvents(dayEvents, adjustedRangesById, homeCoord);
+
+  const next: CandidateRouteStop[] = [
+    ...existingStops,
+    {
+      id: '__new_meeting__',
+      title: 'New meeting',
+      startMs: newMeeting.startMs,
+      endMs: newMeeting.endMs,
+      coord: newMeeting.coord,
+    },
+  ];
+
+  next.sort((a, b) => {
+    if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+    if (a.endMs !== b.endMs) return a.endMs - b.endMs;
+    return a.id.localeCompare(b.id);
+  });
+
+  return next;
+}
+
+function validateRouteStopChain(
+  stops: CandidateRouteStop[],
+  params: {
+    effectiveStartMs: number;
+    effectiveEndMs: number;
+    preBuffer: number;
+    postBuffer: number;
+    startFromHomeBase: boolean;
+    homeCoord: Coordinate;
+  }
+): RouteStopChainValidationResult {
+  const { effectiveStartMs, effectiveEndMs, preBuffer, postBuffer, startFromHomeBase, homeCoord } = params;
+  if (stops.length === 0) return { ok: true };
+
+  for (let i = 1; i < stops.length; i++) {
+    const prev = stops[i - 1]!;
+    const next = stops[i]!;
+    if (prev.endMs > next.startMs) {
+      return { ok: false, reason: 'Shift chain causes meeting overlap', code: 'overlap' };
+    }
+  }
+
+  if (startFromHomeBase) {
+    const first = stops[0]!;
+    const travelToFirstMinutes = getTravelMinutes(homeCoord, first.coord, effectiveStartMs);
+    const arriveByFirstMs = first.startMs - preBuffer * MS_PER_MIN;
+    const etaMs = effectiveStartMs + travelToFirstMinutes * MS_PER_MIN;
+    if (etaMs > arriveByFirstMs) {
+      const lateByMin = Math.ceil((etaMs - arriveByFirstMs) / MS_PER_MIN);
+      return {
+        ok: false,
+        code: 'first_prebuffer',
+        stopId: first.id,
+        lateByMin,
+        reason: `Shift chain misses pre-buffer for ${first.title}: ETA ${formatClockMs(etaMs)} > required ${formatClockMs(arriveByFirstMs)} (${lateByMin} min late)`,
+      };
+    }
+  }
+
+  for (let i = 1; i < stops.length; i++) {
+    const prev = stops[i - 1]!;
+    const next = stops[i]!;
+    const departPrevMs = prev.endMs + postBuffer * MS_PER_MIN;
+    const travelMinutes = getTravelMinutes(prev.coord, next.coord, departPrevMs);
+    const arriveByNextMs = next.startMs - preBuffer * MS_PER_MIN;
+    const etaMs = departPrevMs + travelMinutes * MS_PER_MIN;
+    if (etaMs > arriveByNextMs) {
+      const lateByMin = Math.ceil((etaMs - arriveByNextMs) / MS_PER_MIN);
+      return {
+        ok: false,
+        code: 'leg_prebuffer',
+        stopId: next.id,
+        lateByMin,
+        reason: `Shift chain misses pre-buffer for ${next.title}: ETA ${formatClockMs(etaMs)} > required ${formatClockMs(arriveByNextMs)} (${lateByMin} min late)`,
+      };
+    }
+  }
+
+  if (startFromHomeBase) {
+    const last = stops[stops.length - 1]!;
+    const departLastMs = last.endMs + postBuffer * MS_PER_MIN;
+    const travelHomeMinutes = getTravelMinutes(last.coord, homeCoord, departLastMs);
+    const returnHomeMs = departLastMs + travelHomeMinutes * MS_PER_MIN;
+    if (returnHomeMs > effectiveEndMs) {
+      const lateByMin = Math.ceil((returnHomeMs - effectiveEndMs) / MS_PER_MIN);
+      return {
+        ok: false,
+        code: 'return_home',
+        stopId: last.id,
+        lateByMin,
+        reason: `Shift chain misses return-home cutoff after ${last.title}: home ETA ${formatClockMs(returnHomeMs)} > work end ${formatClockMs(effectiveEndMs)} (${lateByMin} min late)`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+function computeRouteDriveMinutes(
+  stops: CandidateRouteStop[],
+  params: {
+    effectiveStartMs: number;
+    postBuffer: number;
+    startFromHomeBase: boolean;
+    homeCoord: Coordinate;
+  }
+): number {
+  const { effectiveStartMs, postBuffer, startFromHomeBase, homeCoord } = params;
+  if (stops.length === 0) return 0;
+
+  let totalMinutes = 0;
+  if (startFromHomeBase) {
+    const first = stops[0]!;
+    totalMinutes += getTravelMinutes(homeCoord, first.coord, effectiveStartMs);
+  }
+
+  for (let i = 1; i < stops.length; i++) {
+    const prev = stops[i - 1]!;
+    const next = stops[i]!;
+    const departPrevMs = prev.endMs + postBuffer * MS_PER_MIN;
+    totalMinutes += getTravelMinutes(prev.coord, next.coord, departPrevMs);
+  }
+
+  if (startFromHomeBase) {
+    const last = stops[stops.length - 1]!;
+    const departLastMs = last.endMs + postBuffer * MS_PER_MIN;
+    totalMinutes += getTravelMinutes(last.coord, homeCoord, departLastMs);
+  }
+
+  return totalMinutes;
+}
+
+function computeRouteDriveKm(
+  stops: CandidateRouteStop[],
+  params: {
+    startFromHomeBase: boolean;
+    homeCoord: Coordinate;
+  }
+): number {
+  const { startFromHomeBase, homeCoord } = params;
+  if (stops.length === 0) return 0;
+
+  let totalKm = 0;
+  if (startFromHomeBase) {
+    const first = stops[0]!;
+    totalKm += getTravelDistanceKm(homeCoord, first.coord);
+  }
+
+  for (let i = 1; i < stops.length; i++) {
+    const prev = stops[i - 1]!;
+    const next = stops[i]!;
+    totalKm += getTravelDistanceKm(prev.coord, next.coord);
+  }
+
+  if (startFromHomeBase) {
+    const last = stops[stops.length - 1]!;
+    totalKm += getTravelDistanceKm(last.coord, homeCoord);
+  }
+
+  return totalKm;
+}
+
 function buildEarlierDominoPlan(
   dayEvents: DayEvent[],
   startIndex: number,
@@ -581,7 +850,7 @@ function buildLaterDominoPlan(
  * Constraint-based scheduling with pre/post buffers and incremental detour scoring.
  * All internal time calculations use epoch milliseconds.
  * - workingDays filter: excludes non-working days
- * - no past slots: slots starting before now (or before arrive-by for today) are filtered out
+ * - no past slots: slots starting before now are filtered out
  * - 15-min snapping: slot start rounded UP to next 15-min; discarded if constraints violated
  */
 export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
@@ -591,12 +860,19 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
   const workingDays = prefs.workingDays ?? DEFAULT_WORKING_DAYS;
   /** v2: Detour km threshold. Same-day slots with detourKm > threshold are excluded; empty days suggested instead. */
   const distanceThresholdKm = prefs.distanceThresholdKm ?? 30;
+  const farDetourOverrideMinSavingsMinutes = Math.max(
+    0,
+    Math.round(prefs.farDetourOverrideMinSavingsMinutes ?? 20)
+  );
+  const decisionOptimizationMetric: DecisionOptimizationMetric =
+    prefs.decisionOptimizationMetric === 'km' ? 'km' : 'minutes';
   /**
    * When true (default): first meeting accounts for travel FROM home, last meeting accounts
    * for travel back TO home. When false (field/overnight mode): no home travel counted —
    * first meeting can start at work start, last can end at work end.
    */
   const startFromHomeBase = prefs.alwaysStartFromHomeBase !== false;
+  const homeCoord = prefs.homeBase ?? DEFAULT_HOME;
 
   const newLoc: Coordinate =
     'lat' in newLocation
@@ -607,12 +883,14 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
   const g = globalThis as unknown as { __simulateNowMs?: number };
   const nowMs = typeof __DEV__ !== 'undefined' && __DEV__ && typeof g.__simulateNowMs === 'number' ? g.__simulateNowMs : Date.now();
   const todayStartMs = startOfDay(new Date(nowMs)).getTime();
-  // MIN_ALLOWED_START_MS: no past slots; must be able to arrive by slot start (pre-buffer)
-  const minStartMs = nowMs + preBuffer * MS_PER_MIN;
+  // MIN_ALLOWED_START_MS: no past slots.
+  const minStartMs = nowMs;
 
   const slots: ScoredSlot[] = [];
   const windowStartMs = searchWindow.start.getTime();
   const windowEndMs = searchWindow.end.getTime();
+  const windowStartDayMs = startOfDay(new Date(windowStartMs)).getTime();
+  const windowEndDayMs = startOfDay(new Date(windowEndMs)).getTime();
   // Best Match: clamp to today. Pick Week: use exact window.
   const searchStartMs = clampSearchStartToToday
     ? Math.max(windowStartMs, todayStartMs)
@@ -623,6 +901,104 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
   // STEP 1: Filter to events overlapping the selected window (timeframe isolation)
   const scheduleInWindow = filterScheduleToWindow(schedule, windowStartMs, windowEndMs);
   const hasRealMeetingsInWindow = scheduleInWindow.length > 0;
+
+  // Precompute the best "start from home on an empty day" round-trip minutes.
+  // This is used to conditionally allow far same-day options only when they
+  // clearly beat empty-day driving by a meaningful margin.
+  let bestEmptyDayRoundTripMinutes: number | null = null;
+  let bestEmptyDayRoundTripKm: number | null = null;
+  if (startFromHomeBase) {
+    let probeMs = searchStartMs;
+    while (probeMs <= searchEndMs) {
+      const probeDayStart = startOfDay(new Date(probeMs)).getTime();
+      const probeDayOfWeek = new Date(probeDayStart).getDay();
+      if (!workingDays[probeDayOfWeek]) {
+        probeMs = addDays(new Date(probeMs), 1).getTime();
+        continue;
+      }
+
+      const probeDayStartTimeMs = timeOnDayMs(probeDayStart, prefs.workingHours.start);
+      const probeDayEndTimeMs = timeOnDayMs(probeDayStart, prefs.workingHours.end);
+
+      let effectiveProbeStartMs = probeDayStartTimeMs;
+      let effectiveProbeEndMs = probeDayEndTimeMs;
+      if (probeDayStart === windowStartDayMs) effectiveProbeStartMs = Math.max(effectiveProbeStartMs, windowStartMs);
+      if (probeDayStart === windowEndDayMs) effectiveProbeEndMs = Math.min(effectiveProbeEndMs, windowEndMs);
+      if (effectiveProbeEndMs <= effectiveProbeStartMs) {
+        probeMs = addDays(new Date(probeMs), 1).getTime();
+        continue;
+      }
+
+      const isProbeToday = probeDayStart === todayStartMs;
+      if (isProbeToday && minStartMs > effectiveProbeEndMs) {
+        probeMs = addDays(new Date(probeMs), 1).getTime();
+        continue;
+      }
+
+      const probeDayEvents = eventsForDay(scheduleInWindow, probeDayStart, effectiveProbeStartMs, effectiveProbeEndMs);
+      if (probeDayEvents.length > 0) {
+        probeMs = addDays(new Date(probeMs), 1).getTime();
+        continue;
+      }
+
+      const travelFromHomeMsProbe = getTravelMinutes(homeCoord, newLoc, effectiveProbeStartMs) * MS_PER_MIN;
+      const minFromWorkStartProbe = effectiveProbeStartMs + travelFromHomeMsProbe + preBuffer * MS_PER_MIN;
+      const morningStartProbe = isProbeToday
+        ? snapStartMsUp(
+            Math.max(
+              effectiveProbeStartMs,
+              minFromWorkStartProbe,
+              nowMs + getTravelMinutes(homeCoord, newLoc, nowMs) * MS_PER_MIN + preBuffer * MS_PER_MIN
+            )
+          )
+        : snapStartMsUp(Math.max(effectiveProbeStartMs, minFromWorkStartProbe));
+      const travelHomeFromAfternoonProbe =
+        getTravelMinutes(newLoc, homeCoord, effectiveProbeEndMs - durationMinutes * MS_PER_MIN - postBuffer * MS_PER_MIN) *
+        MS_PER_MIN;
+      const afternoonStartProbe = snapStartMsDown(
+        effectiveProbeEndMs - durationMinutes * MS_PER_MIN - postBuffer * MS_PER_MIN - travelHomeFromAfternoonProbe
+      );
+      const midDayStartProbe = snapStartMsUp((morningStartProbe + afternoonStartProbe) / 2);
+
+      const MIN_ANCHOR_GAP_MS = 30 * MS_PER_MIN;
+      const rawAnchorsProbe: { startMs: number; label: string }[] = [
+        { startMs: morningStartProbe, label: 'Morning visit' },
+        { startMs: midDayStartProbe, label: 'Midday visit' },
+        { startMs: afternoonStartProbe, label: 'Afternoon visit' },
+      ];
+      const anchorsProbe: { startMs: number; label: string }[] = [];
+      for (const anchor of rawAnchorsProbe) {
+        if (anchorsProbe.every((a) => Math.abs(a.startMs - anchor.startMs) >= MIN_ANCHOR_GAP_MS)) {
+          anchorsProbe.push(anchor);
+        }
+      }
+
+      for (const anchor of anchorsProbe) {
+        const probeSlotEndMs = anchor.startMs + durationMinutes * MS_PER_MIN;
+        if (
+          anchor.startMs >= minStartMs &&
+          anchor.startMs >= windowStartMs &&
+          probeSlotEndMs <= effectiveProbeEndMs &&
+          probeSlotEndMs <= windowEndMs
+        ) {
+          const travelToMinutesProbe = getTravelMinutes(homeCoord, newLoc, effectiveProbeStartMs);
+          const departAtProbeMs = probeSlotEndMs + postBuffer * MS_PER_MIN;
+          const travelFromMinutesProbe = getTravelMinutes(newLoc, homeCoord, departAtProbeMs);
+          const roundTripMinutes = travelToMinutesProbe + travelFromMinutesProbe;
+          const roundTripKm =
+            getTravelDistanceKm(homeCoord, newLoc) + getTravelDistanceKm(newLoc, homeCoord);
+          if (bestEmptyDayRoundTripMinutes == null || roundTripMinutes < bestEmptyDayRoundTripMinutes) {
+            bestEmptyDayRoundTripMinutes = roundTripMinutes;
+          }
+          if (bestEmptyDayRoundTripKm == null || roundTripKm < bestEmptyDayRoundTripKm) {
+            bestEmptyDayRoundTripKm = roundTripKm;
+          }
+        }
+      }
+
+      probeMs = addDays(new Date(probeMs), 1).getTime();
+    }
+  }
 
   while (currentMs <= searchEndMs) {
     const dayStart = startOfDay(new Date(currentMs)).getTime();
@@ -635,8 +1011,6 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
     const dayStartTimeMs = timeOnDayMs(dayStart, prefs.workingHours.start);
     const dayEndTimeMs = timeOnDayMs(dayStart, prefs.workingHours.end);
 
-    const windowStartDayMs = startOfDay(new Date(windowStartMs)).getTime();
-    const windowEndDayMs = startOfDay(new Date(windowEndMs)).getTime();
     let effectiveStartMs = dayStartTimeMs;
     let effectiveEndMs = dayEndTimeMs;
     if (dayStart === windowStartDayMs) effectiveStartMs = Math.max(effectiveStartMs, windowStartMs);
@@ -691,6 +1065,17 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       dominoLaterCapMs[idx] = Math.min(ev.maxShiftLaterMs, (gapAfterMs[idx] ?? 0) + nextCapMs);
     }
     const timeline = buildTimeline(dayStart, dayEvents, prefs, effectiveStartMs, effectiveEndMs);
+    const baselineRouteStops = buildRouteStopsFromDayEvents(dayEvents, new Map(), homeCoord);
+    const baselineDayRouteMinutes = computeRouteDriveMinutes(baselineRouteStops, {
+      effectiveStartMs,
+      postBuffer,
+      startFromHomeBase,
+      homeCoord,
+    });
+    const baselineDayRouteKm = computeRouteDriveKm(baselineRouteStops, {
+      startFromHomeBase,
+      homeCoord,
+    });
 
     // Empty-week path: no meetings anywhere in the search window.
     // Instead of one "earliest only" slot, offer up to three anchors:
@@ -706,9 +1091,15 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       const travelFromHomeMs = startFromHomeBase
         ? getTravelMinutes(home, newLoc, effectiveStartMs) * MS_PER_MIN
         : 0;
-      const minFromWorkStart = effectiveStartMs + travelFromHomeMs;
+      const minFromWorkStart = effectiveStartMs + travelFromHomeMs + preBuffer * MS_PER_MIN;
       const morningStart = isToday
-        ? snapStartMsUp(Math.max(effectiveStartMs, minFromWorkStart, nowMs + getTravelMinutes(home, newLoc, nowMs) * MS_PER_MIN))
+        ? snapStartMsUp(
+            Math.max(
+              effectiveStartMs,
+              minFromWorkStart,
+              nowMs + getTravelMinutes(home, newLoc, nowMs) * MS_PER_MIN + preBuffer * MS_PER_MIN
+            )
+          )
         : snapStartMsUp(Math.max(effectiveStartMs, minFromWorkStart));
 
       // ── Afternoon anchor: latest start that still gets you home before day ends ──
@@ -740,6 +1131,8 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
 
       const dayIsoEmpty = toLocalDayKey(dayStart);
       const detourKmEmpty = 2 * haversineKm(home, newLoc);
+      const roundTripKmEmpty =
+        getTravelDistanceKm(home, newLoc) + getTravelDistanceKm(newLoc, home);
 
       for (const { startMs: meetingStartMs, label: emptyDayLabel } of anchors) {
         if (slots.length >= MAX_SLOTS) break;
@@ -755,7 +1148,10 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
           const travelFromMinutes = getTravelMinutes(newLoc, home, departAtMs);
           const detourMinutes = travelToMinutes + travelFromMinutes;
           const slackMinutes = 0;
-          const score = detourKmEmpty * 10;
+          const detourWeight = decisionOptimizationMetric === 'km' ? 10 : 1;
+          const scoreDetourBase =
+            decisionOptimizationMetric === 'km' ? roundTripKmEmpty : detourMinutes;
+          const score = scoreDetourBase * detourWeight;
           const slot: ScoredSlot = {
             dayIso: dayIsoEmpty,
             startMs: meetingStartMs,
@@ -807,8 +1203,8 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               arriveEarlyPreferred:
                 (meetingStartMs - (effectiveStartMs + travelToMinutes * MS_PER_MIN)) / MS_PER_MIN >= preBuffer,
               scoreBreakdown: {
-                detourWeight: 10,
-                detourBase: score,
+                detourWeight,
+                detourBase: scoreDetourBase * detourWeight,
                 slackPenalty: 0,
                 busyDayPenalty: 0,
                 crossDayBonus: 0,
@@ -887,16 +1283,17 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       // to the new meeting is still required regardless of mode.
       const effectiveTravelToStart = !startFromHomeBase && bufferWaivedAtStart ? 0 : travelToMinutesWindow;
 
-      const minStartFromWorkStartMs = prevDepartWindowStartMs + effectiveTravelToStart * MS_PER_MIN;
+      const minStartFromWorkStartMs =
+        prevDepartWindowStartMs + effectiveTravelToStart * MS_PER_MIN + preBuffer * MS_PER_MIN;
       const rawMeetingStartMs = bufferWaivedAtStart
         ? minStartFromWorkStartMs
-        : prevDepartWindowStartMs + (travelToMinutesWindow + preBuffer) * MS_PER_MIN;
+        : prevDepartWindowStartMs + travelToMinutesWindow * MS_PER_MIN + preBuffer * MS_PER_MIN;
       let candidateStart0: number;
       let travelToNowMinutes = 0;
       if (bufferWaivedAtStart && isToday) {
         const home = { lat: prefs.homeBase?.lat ?? DEFAULT_HOME.lat, lon: prefs.homeBase?.lon ?? DEFAULT_HOME.lon };
         travelToNowMinutes = getTravelMinutes(home, newLoc, nowMs);
-        const minStartFromNowWithTravelMs = nowMs + travelToNowMinutes * MS_PER_MIN;
+        const minStartFromNowWithTravelMs = nowMs + travelToNowMinutes * MS_PER_MIN + preBuffer * MS_PER_MIN;
         candidateStart0 = snapStartMsUp(Math.max(rawMeetingStartMs, minStartFromNowWithTravelMs));
       } else {
         candidateStart0 = snapStartMsUp(rawMeetingStartMs);
@@ -936,12 +1333,25 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
       for (const meetingStartMs of candidateStarts) {
         if (slots.length >= MAX_SLOTS) break;
         const slotEndMs = meetingStartMs + durationMinutes * MS_PER_MIN;
+        const newMeetingArriveByMs = meetingStartMs - preBuffer * MS_PER_MIN;
 
         const dayIsoGap = toLocalDayKey(dayStart);
         const dayLabelGap = formatDayLabel(dayIsoGap);
         const timeRangeGap = formatTimeRangeMs(meetingStartMs, slotEndMs);
-        const qaReject = (reason: string) => {
-          if (onSlotConsidered) onSlotConsidered({ dayIso: dayIsoGap, dayLabel: dayLabelGap, timeRange: timeRangeGap, status: 'rejected', reason });
+        const qaReject = (
+          reason: string,
+          details?: Omit<Partial<QASlotConsidered>, 'dayIso' | 'dayLabel' | 'timeRange' | 'status' | 'reason'>
+        ) => {
+          if (onSlotConsidered) {
+            onSlotConsidered({
+              dayIso: dayIsoGap,
+              dayLabel: dayLabelGap,
+              timeRange: timeRangeGap,
+              status: 'rejected',
+              reason,
+              ...(details ?? {}),
+            });
+          }
         };
 
         let prevShiftUsedMs = 0;
@@ -958,8 +1368,8 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
           for (let iter = 0; iter < 5; iter++) {
             const departCandidateMs = prevDepartBaseMs - requiredPrevShiftMs;
             const travelCandidateMinutes = getTravelMinutes(prev.coord, newLoc, departCandidateMs);
-            const requiredStartBaseMs = prevDepartBaseMs + (travelCandidateMinutes + preBuffer) * MS_PER_MIN;
-            const minRequiredShiftMs = Math.max(0, requiredStartBaseMs - meetingStartMs);
+            const requiredStartBaseMs = prevDepartBaseMs + travelCandidateMinutes * MS_PER_MIN;
+            const minRequiredShiftMs = Math.max(0, requiredStartBaseMs - newMeetingArriveByMs);
             const recomputed =
               prev.type === 'event'
                 ? snapShiftEarlierMsToGrid(prev.startMs, minRequiredShiftMs)
@@ -975,7 +1385,14 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
           }
 
           if (requiredPrevShiftMs > prevShiftEarlierMaxMs) {
-            qaReject('Needs moving flexible chain earlier beyond limit');
+            qaReject(
+              `Needs moving flexible chain earlier beyond limit: require ${Math.ceil(requiredPrevShiftMs / MS_PER_MIN)} min, max ${Math.ceil(prevShiftEarlierMaxMs / MS_PER_MIN)} min`,
+              {
+                impactedMeetingTitle: prev.title,
+                requiredShiftMin: Math.ceil(requiredPrevShiftMs / MS_PER_MIN),
+                maxShiftMin: Math.ceil(prevShiftEarlierMaxMs / MS_PER_MIN),
+              }
+            );
             continue;
           }
 
@@ -992,32 +1409,42 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               dominoEarlierCapMs
             );
             if (!plan) {
-              qaReject('Needs moving non-flex previous chain or exceeds flex window');
+              qaReject(
+                `Cannot shift previous chain enough: require ${Math.ceil(requiredPrevShiftMs / MS_PER_MIN)} min earlier, but flex windows/gaps block it`,
+                {
+                  impactedMeetingTitle: prev.title,
+                  requiredShiftMin: Math.ceil(requiredPrevShiftMs / MS_PER_MIN),
+                  maxShiftMin: Math.ceil(prevShiftEarlierMaxMs / MS_PER_MIN),
+                }
+              );
               continue;
             }
             prevDominoPlan = plan;
             prevShiftUsedMs = requiredPrevShiftMs;
             prevDepartMs = prevDepartBaseMs - prevShiftUsedMs;
             travelToMinutes = getTravelMinutes(prev.coord, newLoc, prevDepartMs);
-            const requiredStartAfterShiftMs = prevDepartMs + (travelToMinutes + preBuffer) * MS_PER_MIN;
-            if (requiredStartAfterShiftMs > meetingStartMs) {
-              qaReject('Arrive late even with domino flexibility');
+            const requiredStartAfterShiftMs = prevDepartMs + travelToMinutes * MS_PER_MIN;
+            if (requiredStartAfterShiftMs > newMeetingArriveByMs) {
+              const lateByMin = Math.ceil((requiredStartAfterShiftMs - newMeetingArriveByMs) / MS_PER_MIN);
+              qaReject(
+                `Misses pre-buffer even with domino flexibility: ETA ${formatClockMs(requiredStartAfterShiftMs)} > required ${formatClockMs(newMeetingArriveByMs)} (${lateByMin} min late)`,
+                {
+                  eta: formatClockMs(requiredStartAfterShiftMs),
+                  requiredBy: formatClockMs(newMeetingArriveByMs),
+                  lateByMin,
+                  impactedMeetingTitle: 'New meeting',
+                }
+              );
               continue;
             }
           }
         }
 
-        const requiredMinutesSansTravelFrom = bufferWaivedAtStart && bufferWaivedAtEnd
-          ? durationMinutes
-          : bufferWaivedAtStart
-            ? durationMinutes + postBuffer
-            : bufferWaivedAtEnd
-              ? travelToMinutes + preBuffer + durationMinutes
-              : travelToMinutes + preBuffer + durationMinutes + postBuffer;
-
         const departAtMs = slotEndMs + postBuffer * MS_PER_MIN;
         const travelFromMinutes = getTravelMinutes(newLoc, next.coord, departAtMs);
-        const requiredMinutes = requiredMinutesSansTravelFrom + (bufferWaivedAtEnd ? 0 : travelFromMinutes);
+        const requiredMinutesToStart = (bufferWaivedAtStart ? effectiveTravelToStart : travelToMinutes) + preBuffer;
+        const requiredMinutesFromEnd = bufferWaivedAtEnd ? 0 : postBuffer + travelFromMinutes + preBuffer;
+        const requiredMinutes = requiredMinutesToStart + durationMinutes + requiredMinutesFromEnd;
 
         if (!bufferWaivedAtEnd) {
           const requiredArrivalMs = departAtMs + travelFromMinutes * MS_PER_MIN;
@@ -1027,7 +1454,14 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               ? snapShiftLaterMsToGrid(next.startMs, minRequiredShiftMs)
               : minRequiredShiftMs;
           if (requiredNextShiftMs > nextShiftLaterMaxMs) {
-            qaReject("Can't reach next meeting in time within flex chain");
+            qaReject(
+              `Can't reach ${next.title} in time within flex chain: require ${Math.ceil(requiredNextShiftMs / MS_PER_MIN)} min shift, max ${Math.ceil(nextShiftLaterMaxMs / MS_PER_MIN)} min`,
+              {
+                impactedMeetingTitle: next.title,
+                requiredShiftMin: Math.ceil(requiredNextShiftMs / MS_PER_MIN),
+                maxShiftMin: Math.ceil(nextShiftLaterMaxMs / MS_PER_MIN),
+              }
+            );
             continue;
           }
           if (requiredNextShiftMs > 0) {
@@ -1043,7 +1477,14 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               dominoLaterCapMs
             );
             if (!plan) {
-              qaReject("Can't push next chain without breaking flex limits");
+              qaReject(
+                `Can't push next chain without breaking flex limits: need ${Math.ceil(requiredNextShiftMs / MS_PER_MIN)} min`,
+                {
+                  impactedMeetingTitle: next.title,
+                  requiredShiftMin: Math.ceil(requiredNextShiftMs / MS_PER_MIN),
+                  maxShiftMin: Math.ceil(nextShiftLaterMaxMs / MS_PER_MIN),
+                }
+              );
               continue;
             }
             nextDominoPlan = plan;
@@ -1057,11 +1498,63 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         if (slotEndMs > windowEndMs) break;
         if (meetingStartMs < effectiveStartMs) { qaReject('Before work start'); continue; }
         if (meetingStartMs < windowStartMs) { qaReject('Before window'); continue; }
-        if (!bufferWaivedAtEnd && departAtMs + travelFromMinutes * MS_PER_MIN > nextArriveByMs) { qaReject("Can't reach next meeting in time"); continue; }
+        if (!bufferWaivedAtEnd && departAtMs + travelFromMinutes * MS_PER_MIN > nextArriveByMs) {
+          const etaMs = departAtMs + travelFromMinutes * MS_PER_MIN;
+          const lateByMin = Math.ceil((etaMs - nextArriveByMs) / MS_PER_MIN);
+          qaReject(
+            `Can't reach next meeting pre-buffer in time: ETA ${formatClockMs(etaMs)} > required ${formatClockMs(nextArriveByMs)} (${lateByMin} min late)`,
+            {
+              impactedMeetingTitle: next.title,
+              eta: formatClockMs(etaMs),
+              requiredBy: formatClockMs(nextArriveByMs),
+              lateByMin,
+            }
+          );
+          continue;
+        }
         if (meetingStartMs < minStartMs) { qaReject('In the past'); continue; }
-        if (!bufferWaivedAtStart && prevDepartMs + (travelToMinutes + preBuffer) * MS_PER_MIN > meetingStartMs) { qaReject('Arrive late'); continue; }
-        if (bufferWaivedAtStart && prevDepartMs + effectiveTravelToStart * MS_PER_MIN > meetingStartMs) { qaReject('Arrive late'); continue; }
-        if (bufferWaivedAtStart && isToday && nowMs + travelToNowMinutes * MS_PER_MIN > meetingStartMs) { qaReject("Can't leave now in time"); continue; }
+        if (!bufferWaivedAtStart && prevDepartMs + travelToMinutes * MS_PER_MIN > newMeetingArriveByMs) {
+          const etaMs = prevDepartMs + travelToMinutes * MS_PER_MIN;
+          const lateByMin = Math.ceil((etaMs - newMeetingArriveByMs) / MS_PER_MIN);
+          qaReject(
+            `Misses pre-buffer for new meeting: ETA ${formatClockMs(etaMs)} > required ${formatClockMs(newMeetingArriveByMs)} (${lateByMin} min late)`,
+            {
+              impactedMeetingTitle: 'New meeting',
+              eta: formatClockMs(etaMs),
+              requiredBy: formatClockMs(newMeetingArriveByMs),
+              lateByMin,
+            }
+          );
+          continue;
+        }
+        if (bufferWaivedAtStart && prevDepartMs + effectiveTravelToStart * MS_PER_MIN > newMeetingArriveByMs) {
+          const etaMs = prevDepartMs + effectiveTravelToStart * MS_PER_MIN;
+          const lateByMin = Math.ceil((etaMs - newMeetingArriveByMs) / MS_PER_MIN);
+          qaReject(
+            `Misses pre-buffer from day start: ETA ${formatClockMs(etaMs)} > required ${formatClockMs(newMeetingArriveByMs)} (${lateByMin} min late)`,
+            {
+              impactedMeetingTitle: 'New meeting',
+              eta: formatClockMs(etaMs),
+              requiredBy: formatClockMs(newMeetingArriveByMs),
+              lateByMin,
+            }
+          );
+          continue;
+        }
+        if (bufferWaivedAtStart && isToday && nowMs + travelToNowMinutes * MS_PER_MIN > newMeetingArriveByMs) {
+          const etaMs = nowMs + travelToNowMinutes * MS_PER_MIN;
+          const lateByMin = Math.ceil((etaMs - newMeetingArriveByMs) / MS_PER_MIN);
+          qaReject(
+            `Can't leave now in time for pre-buffer: ETA ${formatClockMs(etaMs)} > required ${formatClockMs(newMeetingArriveByMs)} (${lateByMin} min late)`,
+            {
+              impactedMeetingTitle: 'New meeting',
+              eta: formatClockMs(etaMs),
+              requiredBy: formatClockMs(newMeetingArriveByMs),
+              lateByMin,
+            }
+          );
+          continue;
+        }
 
         const adjustedRangesById = new Map<string, { startMs: number; endMs: number }>();
         for (const entry of prevDominoPlan.entries) {
@@ -1113,6 +1606,61 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         });
         if (!noOverlap) { qaReject('Overlaps existing meeting'); continue; }
 
+        const routeStops = buildCandidateRouteStops(
+          dayEvents,
+          adjustedRangesById,
+          { startMs: meetingStartMs, endMs: slotEndMs, coord: newLoc },
+          homeCoord
+        );
+        const baselineRouteStops = buildRouteStopsFromDayEvents(dayEvents, new Map(), homeCoord);
+        const baselineRouteValidation = validateRouteStopChain(baselineRouteStops, {
+          effectiveStartMs,
+          effectiveEndMs,
+          preBuffer,
+          postBuffer,
+          startFromHomeBase,
+          homeCoord,
+        });
+        const routeValidation = validateRouteStopChain(routeStops, {
+          effectiveStartMs,
+          effectiveEndMs,
+          preBuffer,
+          postBuffer,
+          startFromHomeBase,
+          homeCoord,
+        });
+        if (!routeValidation.ok) {
+          const routeFailure = routeValidation as Extract<RouteStopChainValidationResult, { ok: false }>;
+          const existingViolationNotWorsened =
+            !baselineRouteValidation.ok
+              ? (() => {
+                  const baselineFailure =
+                    baselineRouteValidation as Extract<RouteStopChainValidationResult, { ok: false }>;
+                  return (
+                    baselineFailure.code === routeFailure.code &&
+                    baselineFailure.stopId === routeFailure.stopId &&
+                    (routeFailure.lateByMin ?? 0) <= (baselineFailure.lateByMin ?? 0)
+                  );
+                })()
+              : false;
+          if (!existingViolationNotWorsened) {
+            qaReject(routeFailure.reason);
+            continue;
+          }
+        }
+        const candidateDayRouteMinutes = computeRouteDriveMinutes(routeStops, {
+          effectiveStartMs,
+          postBuffer,
+          startFromHomeBase,
+          homeCoord,
+        });
+        const candidateDayRouteKm = computeRouteDriveKm(routeStops, {
+          startFromHomeBase,
+          homeCoord,
+        });
+        const sameDayMarginalMinutes = candidateDayRouteMinutes - baselineDayRouteMinutes;
+        const sameDayMarginalKm = candidateDayRouteKm - baselineDayRouteKm;
+
         const shiftedEventsForExplain: SlotExplainShift[] = [
           ...prevDominoPlan.entries,
           ...nextDominoPlan.entries,
@@ -1162,23 +1710,95 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         const baselineKm = haversineKm(prev.coord, next.coord);
         const newPathKm = haversineKm(prev.coord, newLoc) + haversineKm(newLoc, next.coord);
         const detourKmVal = newPathKm - baselineKm;
+        const baselineMinutes = getTravelMinutes(prev.coord, next.coord, prevDepartMs);
+        const newPathMinutes = travelToMinutes + travelFromMinutes;
+        const detourMinutes = newPathMinutes - baselineMinutes;
         const isEmptyDay = dayEvents.length === 0;
 
+        let farDetourCheck: SlotExplain['farDetourCheck'] | undefined;
         if (!isEmptyDay && detourKmVal > distanceThresholdKm) {
-          qaReject(`Detour ${detourKmVal.toFixed(1)} km exceeds threshold ${distanceThresholdKm} km`);
-          continue;
+          const contextStr = `Context ${prev.title} -> ${next.title}. Coords HOME(${formatCoordShort(homeCoord)}), PREV(${formatCoordShort(prev.coord)}), NEW(${formatCoordShort(newLoc)}), NEXT(${formatCoordShort(next.coord)}).`;
+          const deltaVsBestEmptyDayMinutes =
+            bestEmptyDayRoundTripMinutes == null ? null : bestEmptyDayRoundTripMinutes - sameDayMarginalMinutes;
+          const deltaVsBestEmptyDayKm =
+            bestEmptyDayRoundTripKm == null ? null : bestEmptyDayRoundTripKm - sameDayMarginalKm;
+          const overrideThreshold = farDetourOverrideMinSavingsMinutes;
+          const canOverrideFarDetour =
+            decisionOptimizationMetric === 'km'
+              ? deltaVsBestEmptyDayKm != null &&
+                deltaVsBestEmptyDayKm >= overrideThreshold
+              : deltaVsBestEmptyDayMinutes != null &&
+                deltaVsBestEmptyDayMinutes >= overrideThreshold;
+          farDetourCheck = {
+            detourKmVal,
+            distanceThresholdKm,
+            farDetourOverrideThreshold: overrideThreshold,
+            sameDayMarginalKm,
+            sameDayMarginalMinutes,
+            bestEmptyDayRoundTripKm,
+            bestEmptyDayRoundTripMinutes,
+            savingsKm: deltaVsBestEmptyDayKm,
+            savingsMinutes: deltaVsBestEmptyDayMinutes,
+            decisionOptimizationMetric,
+            passed: canOverrideFarDetour,
+          };
+          if (!canOverrideFarDetour) {
+            farDetourCheck.reason = 'over_threshold_no_override';
+            if (decisionOptimizationMetric === 'km') {
+              if (deltaVsBestEmptyDayKm == null) {
+                qaReject(`Detour ${detourKmVal.toFixed(1)} km exceeds threshold ${distanceThresholdKm} km. ${contextStr}`);
+              } else if (deltaVsBestEmptyDayKm >= 0) {
+                qaReject(
+                  `Detour ${detourKmVal.toFixed(1)} km exceeds threshold ${distanceThresholdKm} km: same-day adds ${sameDayMarginalKm.toFixed(1)} km vs current day, best empty-day is ${(bestEmptyDayRoundTripKm ?? 0).toFixed(1)} km, saves only ${deltaVsBestEmptyDayKm.toFixed(1)} km (need ${overrideThreshold} km). ${contextStr}`
+                );
+              } else {
+                qaReject(
+                  `Detour ${detourKmVal.toFixed(1)} km exceeds threshold ${distanceThresholdKm} km: same-day adds ${sameDayMarginalKm.toFixed(1)} km vs current day, best empty-day is ${(bestEmptyDayRoundTripKm ?? 0).toFixed(1)} km (same-day is ${Math.abs(deltaVsBestEmptyDayKm).toFixed(1)} km worse). ${contextStr}`
+                );
+              }
+            } else if (deltaVsBestEmptyDayMinutes == null) {
+              qaReject(`Detour ${detourKmVal.toFixed(1)} km exceeds threshold ${distanceThresholdKm} km. ${contextStr}`);
+            } else if (deltaVsBestEmptyDayMinutes >= 0) {
+              qaReject(
+                `Detour ${detourKmVal.toFixed(1)} km exceeds threshold ${distanceThresholdKm} km: same-day adds ${Math.round(sameDayMarginalMinutes)} min vs current day, best empty-day is ${Math.round(bestEmptyDayRoundTripMinutes ?? 0)} min, saves only ${Math.round(deltaVsBestEmptyDayMinutes)} min (need ${overrideThreshold} min). ${contextStr}`
+              );
+            } else {
+              qaReject(
+                `Detour ${detourKmVal.toFixed(1)} km exceeds threshold ${distanceThresholdKm} km: same-day adds ${Math.round(sameDayMarginalMinutes)} min vs current day, best empty-day is ${Math.round(bestEmptyDayRoundTripMinutes ?? 0)} min (same-day is ${Math.round(Math.abs(deltaVsBestEmptyDayMinutes))} min worse). ${contextStr}`
+              );
+            }
+            continue;
+          } else {
+            farDetourCheck.passed = true;
+            farDetourCheck.reason = 'override_satisfied';
+          }
         }
 
         const tier: SlotTier = isEmptyDay ? 4 : (detourKmVal <= 5 ? 1 : 2);
 
         const slackMinutes = bufferWaivedAtEnd ? 0 : (nextArriveByMs - (departAtMs + travelFromMinutes * MS_PER_MIN)) / MS_PER_MIN;
-        const baselineMinutes = getTravelMinutes(prev.coord, next.coord, prevDepartMs);
-        const newPathMinutes = travelToMinutes + travelFromMinutes;
-        const detourMinutes = newPathMinutes - baselineMinutes;
         const detourKm = Math.round(detourKmVal * 10) / 10;
-        const detourWeight = 10;
-        const detourBaseScore = detourKm * detourWeight;
+        const detourWeight = decisionOptimizationMetric === 'km' ? 10 : 1;
+        const detourBaseMetricValue =
+          decisionOptimizationMetric === 'km' ? sameDayMarginalKm : detourMinutes;
+        const detourBaseScore = detourBaseMetricValue * detourWeight;
         let slackPenaltyScore = 0;
+
+        // Pre-meeting buffer is enforced as a hard constraint above.
+        // Keep this tiny penalty as a defensive tie-breaker for edge rounding.
+        const etaToNewMeetingMs = bufferWaivedAtStart
+          ? prevDepartMs + effectiveTravelToStart * MS_PER_MIN
+          : prevDepartMs + travelToMinutes * MS_PER_MIN;
+        const preferredArriveByNewMs = meetingStartMs - preBuffer * MS_PER_MIN;
+        const newMeetingBufferShortfallMin = Math.max(0, (etaToNewMeetingMs - preferredArriveByNewMs) / MS_PER_MIN);
+        const etaToNextMeetingMs = departAtMs + travelFromMinutes * MS_PER_MIN;
+        const preferredArriveByNextMs = bufferWaivedAtEnd
+          ? nextArriveByMs
+          : nextArriveByMs - preBuffer * MS_PER_MIN;
+        const nextMeetingBufferShortfallMin = bufferWaivedAtEnd
+          ? 0
+          : Math.max(0, (etaToNextMeetingMs - preferredArriveByNextMs) / MS_PER_MIN);
+        const bufferPreferencePenaltyScore = (newMeetingBufferShortfallMin + nextMeetingBufferShortfallMin) * 2;
 
         // Smooth slack penalty — replaces the old hard cliff at 10 min.
         // < 2 min: still a hard veto (truly impossible, no margin at all)
@@ -1193,6 +1813,7 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
             slackPenaltyScore += (slackMinutes - 60) * 1.5;
           }
         }
+        slackPenaltyScore += bufferPreferencePenaltyScore;
 
         // Busy day penalty: lightly prefer adding to a day that already has fewer meetings.
         // Days with 1–3 meetings: no penalty. Each extra meeting beyond 3 adds 15 points.
@@ -1200,12 +1821,12 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
         let crossDayBonusScore = 0;
         let score = detourBaseScore + slackPenaltyScore + busyDayPenaltyScore + crossDayBonusScore;
 
-        const arriveByMs = meetingStartMs - preBuffer * MS_PER_MIN;
+        const arriveByMs = newMeetingArriveByMs;
         const travelFeasibleFromNow = bufferWaivedAtStart && isToday
-          ? nowMs + travelToNowMinutes * MS_PER_MIN <= meetingStartMs
+          ? nowMs + travelToNowMinutes * MS_PER_MIN <= arriveByMs
           : undefined;
         const reachableFromWorkStart = bufferWaivedAtStart
-          ? prevDepartMs + effectiveTravelToStart * MS_PER_MIN <= meetingStartMs
+          ? prevDepartMs + effectiveTravelToStart * MS_PER_MIN <= arriveByMs
           : undefined;
         const arrivalMarginMinutes = bufferWaivedAtStart
           ? (meetingStartMs - (prevDepartMs + effectiveTravelToStart * MS_PER_MIN)) / MS_PER_MIN
@@ -1244,6 +1865,10 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
             dayKey: dayIso,
             prev: { id: prev.id, title: prev.title, type: prev.type, startMs: prev.startMs, endMs: prev.endMs, hasCoord: prev.hasCoord !== false },
             next: { id: next.id, title: next.title, type: next.type, startMs: next.startMs, endMs: next.endMs, hasCoord: next.hasCoord !== false },
+            homeCoord,
+            newMeetingCoord: newLoc,
+            prevCoord: prev.coord,
+            nextCoord: next.coord,
             prevDepartMs,
             arriveByMs,
             meetingStartMs,
@@ -1289,6 +1914,23 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
               crossDayBonus: crossDayBonusScore,
               total: score,
             },
+            baselineDayRouteMinutes,
+            candidateDayRouteMinutes,
+            sameDayMarginalMinutes,
+            bestEmptyDayRoundTripMinutes,
+            farDetourSavingsMinutes:
+              bestEmptyDayRoundTripMinutes == null
+                ? null
+                : bestEmptyDayRoundTripMinutes - sameDayMarginalMinutes,
+            farDetourCheck,
+            baselineDayRouteKm,
+            candidateDayRouteKm,
+            sameDayMarginalKm,
+            bestEmptyDayRoundTripKm,
+            farDetourSavingsKm:
+              bestEmptyDayRoundTripKm == null
+                ? null
+                : bestEmptyDayRoundTripKm - sameDayMarginalKm,
             eventsWithMissingCoordsUsed,
           };
         }
@@ -1379,10 +2021,7 @@ export function findSmartSlots(options: FindSmartSlotsOptions): ScoredSlot[] {
     return compareScoredSlots(a, b);
   });
 
-  const hasSameDaySlots = slots.some((s) => s.tier === 1 || s.tier === 2);
-  const adminFiltered = hasSameDaySlots ? slots.filter((s) => s.tier !== 4) : slots;
-
-  const feasible = adminFiltered.filter((s) => {
+  const feasible = slots.filter((s) => {
     if (s.explain) {
       if (s.explain.travelFeasible === false || s.explain.noOverlap === false) return false;
       if (s.explain.bufferWaivedAtStart && s.explain.reachableFromWorkStart === false) return false;

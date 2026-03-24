@@ -41,6 +41,7 @@ import LegBetweenRow from '../components/LegBetweenRow';
 import DaySummaryBar from '../components/DaySummaryBar';
 import ViewModeToggle, { type ViewMode } from '../components/ViewModeToggle';
 import DayTimelineStrip from '../components/DayTimelineStrip';
+import HomeBaseCheckpointRow from '../components/HomeBaseCheckpointRow';
 import MonthCalendarOverlay from '../components/MonthCalendarOverlay';
 import { useAuth } from '../context/AuthContext';
 import { useRoute } from '../context/RouteContext';
@@ -60,6 +61,7 @@ import { MockSchedule } from '../components/emptyState/MockSchedule';
 import { SignedInEmptyStateLeft, SignedInEmptyStateRight } from '../components/emptyState/SignedInEmptyState';
 import TrialSubscribeBanner from '../components/TrialSubscribeBanner';
 import { backendGetProfileSettings } from '../services/backendApi';
+import { useDevUI } from '../context/DevUIContext';
 
 const MapScreen = React.lazy(() => import('./MapScreen'));
 const isExpoGo = Constants.appOwnership === 'expo';
@@ -93,6 +95,13 @@ function computeDaysLeftFromIso(iso: string | null | undefined): number | null {
   return Math.max(0, left);
 }
 
+function formatMeetingTitleForDisplay(title: string | null | undefined, showQaDebug: boolean): string {
+  const raw = (title ?? '').trim();
+  if (!raw) return '(No title)';
+  if (showQaDebug) return raw;
+  return raw.replace(/\s*\[#\d+\]\s*/g, ' ').trim() || '(No title)';
+}
+
 export type MeetingItem = {
   id: string;
   timeRange: string;
@@ -102,11 +111,11 @@ export type MeetingItem = {
   status: 'pending' | 'completed' | 'skipped';
 };
 
-function eventToMeetingItem(ev: CalendarEvent): MeetingItem {
+function eventToMeetingItem(ev: CalendarEvent, showQaDebug: boolean): MeetingItem {
   return {
     id: ev.id,
     timeRange: ev.time,
-    client: ev.title,
+    client: formatMeetingTitleForDisplay(ev.title, showQaDebug),
     address: ev.location,
     statusColor: GREEN,
     status: ev.status ?? 'pending',
@@ -310,6 +319,7 @@ function MeetingsLoadErrorState({
 type ScheduleNav = NativeStackNavigationProp<ScheduleStackParamList, 'ScheduleHome'>;
 
 function ScheduleScreenNew() {
+  const { showQaDebug } = useDevUI();
   const navigation = useNavigation<ScheduleNav>();
   const isFocused = useIsFocused();
   const { userToken, getValidToken } = useAuth();
@@ -338,7 +348,7 @@ function ScheduleScreenNew() {
   const subscriptionTier = getEffectiveSubscriptionTier(preferences, Boolean(userToken));
   const { canOptimizeRoute, canUseTrafficAwareRouting } = getTierEntitlements(subscriptionTier);
   const ensureMeetingCountsForDate = useEnsureMeetingCountsForDate();
-  const { coords, legStats, etas, waitTimeBeforeMeetingMin, departByMs, returnByMs, homeBase } = useRouteData();
+  const { coords, legStats, etas, waitTimeBeforeMeetingMin, departByMs, returnByMs, homeBase, homeBaseLabel } = useRouteData();
   const [refreshing, setRefreshing] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
   const [ctaVisible, setCtaVisible] = useState(() => !onboardingCtaDismissedThisSession);
@@ -512,6 +522,13 @@ function ScheduleScreenNew() {
   const listBottomPadding = Math.max(100, (tabBarHeight || 56) + insets.bottom + 16);
 
   const appointmentsList = appointments ?? [];
+  const showHomeBaseCheckpoints =
+    preferences.alwaysStartFromHomeBase !== false &&
+    appointmentsList.length > 0 &&
+    Number.isFinite(departByMs) &&
+    Number.isFinite(returnByMs);
+  const departHomeLabel = showHomeBaseCheckpoints ? format(departByMs, 'HH:mm') : '';
+  const returnHomeLabel = showHomeBaseCheckpoints ? format(returnByMs, 'HH:mm') : '';
   const meetingsViewState = getAppointmentsViewState(appointmentsRequestStatus, appointmentsList.length);
   const isMeetingsLoading = meetingsViewState === 'loading';
   const hasMeetingsLoadError = meetingsViewState === 'error';
@@ -535,7 +552,7 @@ function ScheduleScreenNew() {
     appointmentsList.length,
   ]);
 
-  const meetings = appointmentsList.map(eventToMeetingItem);
+  const meetings = appointmentsList.map((ev) => eventToMeetingItem(ev, showQaDebug));
 
   const scheduleListItems = useMemo((): ScheduleListItem[] => {
     if (legStats.length === 0 || coords.length === 0) {
@@ -940,8 +957,23 @@ function ScheduleScreenNew() {
           selectedDateMs={selectedDate.getTime()}
         />
       ) : null}
+      {showHomeBaseCheckpoints ? (
+        <HomeBaseCheckpointRow
+          kind="depart"
+          timeLabel={departHomeLabel}
+          homeBaseLabel={homeBaseLabel}
+        />
+      ) : null}
     </>
   );
+
+  const listFooter = showHomeBaseCheckpoints ? (
+    <HomeBaseCheckpointRow
+      kind="return"
+      timeLabel={returnHomeLabel}
+      homeBaseLabel={homeBaseLabel}
+    />
+  ) : null;
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -975,6 +1007,7 @@ function ScheduleScreenNew() {
           renderItem={renderBlockItem}
           onDragEnd={handleDragEnd}
           ListHeaderComponent={listHeader}
+          ListFooterComponent={listFooter}
           contentContainerStyle={[styles.listContent, { paddingBottom: listBottomPadding }]}
         />
       ) : (
@@ -983,6 +1016,7 @@ function ScheduleScreenNew() {
           keyExtractor={(item) => item.key}
           renderItem={renderItem}
           ListHeaderComponent={listHeader}
+          ListFooterComponent={listFooter}
           contentContainerStyle={
             scheduleListItems.length === 0
               ? [styles.listEmpty, { paddingBottom: listBottomPadding }]

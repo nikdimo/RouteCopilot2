@@ -18,6 +18,7 @@ import { buildRouteWithInsertionMeta } from '../utils/mapPreview';
 
 const HOME_GREEN = '#107C10';
 const MS_BLUE = '#0078D4';
+const PUSHED_MEETING_PASTEL_YELLOW = '#FDE68A';
 
 export type MapPreviewModalProps = {
   visible: boolean;
@@ -155,7 +156,7 @@ export default function MapPreviewModal({
                     <View
                       style={[
                         styles.numberedPin,
-                        { backgroundColor: isInsertion ? '#D13438' : isHighlighted ? '#EAB308' : MS_BLUE },
+                        { backgroundColor: isInsertion ? '#D13438' : isHighlighted ? PUSHED_MEETING_PASTEL_YELLOW : MS_BLUE },
                       ]}
                     >
                       <Text style={[styles.numberedPinText, isHighlighted && styles.numberedPinTextDark]}>

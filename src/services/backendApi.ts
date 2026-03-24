@@ -1,5 +1,33 @@
 import { BACKEND_API_BASE_URL, BACKEND_API_ENABLED } from '../config/backend';
 
+let backendUnauthorizedNotified = false;
+let backendAuthRejected = false;
+let backendAuthRejectedAt = 0;
+const BACKEND_AUTH_RETRY_AFTER_MS = 60_000;
+
+export function resetBackendUnauthorizedNotification() {
+  backendUnauthorizedNotified = false;
+  backendAuthRejected = false;
+  backendAuthRejectedAt = 0;
+}
+
+function notifyBackendUnauthorizedOnce() {
+  backendAuthRejected = true;
+  backendAuthRejectedAt = Date.now();
+  if (backendUnauthorizedNotified) return;
+  backendUnauthorizedNotified = true;
+}
+
+function shouldSkipBackendRequestForRejectedAuth() {
+  if (!backendAuthRejected) return false;
+  if (Date.now() - backendAuthRejectedAt < BACKEND_AUTH_RETRY_AFTER_MS) return true;
+  // cooldown elapsed, allow one retry path
+  backendAuthRejected = false;
+  backendUnauthorizedNotified = false;
+  backendAuthRejectedAt = 0;
+  return false;
+}
+
 export type BackendGeocodeResponse = {
   source: 'cache' | 'live';
   normalizedQuery: string;
@@ -137,6 +165,9 @@ export type BackendProfileSettingsResponse = {
     homeBaseLabel: string;
     workingDays: [boolean, boolean, boolean, boolean, boolean, boolean, boolean];
     distanceThresholdKm: number;
+    farDetourOverrideMinSavingsMinutes: number;
+    decisionOptimizationMetric: 'minutes' | 'km';
+    meetingDurationPresets: [number, number, number];
     alwaysStartFromHomeBase: boolean;
     useGoogleGeocoding: boolean;
     useTrafficAwareRouting: boolean;
@@ -180,6 +211,9 @@ export type BackendProfileSettingsPatch = {
   homeBaseLabel?: string | null;
   workingDays?: [boolean, boolean, boolean, boolean, boolean, boolean, boolean];
   distanceThresholdKm?: number;
+  farDetourOverrideMinSavingsMinutes?: number;
+  decisionOptimizationMetric?: 'minutes' | 'km';
+  meetingDurationPresets?: [number, number, number];
   alwaysStartFromHomeBase?: boolean;
   useGoogleGeocoding?: boolean;
   useTrafficAwareRouting?: boolean;
@@ -209,6 +243,12 @@ export type BackendUpgradeInterestResult = {
   featureKey: string | null;
 };
 
+export type BackendMeetingDecisionAuditResult = {
+  ok: boolean;
+  loggedAtIso?: string;
+  filePath?: string;
+};
+
 type RequestOptions = {
   path: string;
   method: 'GET' | 'POST' | 'PATCH';
@@ -224,6 +264,7 @@ function buildUrl(path: string) {
 async function requestJson<T>(options: RequestOptions): Promise<T | null> {
   if (!BACKEND_API_ENABLED) return null;
   if (!options.authToken) return null;
+  if (shouldSkipBackendRequestForRejectedAuth()) return null;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -239,6 +280,10 @@ async function requestJson<T>(options: RequestOptions): Promise<T | null> {
       signal: controller.signal,
     });
 
+    if (res.status === 401) {
+      notifyBackendUnauthorizedOnce();
+      return null;
+    }
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -253,6 +298,7 @@ async function requestJsonResult(
 ): Promise<BackendFeatureAccessResult | null> {
   if (!BACKEND_API_ENABLED) return null;
   if (!options.authToken) return null;
+  if (shouldSkipBackendRequestForRejectedAuth()) return null;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -268,6 +314,9 @@ async function requestJsonResult(
       signal: controller.signal,
     });
 
+    if (res.status === 401) {
+      notifyBackendUnauthorizedOnce();
+    }
     const payload = await res.json().catch(() => null);
     if (res.ok) {
       return { ok: true, data: payload as BackendFeatureAccessResponse };
@@ -379,6 +428,7 @@ export async function backendCreateBillingPortalSession(
 ): Promise<BackendBillingPortalResult | null> {
   if (!BACKEND_API_ENABLED) return null;
   if (!authToken) return null;
+  if (shouldSkipBackendRequestForRejectedAuth()) return null;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -392,6 +442,9 @@ export async function backendCreateBillingPortalSession(
       signal: controller.signal,
     });
 
+    if (res.status === 401) {
+      notifyBackendUnauthorizedOnce();
+    }
     const payload = await res.json().catch(() => null);
     if (!res.ok) {
       return {
@@ -427,6 +480,7 @@ export async function backendDeleteMyAccount(
 ): Promise<BackendDeleteAccountResult | null> {
   if (!BACKEND_API_ENABLED) return null;
   if (!authToken) return null;
+  if (shouldSkipBackendRequestForRejectedAuth()) return null;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -440,6 +494,9 @@ export async function backendDeleteMyAccount(
       signal: controller.signal,
     });
 
+    if (res.status === 401) {
+      notifyBackendUnauthorizedOnce();
+    }
     const payload = await res.json().catch(() => null);
     if (!res.ok) {
       return {
@@ -476,6 +533,7 @@ export async function backendUpdateProfileSettings(
 ): Promise<BackendProfileSettingsUpdateResult | null> {
   if (!BACKEND_API_ENABLED) return null;
   if (!authToken) return null;
+  if (shouldSkipBackendRequestForRejectedAuth()) return null;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -491,6 +549,9 @@ export async function backendUpdateProfileSettings(
       signal: controller.signal,
     });
 
+    if (res.status === 401) {
+      notifyBackendUnauthorizedOnce();
+    }
     const payload = await res.json().catch(() => null);
     if (res.ok) {
       return { ok: true, data: payload as BackendProfileSettingsResponse };
@@ -522,4 +583,17 @@ export async function backendRequestUpgradeInterest(
     authToken,
     body: input,
   });
+}
+
+export async function backendAppendMeetingDecisionAudit(
+  entry: unknown,
+  authToken: string
+): Promise<boolean> {
+  const result = await requestJson<BackendMeetingDecisionAuditResult>({
+    path: '/api/debug/meeting-decisions',
+    method: 'POST',
+    authToken,
+    body: { entry },
+  });
+  return Boolean(result?.ok);
 }
